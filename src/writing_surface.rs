@@ -1,10 +1,12 @@
 use ratatui::buffer::Buffer as RatatuiBuffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::buffer::Buffer;
-use crate::palette::Palette;
+use crate::focus_mode::{self, FocusMode};
+use crate::markdown_styling;
+use crate::palette::{self, Palette};
 use crate::wrap::{wrap_line, VisualLine};
 
 /// The custom text viewport where prose is rendered.
@@ -19,6 +21,12 @@ pub struct WritingSurface<'a> {
     scroll_offset: usize,
     /// Cursor position as (logical_line, char_offset_in_line).
     cursor: (usize, usize),
+    /// Current Focus Mode variant.
+    focus_mode: FocusMode,
+    /// The logical line containing the cursor (active region center).
+    active_line: usize,
+    /// Paragraph bounds (start, end) for paragraph focus mode.
+    paragraph_bounds: Option<(usize, usize)>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -29,6 +37,9 @@ impl<'a> WritingSurface<'a> {
             column_width: 60,
             scroll_offset: 0,
             cursor: (0, 0),
+            focus_mode: FocusMode::Off,
+            active_line: 0,
+            paragraph_bounds: None,
         }
     }
 
@@ -44,6 +55,21 @@ impl<'a> WritingSurface<'a> {
 
     pub fn cursor(mut self, line: usize, col: usize) -> Self {
         self.cursor = (line, col);
+        self
+    }
+
+    pub fn focus_mode(mut self, mode: FocusMode) -> Self {
+        self.focus_mode = mode;
+        self
+    }
+
+    pub fn active_line(mut self, line: usize) -> Self {
+        self.active_line = line;
+        self
+    }
+
+    pub fn paragraph_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
+        self.paragraph_bounds = bounds;
         self
     }
 
@@ -77,7 +103,7 @@ impl<'a> WritingSurface<'a> {
     }
 
     /// Calculate the horizontal offset to center the column in the area.
-    fn center_offset(&self, area_width: u16) -> u16 {
+    pub fn center_offset(&self, area_width: u16) -> u16 {
         if area_width > self.column_width {
             (area_width - self.column_width) / 2
         } else {
@@ -90,9 +116,6 @@ impl Widget for WritingSurface<'_> {
     fn render(self, area: Rect, buf: &mut RatatuiBuffer) {
         let visual_lines = self.visual_lines();
         let x_offset = self.center_offset(area.width);
-        let style = Style::default()
-            .fg(self.palette.foreground)
-            .bg(self.palette.background);
 
         // Fill background
         for y in area.top()..area.bottom() {
@@ -102,7 +125,7 @@ impl Widget for WritingSurface<'_> {
             }
         }
 
-        // Render visible visual lines
+        // Render visible visual lines with per-character styling
         let visible_start = self.scroll_offset;
         let visible_end = (self.scroll_offset + area.height as usize).min(visual_lines.len());
 
@@ -111,10 +134,47 @@ impl Widget for WritingSurface<'_> {
             let line_text = self.buffer.line(vl.logical_line).to_string();
             let chars: Vec<char> = line_text.chars().collect();
 
+            // Markdown styling for this logical line
+            let md_styles = markdown_styling::style_line(&line_text);
+
+            // Focus distance for this logical line
+            let distance = focus_mode::line_distance(
+                self.focus_mode,
+                vl.logical_line,
+                self.active_line,
+                self.paragraph_bounds,
+            );
+
             let y = area.top() + screen_row as u16;
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
                 if x < area.right() && char_idx < chars.len() {
+                    // Resolve markdown style for this character
+                    let style = if char_idx < md_styles.len() {
+                        let resolved = md_styles[char_idx].resolve(self.palette);
+                        // Compose with focus dimming
+                        if distance > 0 {
+                            let base_fg = resolved.fg.unwrap_or(self.palette.foreground);
+                            let t = match distance {
+                                1 => 0.4,
+                                2 => 0.65,
+                                _ => 0.8,
+                            };
+                            let dimmed = palette::interpolate(
+                                &base_fg,
+                                &self.palette.background,
+                                t,
+                            );
+                            resolved.fg(dimmed)
+                        } else {
+                            resolved
+                        }
+                    } else {
+                        Style::default()
+                            .fg(self.palette.foreground)
+                            .bg(self.palette.background)
+                    };
+
                     buf[(x, y)].set_char(chars[char_idx]);
                     buf[(x, y)].set_style(style);
                 }

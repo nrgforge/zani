@@ -6,6 +6,7 @@ use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::smart_typography;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
+use crate::wrap::wrap_line;
 
 /// Application state.
 pub struct App {
@@ -97,7 +98,7 @@ impl App {
         }
     }
 
-    fn apply_action(&mut self, action: Action) {
+    pub fn apply_action(&mut self, action: Action) {
         match action {
             Action::SwitchMode(mode) => {
                 self.vim_mode = mode;
@@ -211,6 +212,78 @@ impl App {
         let max_col = if line_len > 0 { line_len - 1 } else { 0 };
         if self.cursor_col > max_col {
             self.cursor_col = max_col;
+        }
+    }
+
+    /// Find the paragraph bounds (start_line, end_line) containing the cursor.
+    /// A paragraph is a contiguous block of non-empty lines.
+    pub fn paragraph_bounds(&self) -> Option<(usize, usize)> {
+        let total = self.buffer.len_lines();
+        if total == 0 {
+            return None;
+        }
+
+        // Search backward for paragraph start (blank line or buffer start)
+        let mut start = self.cursor_line;
+        while start > 0 {
+            let line = self.buffer.line(start - 1).to_string();
+            if line.trim().is_empty() {
+                break;
+            }
+            start -= 1;
+        }
+
+        // Search forward for paragraph end (blank line or buffer end)
+        let mut end = self.cursor_line;
+        while end + 1 < total {
+            let line = self.buffer.line(end + 1).to_string();
+            if line.trim().is_empty() {
+                break;
+            }
+            end += 1;
+        }
+
+        Some((start, end))
+    }
+
+    /// Adjust scroll_offset so the cursor stays visible within the given height.
+    pub fn ensure_cursor_visible(&mut self, visible_height: u16) {
+        let height = visible_height as usize;
+        if height == 0 {
+            return;
+        }
+
+        // Compute visual lines to find the cursor's visual position
+        let mut cursor_vl = 0;
+        let mut found = false;
+        let mut vl_index = 0;
+        for i in 0..self.buffer.len_lines() {
+            let line_text = self.buffer.line(i).to_string();
+            let wrapped = wrap_line(&line_text, self.column_width as usize, i);
+            for vl in &wrapped {
+                if vl.logical_line == self.cursor_line
+                    && self.cursor_col >= vl.char_start
+                    && self.cursor_col < vl.char_end
+                {
+                    cursor_vl = vl_index;
+                    found = true;
+                    break;
+                }
+                // Handle cursor at end of a visual line
+                if vl.logical_line == self.cursor_line && self.cursor_col == vl.char_end {
+                    cursor_vl = vl_index;
+                }
+                vl_index += 1;
+            }
+            if found {
+                break;
+            }
+        }
+
+        if cursor_vl < self.scroll_offset {
+            self.scroll_offset = cursor_vl;
+        } else if cursor_vl >= self.scroll_offset + height {
+            self.scroll_offset = cursor_vl - height + 1;
         }
     }
 

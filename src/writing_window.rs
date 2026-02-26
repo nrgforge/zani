@@ -60,29 +60,48 @@ pub fn should_run_inline(
     if env("ZANI_WINDOW").as_deref() == Some("1") {
         return true;
     }
+    // Inside a terminal multiplexer — run inline, configure fonts via escape sequences
+    if env("TMUX").is_some() || env("STY").is_some() {
+        return true;
+    }
     false
 }
 
 /// Build the command to spawn a Writing Window for the detected terminal.
+/// `binary` is the path to the zani executable (use `std::env::current_exe()`).
 /// Returns None if the terminal is unknown (should run inline instead).
 pub fn spawn_command(
     terminal: &Terminal,
     config: &WindowConfig,
+    binary: &str,
     zani_args: &[&str],
 ) -> Option<Vec<String>> {
-    let inline_args: Vec<String> = std::iter::once("zani".to_string())
+    let inline_args: Vec<String> = std::iter::once(binary.to_string())
         .chain(std::iter::once("--inline".to_string()))
         .chain(zani_args.iter().map(|s| s.to_string()))
         .collect();
 
     match terminal {
         Terminal::Ghostty => {
-            let mut cmd = vec![
-                "ghostty".to_string(),
-                format!("--font-family={}", config.font_family),
-                format!("--font-size={}", config.font_size),
-                "-e".to_string(),
-            ];
+            let mut cmd = if cfg!(target_os = "macos") {
+                // macOS: use `open -na` to launch a new Ghostty instance
+                vec![
+                    "open".to_string(),
+                    "-na".to_string(),
+                    "Ghostty".to_string(),
+                    "--args".to_string(),
+                    format!("--font-family={}", config.font_family),
+                    format!("--font-size={}", config.font_size),
+                    "-e".to_string(),
+                ]
+            } else {
+                vec![
+                    "ghostty".to_string(),
+                    format!("--font-family={}", config.font_family),
+                    format!("--font-size={}", config.font_size),
+                    "-e".to_string(),
+                ]
+            };
             cmd.extend(inline_args);
             Some(cmd)
         }
@@ -180,10 +199,18 @@ mod tests {
     #[test]
     fn spawn_command_includes_inline_and_font() {
         let config = WindowConfig::default();
-        let cmd = spawn_command(&Terminal::Ghostty, &config, &["draft.md"]).unwrap();
+        let cmd = spawn_command(&Terminal::Ghostty, &config, "/usr/bin/zani", &["draft.md"]).unwrap();
         assert!(cmd.contains(&"--inline".to_string()));
+        assert!(cmd.contains(&"/usr/bin/zani".to_string()));
         assert!(cmd.contains(&"draft.md".to_string()));
         assert!(cmd.iter().any(|s| s.contains("font-family")));
+        if cfg!(target_os = "macos") {
+            assert_eq!(cmd[0], "open");
+            assert!(cmd.contains(&"-na".to_string()));
+            assert!(cmd.contains(&"Ghostty".to_string()));
+        } else {
+            assert_eq!(cmd[0], "ghostty");
+        }
     }
 
     // === Acceptance test: Zani does not re-spawn when already in a Writing Window ===
@@ -207,7 +234,7 @@ mod tests {
     #[test]
     fn unknown_terminal_returns_none_spawn_command() {
         let config = WindowConfig::default();
-        let cmd = spawn_command(&Terminal::Unknown("xterm".to_string()), &config, &["draft.md"]);
+        let cmd = spawn_command(&Terminal::Unknown("xterm".to_string()), &config, "zani", &["draft.md"]);
         assert!(cmd.is_none());
     }
 
@@ -218,6 +245,18 @@ mod tests {
     }
 
     // === Unit tests ===
+
+    #[test]
+    fn runs_inline_inside_tmux() {
+        let env = make_env(&[("TMUX", "/tmp/tmux-501/default,12345,0")]);
+        assert!(should_run_inline(false, &env));
+    }
+
+    #[test]
+    fn runs_inline_inside_screen() {
+        let env = make_env(&[("STY", "12345.pts-0.hostname")]);
+        assert!(should_run_inline(false, &env));
+    }
 
     #[test]
     fn not_inline_by_default() {
