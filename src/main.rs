@@ -8,6 +8,7 @@ mod smart_typography;
 mod vim_bindings;
 mod wrap;
 mod writing_surface;
+mod writing_window;
 
 fn main() {
     println!("Hello, world!");
