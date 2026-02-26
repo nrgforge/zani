@@ -1,3 +1,4 @@
+mod app;
 mod buffer;
 mod color_profile;
 mod focus_mode;
