@@ -1,3 +1,4 @@
+mod color_profile;
 mod palette;
 
 fn main() {
