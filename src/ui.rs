@@ -39,7 +39,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .color_profile(app.color_profile)
         .vertical_offset(app.typewriter_vertical_offset)
         .selection(app.selection_range())
-        .find_matches(find_ranges, find_current);
+        .find_matches(find_ranges, find_current)
+        .focus_animation(app.animations.focus_progress());
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();

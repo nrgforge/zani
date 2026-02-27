@@ -42,6 +42,8 @@ pub struct WritingSurface<'a> {
     find_matches: Vec<(usize, usize, usize)>,
     /// The current (active) find match index, if any.
     find_current: Option<usize>,
+    /// Focus dimming animation: (progress, from_line, to_line).
+    focus_anim: Option<(f64, usize, usize)>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -61,6 +63,7 @@ impl<'a> WritingSurface<'a> {
             selection: None,
             find_matches: Vec::new(),
             find_current: None,
+            focus_anim: None,
         }
     }
 
@@ -117,6 +120,11 @@ impl<'a> WritingSurface<'a> {
     pub fn find_matches(mut self, matches: Vec<(usize, usize, usize)>, current: Option<usize>) -> Self {
         self.find_matches = matches;
         self.find_current = current;
+        self
+    }
+
+    pub fn focus_animation(mut self, anim: Option<(f64, usize, usize)>) -> Self {
+        self.focus_anim = anim;
         self
     }
 
@@ -243,6 +251,15 @@ impl Widget for WritingSurface<'_> {
             // Focus distance for this logical line (used for non-Sentence modes)
             let line_distance = if use_sentence_dimming {
                 0 // unused; per-char distance computed below
+            } else if let Some((progress, from_line, to_line)) = self.focus_anim {
+                let old_dist = focus_mode::line_distance(
+                    self.focus_mode, vl.logical_line, from_line, self.paragraph_bounds,
+                );
+                let new_dist = focus_mode::line_distance(
+                    self.focus_mode, vl.logical_line, to_line, self.paragraph_bounds,
+                );
+                let blended = old_dist as f64 * (1.0 - progress) + new_dist as f64 * progress;
+                blended.round() as usize
             } else {
                 focus_mode::line_distance(
                     self.focus_mode,
@@ -564,6 +581,26 @@ mod tests {
             surface.render(area, &mut buf);
             // No panic = pass
         }
+    }
+
+    // === Acceptance test: Focus animation blends distances without panic ===
+
+    #[test]
+    fn focus_animation_blends_without_panic() {
+        let text = "Line 0\nLine 1\nLine 2\nLine 3\nLine 4";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+
+        let surface = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .focus_mode(FocusMode::Typewriter)
+            .active_line(4)
+            .focus_animation(Some((0.5, 0, 4)));
+
+        let mut buf = RatatuiBuffer::empty(area);
+        surface.render(area, &mut buf);
+        // No panic = pass. Visual blending verified manually.
     }
 
     // === Acceptance test: Selected text renders with swapped fg/bg ===
