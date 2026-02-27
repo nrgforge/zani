@@ -115,11 +115,13 @@
 **When** Focus Mode is active and Dimming is applied
 **Then** dimmed text foreground colors interpolate toward that Palette's background color (not a hardcoded value)
 
-### Scenario: Writer switches palette
+### Scenario: Writer switches palette via Settings Layer
 **Given** the writer is in a writing session with Palette A
-**When** the writer selects Palette B via the Settings Layer
-**Then** the Writing Surface re-renders with Palette B's colors
-**And** all Dimming interpolation uses Palette B's endpoints
+**And** the Settings Layer is visible
+**When** the writer selects a different Palette from the Palette list
+**Then** the Writing Surface re-renders with the selected Palette's colors
+**And** all Dimming interpolation uses the selected Palette's endpoints
+**And** the Settings Layer reflects the newly active Palette
 
 ---
 
@@ -129,13 +131,26 @@
 **Given** Zani launches and opens a Document
 **When** the initial render completes
 **Then** the only visible elements are the Document text, the cursor, and empty space
-**And** no status bar, line numbers, file name, or word count is visible
+**And** no status bar, mode indicator, line numbers, file name, or word count is visible
 
 ### Scenario: Settings Layer is summoned by hotkey
 **Given** the writer is in the default chromeless writing state
 **When** the writer presses the Settings Layer hotkey
-**Then** the Settings Layer appears with configuration options
-**And** the Writing Surface remains visible (not replaced)
+**Then** the Settings Layer appears as an overlay on the Writing Surface
+**And** the overlay lists the current Palette name, Focus Mode, and column width
+**And** the Writing Surface remains visible behind the overlay
+
+### Scenario: Settings Layer shows Palette selection
+**Given** the Settings Layer is visible
+**When** the writer views the Palette section
+**Then** the available Palette names are listed
+**And** the currently active Palette is indicated
+
+### Scenario: Settings Layer shows Focus Mode selection
+**Given** the Settings Layer is visible
+**When** the writer views the Focus Mode section
+**Then** the Focus Mode options (Off, Sentence, Paragraph, Typewriter) are listed
+**And** the currently active Focus Mode is indicated
 
 ### Scenario: Settings Layer is dismissed
 **Given** the Settings Layer is visible
@@ -143,21 +158,31 @@
 **Then** the Settings Layer disappears
 **And** the writing state returns to chromeless default
 
+### Scenario: Settings Layer shows status information
+**Given** the Settings Layer is visible
+**When** the writer views the Settings Layer
+**Then** the current vim mode, file name, and dirty state are visible
+**And** this information is only visible while the Settings Layer is summoned
+
 ---
 
 ## Feature: Writing Window
 
-### Scenario: Zani spawns a dedicated Writing Window on supported terminal
+### Scenario: Zani spawns a Writing Window with --window flag
 **Given** the writer is in a supported terminal (Ghostty, Kitty, WezTerm, Alacritty, iTerm2)
-**And** the `--inline` flag is not set
-**When** the writer runs `zani document.md`
+**When** the writer runs `zani --window document.md`
 **Then** a new terminal window opens with writing-optimized settings (font, size, line height)
 **And** Zani runs inside that window with `ZANI_WINDOW=1` set
 **And** the original terminal is unchanged
 
+### Scenario: Default launch runs inline
+**Given** the writer runs `zani document.md` without the `--window` flag
+**When** Zani starts
+**Then** it runs inside the current terminal without spawning a new window
+
 ### Scenario: Zani does not re-spawn when already in a Writing Window
 **Given** `ZANI_WINDOW=1` is set in the environment
-**When** Zani starts
+**When** Zani starts with `--window`
 **Then** it runs inline without spawning another window
 
 ### Scenario: Inline Mode on --inline flag
@@ -165,10 +190,15 @@
 **When** Zani starts
 **Then** it runs inside the current terminal without spawning a new window
 
+### Scenario: Inline Mode inside terminal multiplexer
+**Given** the writer is inside tmux or screen
+**When** the writer runs `zani document.md`
+**Then** Zani runs inline in the current pane
+**And** no Writing Window is spawned regardless of flags
+
 ### Scenario: Unknown terminal falls back to Inline Mode
 **Given** the writer is in a terminal Zani cannot identify
-**And** the `--inline` flag is not set
-**When** the writer runs `zani document.md`
+**When** the writer runs `zani --window document.md`
 **Then** Zani runs inline in the current terminal
 **And** no error is shown
 

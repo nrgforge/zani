@@ -1,6 +1,8 @@
 # ADR-003: Dedicated Writing Window for Typography Control
 
-**Status:** Proposed
+**Status:** Superseded by ADR-007
+
+> **Superseded:** ADR-007 changes the Writing Window from default to opt-in (`--window` flag). The terminal detection and spawn mechanics described below remain valid, but the trigger changes from "launched without `--inline`" to "launched with `--window`". Invariant 9 has been amended accordingly.
 
 ## Context
 

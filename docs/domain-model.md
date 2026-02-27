@@ -89,7 +89,7 @@
 
 8. **External integrations are pull-only.** Plexus ingest and llm-orc ensemble invocations happen only when the writer explicitly requests them. Nothing runs in the background during writing.
 
-9. **The Writing Window is the default.** When launched without `--inline`, Zani spawns a dedicated terminal window with writing-optimized settings. The writer's development terminal is unchanged.
+9. **The Writing Window is opt-in.** When launched with `--window`, Zani spawns a dedicated terminal window with writing-optimized settings. Without `--window`, Zani runs inline in the current terminal. The writer's development terminal is unchanged.
 
 10. **Markdown is always editable.** Markdown Styling is a render-time visual layer. The Buffer contains the raw markdown exactly as typed. Syntax characters are never hidden or removed — they are dimmed. The writer can always place their cursor on any character in the document.
 
@@ -99,4 +99,4 @@
 
 | # | Date | Invariant | Change | Propagation |
 |---|------|-----------|--------|-------------|
-| — | — | — | Initial model; no prior version | — |
+| 1 | 2026-02-26 | Invariant 9 | Changed from "Writing Window is the default" to "Writing Window is opt-in (`--window` flag)". Inline is now the default. | ADR-003 superseded by ADR-007. Writing Window scenarios updated. |
