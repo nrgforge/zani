@@ -6,8 +6,8 @@ use ratatui::widgets::Widget;
 use crate::buffer::Buffer;
 use crate::focus_mode::{self, FocusMode};
 use crate::markdown_styling;
-use crate::palette::{self, Palette};
-use crate::wrap::{wrap_line, VisualLine};
+use crate::palette::Palette;
+use crate::wrap::{self, VisualLine};
 
 /// The custom text viewport where prose is rendered.
 /// Handles soft-wrapping, scroll positioning, and per-character styling.
@@ -75,13 +75,7 @@ impl<'a> WritingSurface<'a> {
 
     /// Compute all visual lines from the buffer.
     pub fn visual_lines(&self) -> Vec<VisualLine> {
-        let mut all = Vec::new();
-        for i in 0..self.buffer.len_lines() {
-            let line_text = self.buffer.line(i).to_string();
-            let wrapped = wrap_line(&line_text, self.column_width as usize, i);
-            all.extend(wrapped);
-        }
-        all
+        wrap::visual_lines_for_buffer(self.buffer, self.column_width)
     }
 
     /// Find the visual line and column for a cursor position (logical_line, char_offset).
@@ -155,16 +149,8 @@ impl Widget for WritingSurface<'_> {
                         // Compose with focus dimming
                         if distance > 0 {
                             let base_fg = resolved.fg.unwrap_or(self.palette.foreground);
-                            let t = match distance {
-                                1 => 0.4,
-                                2 => 0.65,
-                                _ => 0.8,
-                            };
-                            let dimmed = palette::interpolate(
-                                &base_fg,
-                                &self.palette.background,
-                                t,
-                            );
+                            let dimmed =
+                                focus_mode::apply_dimming(&base_fg, self.palette, distance);
                             resolved.fg(dimmed)
                         } else {
                             resolved

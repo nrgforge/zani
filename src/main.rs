@@ -6,7 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use ratatui::Terminal;
 
-use zani::app::App;
+use zani::app::{App, SettingsItem};
 use zani::vim_bindings::{Action, CursorShape, Direction, Mode};
 use zani::writing_window;
 
@@ -95,7 +95,8 @@ fn run(
         // Adjust scroll to keep cursor visible
         let size = terminal.size()?;
         let surface_height = size.height; // full height — no Chrome by default
-        app.ensure_cursor_visible(surface_height);
+        let visual_lines = app.visual_lines();
+        app.ensure_cursor_visible(&visual_lines, surface_height);
 
         // Draw
         terminal.draw(|frame| {
@@ -176,12 +177,12 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             KeyCode::Down | KeyCode::Char('j') => app.settings_nav_down(),
             KeyCode::Enter => app.settings_apply(),
             KeyCode::Left | KeyCode::Char('h') => {
-                if app.settings_cursor == 7 {
+                if SettingsItem::at(app.settings_cursor) == Some(SettingsItem::ColumnWidth) {
                     app.settings_adjust_column(-1);
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if app.settings_cursor == 7 {
+                if SettingsItem::at(app.settings_cursor) == Some(SettingsItem::ColumnWidth) {
                     app.settings_adjust_column(1);
                 }
             }

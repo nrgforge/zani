@@ -27,31 +27,37 @@ impl FocusMode {
     }
 }
 
-/// Compute the foreground color for a character based on its distance
+/// Apply focus dimming to any foreground color based on its distance
 /// from the Active Region.
 ///
-/// `distance` is 0 for the Active Region (full brightness),
-/// and increases for text further away. The meaning of distance
-/// depends on the FocusMode variant:
-/// - Sentence: 0 = active sentence, 1+ = everything else
-/// - Paragraph: 0 = active paragraph, 1 = adjacent, 2+ = further
-/// - Typewriter: 0 = active line, increases by visual line distance
-pub fn dim_color(palette: &Palette, distance: usize) -> Color {
+/// `base_fg` is the resolved foreground color (may differ from `palette.foreground`
+/// for headings, code, etc.). `distance` is 0 for the Active Region (full brightness),
+/// and increases for text further away.
+///
+/// Returns `base_fg` unchanged at distance 0. At distance > 0, interpolates
+/// toward the palette background:
+/// - distance 1 → ~40% toward background
+/// - distance 2 → ~65% toward background
+/// - distance 3+ → ~80% toward background
+pub fn apply_dimming(base_fg: &Color, palette: &Palette, distance: usize) -> Color {
     if distance == 0 {
-        return palette.foreground;
+        return *base_fg;
     }
 
-    // Interpolate toward background. Closer text is brighter.
-    // distance 1 → ~40% toward background
-    // distance 2 → ~65% toward background
-    // distance 3+ → ~80% toward background (near the dimmed_foreground)
     let t = match distance {
         1 => 0.4,
         2 => 0.65,
         _ => 0.8,
     };
 
-    palette::interpolate(&palette.foreground, &palette.background, t)
+    palette::interpolate(base_fg, &palette.background, t)
+}
+
+/// Compute the foreground color for a character based on its distance
+/// from the Active Region. Convenience wrapper around `apply_dimming`
+/// that always uses the palette's foreground as the base color.
+pub fn dim_color(palette: &Palette, distance: usize) -> Color {
+    apply_dimming(&palette.foreground, palette, distance)
 }
 
 /// Determine the distance of a given logical line from the active region,
@@ -185,6 +191,18 @@ mod tests {
         assert_eq!(line_distance(FocusMode::Typewriter, 6, 5, None), 1);
         assert_eq!(line_distance(FocusMode::Typewriter, 3, 5, None), 2);
         assert_eq!(line_distance(FocusMode::Typewriter, 8, 5, None), 3);
+    }
+
+    // === Unit test: apply_dimming matches dim_color for palette.foreground ===
+
+    #[test]
+    fn apply_dimming_with_foreground_matches_dim_color() {
+        let palette = Palette::default_palette();
+        for distance in 0..5 {
+            let from_dim = dim_color(&palette, distance);
+            let from_apply = apply_dimming(&palette.foreground, &palette, distance);
+            assert_eq!(from_dim, from_apply, "Mismatch at distance {}", distance);
+        }
     }
 
     // === Acceptance test: Focus Mode toggle ===

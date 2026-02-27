@@ -3,7 +3,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, SettingsItem};
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::vim_bindings::Mode;
@@ -61,63 +61,61 @@ struct SettingsRow {
 /// Render the Settings Layer overlay centered on screen.
 fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     let all_palettes = Palette::all();
-    let focus_modes = [
-        (FocusMode::Off, "Off"),
-        (FocusMode::Sentence, "Sentence"),
-        (FocusMode::Paragraph, "Paragraph"),
-        (FocusMode::Typewriter, "Typewriter"),
-    ];
+    let items = SettingsItem::all();
 
-    // Build rows with cursor indices
+    // Build rows with cursor indices, inserting blank separators between groups
     let mut rows: Vec<SettingsRow> = Vec::new();
+    let mut prev_group: Option<&str> = None;
 
-    // Blank line before palettes
-    rows.push(SettingsRow { text: String::new(), cursor_index: None });
+    for (cursor_idx, item) in items.iter().enumerate() {
+        let group = match item {
+            SettingsItem::Palette(_) => "palette",
+            SettingsItem::FocusMode(_) => "focus",
+            SettingsItem::ColumnWidth => "column",
+            SettingsItem::File => "file",
+        };
 
-    // Palette rows (cursor indices 0–2)
-    for (i, palette) in all_palettes.iter().enumerate() {
-        let marker = if palette.name == app.palette.name { ">" } else { " " };
+        // Insert blank separator when group changes (and before the first group)
+        if prev_group != Some(group) {
+            rows.push(SettingsRow { text: String::new(), cursor_index: None });
+            prev_group = Some(group);
+        }
+
+        let text = match item {
+            SettingsItem::Palette(idx) => {
+                let palette = &all_palettes[*idx];
+                let marker = if palette.name == app.palette.name { ">" } else { " " };
+                format!("  {} {}", marker, palette.name)
+            }
+            SettingsItem::FocusMode(mode) => {
+                let label = match mode {
+                    FocusMode::Off => "Off",
+                    FocusMode::Sentence => "Sentence",
+                    FocusMode::Paragraph => "Paragraph",
+                    FocusMode::Typewriter => "Typewriter",
+                };
+                let marker = if *mode == app.focus_mode { ">" } else { " " };
+                format!("  {} {}", marker, label)
+            }
+            SettingsItem::ColumnWidth => {
+                format!("  Column      {}", app.column_width)
+            }
+            SettingsItem::File => {
+                let file_str = app
+                    .file_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("[scratch]");
+                format!("  File        {}", file_str)
+            }
+        };
+
         rows.push(SettingsRow {
-            text: format!("  {} {}", marker, palette.name),
-            cursor_index: Some(i),
+            text,
+            cursor_index: Some(cursor_idx),
         });
     }
-
-    // Blank line before focus modes
-    rows.push(SettingsRow { text: String::new(), cursor_index: None });
-
-    // Focus mode rows (cursor indices 3–6)
-    for (i, (mode, label)) in focus_modes.iter().enumerate() {
-        let marker = if *mode == app.focus_mode { ">" } else { " " };
-        rows.push(SettingsRow {
-            text: format!("  {} {}", marker, label),
-            cursor_index: Some(3 + i),
-        });
-    }
-
-    // Blank line before column width
-    rows.push(SettingsRow { text: String::new(), cursor_index: None });
-
-    // Column width row (cursor index 7)
-    rows.push(SettingsRow {
-        text: format!("  Column      {}", app.column_width),
-        cursor_index: Some(7),
-    });
-
-    // Blank line before file row
-    rows.push(SettingsRow { text: String::new(), cursor_index: None });
-
-    // File row (cursor index 8)
-    let file_str = app
-        .file_path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("[scratch]");
-    rows.push(SettingsRow {
-        text: format!("  File        {}", file_str),
-        cursor_index: Some(8),
-    });
 
     // Status information (not selectable)
     let mode_str = match app.vim_mode {
@@ -149,7 +147,10 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         .iter()
         .map(|row| {
             // Rename-active file row: multi-span with visible cursor
-            if app.rename_active && row.cursor_index == Some(8) {
+            let is_file_row = row.cursor_index
+                .and_then(SettingsItem::at)
+                .map_or(false, |item| item == SettingsItem::File);
+            if app.rename_active && is_file_row {
                 let prefix = "  File        ";
                 let buf = &app.rename_buf;
                 let cursor_pos = app.rename_cursor;

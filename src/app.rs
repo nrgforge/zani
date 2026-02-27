@@ -7,11 +7,43 @@ use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::smart_typography;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
-use crate::wrap::wrap_line;
+use crate::wrap::{self, VisualLine};
 
-/// Number of selectable items in the Settings Layer.
-/// 0–2: palettes, 3–6: focus modes, 7: column width, 8: file.
-const SETTINGS_SELECTABLE: usize = 9;
+/// A selectable item in the Settings Layer.
+/// Defines the logical meaning of each row, replacing magic indices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsItem {
+    /// A palette choice (index into Palette::all()).
+    Palette(usize),
+    /// A focus mode choice.
+    FocusMode(FocusMode),
+    /// Column width (adjusted via Left/Right, not Enter).
+    ColumnWidth,
+    /// File row (opens inline rename on Enter).
+    File,
+}
+
+impl SettingsItem {
+    /// Returns the ordered list of all selectable settings items.
+    pub fn all() -> Vec<SettingsItem> {
+        let mut items = Vec::new();
+        for i in 0..Palette::all().len() {
+            items.push(SettingsItem::Palette(i));
+        }
+        items.push(SettingsItem::FocusMode(FocusMode::Off));
+        items.push(SettingsItem::FocusMode(FocusMode::Sentence));
+        items.push(SettingsItem::FocusMode(FocusMode::Paragraph));
+        items.push(SettingsItem::FocusMode(FocusMode::Typewriter));
+        items.push(SettingsItem::ColumnWidth);
+        items.push(SettingsItem::File);
+        items
+    }
+
+    /// Look up the item at a given cursor index.
+    pub fn at(index: usize) -> Option<SettingsItem> {
+        Self::all().into_iter().nth(index)
+    }
+}
 
 /// Application state.
 pub struct App {
@@ -110,8 +142,9 @@ impl App {
 
     /// Move the settings cursor up (wrapping).
     pub fn settings_nav_up(&mut self) {
+        let count = SettingsItem::all().len();
         if self.settings_cursor == 0 {
-            self.settings_cursor = SETTINGS_SELECTABLE - 1;
+            self.settings_cursor = count - 1;
         } else {
             self.settings_cursor -= 1;
         }
@@ -119,25 +152,24 @@ impl App {
 
     /// Move the settings cursor down (wrapping).
     pub fn settings_nav_down(&mut self) {
-        self.settings_cursor = (self.settings_cursor + 1) % SETTINGS_SELECTABLE;
+        let count = SettingsItem::all().len();
+        self.settings_cursor = (self.settings_cursor + 1) % count;
     }
 
     /// Apply the currently selected settings item.
     pub fn settings_apply(&mut self) {
-        let palettes = Palette::all();
-        match self.settings_cursor {
-            0..=2 => {
-                if let Some(p) = palettes.into_iter().nth(self.settings_cursor) {
+        let Some(item) = SettingsItem::at(self.settings_cursor) else {
+            return;
+        };
+        match item {
+            SettingsItem::Palette(idx) => {
+                if let Some(p) = Palette::all().into_iter().nth(idx) {
                     self.palette = p;
                 }
             }
-            3 => self.focus_mode = FocusMode::Off,
-            4 => self.focus_mode = FocusMode::Sentence,
-            5 => self.focus_mode = FocusMode::Paragraph,
-            6 => self.focus_mode = FocusMode::Typewriter,
-            7 => {} // column width — adjusted via Left/Right, not Enter
-            8 => self.rename_open(),
-            _ => {}
+            SettingsItem::FocusMode(mode) => self.focus_mode = mode,
+            SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
+            SettingsItem::File => self.rename_open(),
         }
     }
 
@@ -409,39 +441,39 @@ impl App {
         Some((start, end))
     }
 
+    /// Compute visual lines for the current buffer and column width.
+    pub fn visual_lines(&self) -> Vec<VisualLine> {
+        wrap::visual_lines_for_buffer(&self.buffer, self.column_width)
+    }
+
     /// Adjust scroll_offset so the cursor stays visible within the given height.
-    pub fn ensure_cursor_visible(&mut self, visible_height: u16) {
+    /// Accepts pre-computed visual lines to avoid redundant computation.
+    pub fn ensure_cursor_visible(&mut self, visual_lines: &[VisualLine], visible_height: u16) {
         let height = visible_height as usize;
         if height == 0 {
             return;
         }
 
-        // Compute visual lines to find the cursor's visual position
+        // Find the cursor's visual line position
         let mut cursor_vl = 0;
         let mut found = false;
-        let mut vl_index = 0;
-        for i in 0..self.buffer.len_lines() {
-            let line_text = self.buffer.line(i).to_string();
-            let wrapped = wrap_line(&line_text, self.column_width as usize, i);
-            for vl in &wrapped {
-                if vl.logical_line == self.cursor_line
-                    && self.cursor_col >= vl.char_start
-                    && self.cursor_col < vl.char_end
-                {
-                    cursor_vl = vl_index;
-                    found = true;
-                    break;
-                }
-                // Handle cursor at end of a visual line
-                if vl.logical_line == self.cursor_line && self.cursor_col == vl.char_end {
-                    cursor_vl = vl_index;
-                }
-                vl_index += 1;
-            }
-            if found {
+        for (vl_index, vl) in visual_lines.iter().enumerate() {
+            if vl.logical_line == self.cursor_line
+                && self.cursor_col >= vl.char_start
+                && self.cursor_col < vl.char_end
+            {
+                cursor_vl = vl_index;
+                found = true;
                 break;
             }
+            // Handle cursor at end of a visual line
+            if vl.logical_line == self.cursor_line && self.cursor_col == vl.char_end {
+                cursor_vl = vl_index;
+            }
         }
+
+        // If not found in any range, use the last match from end-of-line check
+        let _ = found;
 
         if cursor_vl < self.scroll_offset {
             self.scroll_offset = cursor_vl;
@@ -492,6 +524,14 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    // === Unit test: SettingsItem::all() matches expected count ===
+
+    #[test]
+    fn settings_item_count_matches_expected() {
+        // 3 palettes + 4 focus modes + 1 column width + 1 file = 9
+        assert_eq!(SettingsItem::all().len(), 9);
+    }
 
     // === Acceptance test: Default state has no visible Chrome ===
 

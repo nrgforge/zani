@@ -92,6 +92,18 @@ pub fn wrap_all(lines: &[String], width: usize) -> Vec<VisualLine> {
         .collect()
 }
 
+/// Compute visual lines for a Buffer (rope-backed text).
+/// Shared between WritingSurface rendering and cursor visibility scrolling.
+pub fn visual_lines_for_buffer(buffer: &crate::buffer::Buffer, column_width: u16) -> Vec<VisualLine> {
+    let mut all = Vec::new();
+    for i in 0..buffer.len_lines() {
+        let line_text = buffer.line(i).to_string();
+        let wrapped = wrap_line(&line_text, column_width as usize, i);
+        all.extend(wrapped);
+    }
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
