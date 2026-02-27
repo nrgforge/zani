@@ -220,6 +220,18 @@ impl App {
             }
             SettingsItem::Palette(idx) => {
                 if let Some(p) = Palette::all().into_iter().nth(idx) {
+                    if p.name != self.palette.name {
+                        use crate::animation::{Easing, TransitionKind};
+                        use std::time::Duration;
+                        self.animations.start(
+                            TransitionKind::Palette {
+                                from: Box::new(self.palette.clone()),
+                                to: Box::new(p.clone()),
+                            },
+                            Duration::from_millis(300),
+                            Easing::EaseInOut,
+                        );
+                    }
                     self.palette = p;
                 }
             }
@@ -1054,6 +1066,37 @@ impl App {
             }
         }
         false
+    }
+
+    /// Returns the effective palette, accounting for any active crossfade animation.
+    pub fn effective_palette(&self) -> Palette {
+        if let Some((progress, from, _to)) = self.animations.palette_progress() {
+            use crate::palette::interpolate;
+            Palette {
+                name: self.palette.name,
+                foreground: interpolate(&from.foreground, &self.palette.foreground, progress),
+                background: interpolate(&from.background, &self.palette.background, progress),
+                dimmed_foreground: interpolate(
+                    &from.dimmed_foreground,
+                    &self.palette.dimmed_foreground,
+                    progress,
+                ),
+                accent_heading: interpolate(
+                    &from.accent_heading,
+                    &self.palette.accent_heading,
+                    progress,
+                ),
+                accent_emphasis: interpolate(
+                    &from.accent_emphasis,
+                    &self.palette.accent_emphasis,
+                    progress,
+                ),
+                accent_link: interpolate(&from.accent_link, &self.palette.accent_link, progress),
+                accent_code: interpolate(&from.accent_code, &self.palette.accent_code, progress),
+            }
+        } else {
+            self.palette.clone()
+        }
     }
 }
 
@@ -2345,5 +2388,25 @@ mod tests {
         app.handle_char('p');
         let text = app.buffer.rope().to_string();
         assert!(text.contains("hello"), "Yanked text should be pasted");
+    }
+
+    // === Palette crossfade tests ===
+
+    #[test]
+    fn effective_palette_returns_current_when_no_animation() {
+        let app = App::new();
+        let eff = app.effective_palette();
+        assert_eq!(eff.name, app.palette.name);
+        assert_eq!(eff.foreground, app.palette.foreground);
+    }
+
+    #[test]
+    fn palette_animation_starts_on_switch() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings_cursor = 3; // Inkwell palette index
+        app.settings_apply();
+        assert_eq!(app.palette.name, "Inkwell");
+        assert!(app.animations.is_active());
     }
 }

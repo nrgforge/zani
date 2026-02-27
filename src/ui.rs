@@ -20,6 +20,9 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
     // Full area for the Writing Surface — no Chrome by default (Invariant 1)
     let surface_area = area;
 
+    // Compute the effective palette (mid-crossfade interpolation when animating).
+    let effective = app.effective_palette();
+
     // Compute find match ranges for the writing surface
     let (find_ranges, find_current) = if let Some(ref fs) = app.find_state {
         (fs.match_ranges(), if fs.matches.is_empty() { None } else { Some(fs.current_match) })
@@ -28,7 +31,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
     };
 
     // Build Writing Surface
-    let surface = WritingSurface::new(&app.buffer, &app.palette)
+    let surface = WritingSurface::new(&app.buffer, &effective)
         .column_width(app.column_width)
         .scroll_offset(app.scroll_display.round() as usize)
         .cursor(app.cursor_line, app.cursor_col)
@@ -57,7 +60,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
 
     // Find overlay bar at top of screen
     if let Some(ref fs) = app.find_state {
-        draw_find_bar(frame, app, fs, area);
+        draw_find_bar(frame, fs, &effective, area);
     }
 
     // Position cursor
@@ -79,16 +82,16 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
 /// Render the find bar at the top of the screen.
 fn draw_find_bar(
     frame: &mut ratatui::Frame,
-    app: &App,
     fs: &crate::find::FindState,
+    palette: &Palette,
     area: Rect,
 ) {
     let bar_area = Rect::new(area.x, area.y, area.width, 1);
     frame.render_widget(Clear, bar_area);
 
     let bar_style = Style::default()
-        .fg(app.palette.foreground)
-        .bg(app.palette.background);
+        .fg(palette.foreground)
+        .bg(palette.background);
 
     let prefix = "Find: ";
     let match_info = if fs.query.is_empty() {
@@ -105,8 +108,8 @@ fn draw_find_bar(
         Span::styled(
             match_info,
             Style::default()
-                .fg(app.palette.dimmed_foreground)
-                .bg(app.palette.background),
+                .fg(palette.dimmed_foreground)
+                .bg(palette.background),
         ),
     ];
 
