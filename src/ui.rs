@@ -91,7 +91,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             SettingsItem::Palette(idx) => {
                 let palette = &all_palettes[*idx];
                 let marker = if palette.name == app.palette.name { ">" } else { " " };
-                format!("  {} {}", marker, palette.name)
+                // Pad name to 14 chars so swatches align across palette rows
+                format!("  {} {:<14}", marker, palette.name)
             }
             SettingsItem::FocusMode(mode) => {
                 let label = match mode {
@@ -152,18 +153,26 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         swatches: vec![],
     });
 
-    // Styles
+    // Determine preview palette: if cursor is on a palette row, preview those colors
+    let preview_palette = match SettingsItem::at(app.settings_cursor) {
+        Some(SettingsItem::Palette(idx)) => {
+            all_palettes.get(idx).cloned().unwrap_or_else(|| app.palette.clone())
+        }
+        _ => app.palette.clone(),
+    };
+
+    // Styles use the preview palette so colors update as the cursor moves
     let normal_style = Style::default()
-        .fg(app.palette.foreground)
-        .bg(app.palette.background);
+        .fg(preview_palette.foreground)
+        .bg(preview_palette.background);
     let cursor_style = Style::default()
-        .fg(app.palette.background)
-        .bg(app.palette.accent_heading);
+        .fg(preview_palette.background)
+        .bg(preview_palette.accent_heading);
 
     // Style for the rename cursor character (inverted fg/bg)
     let rename_cursor_style = Style::default()
-        .fg(app.palette.background)
-        .bg(app.palette.foreground);
+        .fg(preview_palette.background)
+        .bg(preview_palette.foreground);
 
     // Convert rows to styled Lines
     let lines: Vec<Line> = rows
@@ -267,8 +276,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     let block = Block::bordered()
         .title(" Settings ")
-        .border_style(Style::default().fg(app.palette.dimmed_foreground))
-        .style(Style::default().bg(app.palette.background));
+        .border_style(Style::default().fg(preview_palette.dimmed_foreground))
+        .style(Style::default().bg(preview_palette.background));
 
     let paragraph = Paragraph::new(Text::from(lines))
         .style(normal_style)
@@ -650,6 +659,42 @@ mod tests {
             }
         }
         panic!("Could not find 'Ember' row in rendered buffer");
+    }
+
+    // === Acceptance test: Live palette preview ===
+
+    #[test]
+    fn settings_previews_hovered_palette_colors() {
+        let mut app = App::new(); // default is Ember (cursor_idx 0)
+        app.toggle_settings();
+
+        // Move cursor to Inkwell (idx 1)
+        app.settings_nav_down();
+        assert_eq!(app.settings_cursor, 1);
+
+        let inkwell = Palette::inkwell();
+        let buf = render_app(&app, 80, 24);
+
+        // The overlay border/background should use Inkwell's colors, not Ember's
+        // Find the Settings title row — its border should use Inkwell's dimmed_foreground
+        let area = buf.area;
+        for y in area.top()..area.bottom() {
+            let mut row_text = String::new();
+            for x in area.left()..area.right() {
+                row_text.push_str(buf[(x, y)].symbol());
+            }
+            if row_text.contains("Settings") {
+                // Check that a border character uses the Inkwell background
+                // The block style sets bg to preview_palette.background
+                let border_cell = &buf[(area.left() + (area.width - 48) / 2, y)];
+                assert_eq!(
+                    border_cell.bg, inkwell.background,
+                    "Settings overlay should preview Inkwell's background color"
+                );
+                return;
+            }
+        }
+        panic!("Could not find Settings title in rendered buffer");
     }
 
     // === Inline rename rendering ===
