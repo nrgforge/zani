@@ -139,6 +139,7 @@ struct SettingsRow {
 
 /// Render the Settings Layer overlay centered on screen.
 fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
+    let opacity = app.animations.overlay_progress().unwrap_or(1.0);
     let overlay_width = 48u16.min(area.width);
     let all_palettes = Palette::all();
     let items = SettingsItem::all();
@@ -254,18 +255,30 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         _ => app.palette.clone(),
     };
 
+    // Interpolate colors from background toward full foreground based on opacity.
+    // At opacity 1.0 (animation complete or no animation) colors are unchanged.
+    let effective_fg = crate::palette::interpolate(
+        &preview_palette.background, &preview_palette.foreground, opacity,
+    );
+    let effective_dim = crate::palette::interpolate(
+        &preview_palette.background, &preview_palette.dimmed_foreground, opacity,
+    );
+    let effective_accent = crate::palette::interpolate(
+        &preview_palette.background, &preview_palette.accent_heading, opacity,
+    );
+
     // Styles use the preview palette so colors update as the cursor moves
     let normal_style = Style::default()
-        .fg(preview_palette.foreground)
+        .fg(effective_fg)
         .bg(preview_palette.background);
     let cursor_style = Style::default()
         .fg(preview_palette.background)
-        .bg(preview_palette.accent_heading);
+        .bg(effective_accent);
 
     // Style for the rename cursor character (inverted fg/bg)
     let rename_cursor_style = Style::default()
         .fg(preview_palette.background)
-        .bg(preview_palette.foreground);
+        .bg(effective_fg);
 
     // Convert rows to styled Lines
     let lines: Vec<Line> = rows
@@ -339,7 +352,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                 cursor_style
             } else if row.is_heading {
                 Style::default()
-                    .fg(preview_palette.dimmed_foreground)
+                    .fg(effective_dim)
                     .bg(preview_palette.background)
             } else {
                 normal_style
@@ -373,7 +386,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     let block = Block::bordered()
         .title(" Settings ")
-        .border_style(Style::default().fg(preview_palette.dimmed_foreground))
+        .border_style(Style::default().fg(effective_dim))
         .style(Style::default().bg(preview_palette.background));
 
     let paragraph = Paragraph::new(Text::from(lines))
@@ -639,6 +652,8 @@ mod tests {
     fn settings_cursor_row_has_inverted_background() {
         let mut app = App::new();
         app.toggle_settings(); // cursor starts at active palette index (0 = Ember)
+        // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
+        app.animations.transitions.clear();
         let buf = render_app(&app, 80, 24);
 
         // Find the row containing "Ember" in the overlay
@@ -866,6 +881,8 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/abc.md"));
         app.toggle_settings();
+        // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
+        app.animations.transitions.clear();
         app.settings_cursor = 10;
         app.rename_open();
         // Cursor at end (position 6), so cursor char is a space

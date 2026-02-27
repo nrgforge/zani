@@ -158,6 +158,12 @@ impl App {
         self.settings_visible = !self.settings_visible;
         self.chrome_visible = self.settings_visible;
         if self.settings_visible {
+            use crate::animation::{Easing, TransitionKind};
+            self.animations.start(
+                TransitionKind::OverlayOpacity { appearing: true },
+                Duration::from_millis(150),
+                Easing::EaseOut,
+            );
             // Find the index of the active palette in the full settings item list
             let items = SettingsItem::all();
             let target = SettingsItem::Palette(self.active_palette_index());
@@ -2408,5 +2414,25 @@ mod tests {
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
         assert!(app.animations.is_active());
+    }
+
+    // === Overlay fade animation tests ===
+
+    #[test]
+    fn overlay_animation_starts_on_settings_open() {
+        let mut app = App::new();
+        app.toggle_settings();
+        assert!(app.animations.overlay_progress().is_some());
+    }
+
+    #[test]
+    fn overlay_no_animation_on_settings_close() {
+        let mut app = App::new();
+        app.toggle_settings();
+        // Clear the opening animation
+        app.animations.transitions.clear();
+        app.dismiss_settings();
+        // No overlay animation started on dismiss
+        assert!(app.animations.overlay_progress().is_none());
     }
 }
