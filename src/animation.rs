@@ -82,6 +82,85 @@ impl Transition {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AnimationManager {
+    pub transitions: Vec<Transition>,
+}
+
+impl AnimationManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn start(&mut self, kind: TransitionKind, duration: Duration, easing: Easing) {
+        self.transitions.retain(|t| !t.kind.same_kind(&kind));
+        self.transitions.push(Transition::new(kind, duration, easing));
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.transitions.is_empty()
+    }
+
+    pub fn tick(&mut self) {
+        self.transitions.retain(|t| !t.is_complete());
+    }
+
+    pub fn scroll_progress(&self) -> Option<f64> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
+            .map(|t| t.progress())
+    }
+
+    pub fn scroll_values(&self) -> Option<(f64, f64)> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
+            .and_then(|t| match &t.kind {
+                TransitionKind::Scroll { from, to } => Some((*from, *to)),
+                _ => None,
+            })
+    }
+
+    pub fn focus_progress(&self) -> Option<(f64, usize, usize)> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::FocusDimming { .. }))
+            .and_then(|t| match &t.kind {
+                TransitionKind::FocusDimming {
+                    from_line,
+                    to_line,
+                } => Some((t.progress(), *from_line, *to_line)),
+                _ => None,
+            })
+    }
+
+    pub fn palette_progress(&self) -> Option<(f64, &Palette, &Palette)> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::Palette { .. }))
+            .and_then(|t| match &t.kind {
+                TransitionKind::Palette { from, to } => {
+                    Some((t.progress(), from.as_ref(), to.as_ref()))
+                }
+                _ => None,
+            })
+    }
+
+    pub fn overlay_progress(&self) -> Option<f64> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::OverlayOpacity { .. }))
+            .and_then(|t| match &t.kind {
+                TransitionKind::OverlayOpacity { appearing } => {
+                    let p = t.progress();
+                    Some(if *appearing { p } else { 1.0 - p })
+                }
+                _ => None,
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +259,62 @@ mod tests {
         let a = TransitionKind::Scroll { from: 0.0, to: 5.0 };
         let b = TransitionKind::FocusDimming { from_line: 0, to_line: 3 };
         assert!(!a.same_kind(&b));
+    }
+
+    // === Task 3: AnimationManager tests ===
+
+    #[test]
+    fn manager_starts_empty_and_inactive() {
+        let mgr = AnimationManager::new();
+        assert!(!mgr.is_active());
+        assert!(mgr.scroll_progress().is_none());
+    }
+
+    #[test]
+    fn manager_tracks_started_transition() {
+        let mut mgr = AnimationManager::new();
+        mgr.start(
+            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            Duration::from_secs(1),
+            Easing::EaseOut,
+        );
+        assert!(mgr.is_active());
+        assert!(mgr.scroll_progress().is_some());
+    }
+
+    #[test]
+    fn manager_replaces_same_kind() {
+        let mut mgr = AnimationManager::new();
+        mgr.start(
+            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            Duration::from_secs(1),
+            Easing::EaseOut,
+        );
+        mgr.start(
+            TransitionKind::Scroll { from: 5.0, to: 20.0 },
+            Duration::from_secs(1),
+            Easing::EaseOut,
+        );
+        let scroll_count = mgr
+            .transitions
+            .iter()
+            .filter(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
+            .count();
+        assert_eq!(scroll_count, 1, "Expected 1 scroll transition after replacing, got {scroll_count}");
+    }
+
+    #[test]
+    fn manager_tick_removes_completed() {
+        let mut mgr = AnimationManager::new();
+        // Push a completed transition directly
+        mgr.transitions.push(Transition {
+            kind: TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            start: Instant::now() - Duration::from_secs(5),
+            duration: Duration::from_secs(1),
+            easing: Easing::EaseOut,
+        });
+        assert!(mgr.is_active());
+        mgr.tick();
+        assert!(!mgr.is_active(), "Expected no active transitions after tick removes completed");
     }
 }
