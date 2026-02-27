@@ -32,14 +32,34 @@ pub enum Action {
     SwitchMode(Mode),
     /// Move cursor right (clamped), then switch to Insert mode.
     AppendMode,
+    /// Move to end of line, then switch to Insert mode.
+    AppendEndOfLine,
     /// Insert a character at the cursor.
     InsertChar(char),
     /// Insert a newline at the cursor.
     InsertNewline,
     /// Delete the character before the cursor.
     DeleteBack,
+    /// Delete the character under the cursor.
+    DeleteChar,
     /// Move cursor in a direction.
     MoveCursor(Direction),
+    /// Move to start of line (column 0).
+    LineStart,
+    /// Move to end of line.
+    LineEnd,
+    /// Move to last line of file.
+    GotoLastLine,
+    /// Word forward (next word start).
+    WordForward,
+    /// Word backward (previous word start).
+    WordBackward,
+    /// End of word (next word end).
+    WordEnd,
+    /// Open line below cursor and enter Insert mode.
+    OpenLineBelow,
+    /// Open line above cursor and enter Insert mode.
+    OpenLineAbove,
     /// No action (key not handled).
     None,
 }
@@ -57,10 +77,20 @@ pub fn handle_normal(ch: char) -> Action {
     match ch {
         'i' => Action::SwitchMode(Mode::Insert),
         'a' => Action::AppendMode,
+        'A' => Action::AppendEndOfLine,
         'h' => Action::MoveCursor(Direction::Left),
         'l' => Action::MoveCursor(Direction::Right),
         'j' => Action::MoveCursor(Direction::Down),
         'k' => Action::MoveCursor(Direction::Up),
+        'w' => Action::WordForward,
+        'b' => Action::WordBackward,
+        'e' => Action::WordEnd,
+        '0' => Action::LineStart,
+        '$' => Action::LineEnd,
+        'G' => Action::GotoLastLine,
+        'x' => Action::DeleteChar,
+        'o' => Action::OpenLineBelow,
+        'O' => Action::OpenLineAbove,
         _ => Action::None,
     }
 }

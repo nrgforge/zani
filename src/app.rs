@@ -67,6 +67,8 @@ pub struct App {
     pub rename_active: bool,
     pub rename_buf: String,
     pub rename_cursor: usize,
+    /// Pending first key of a multi-key Normal mode sequence (e.g., 'g' for gg, 'd' for dd).
+    pub pending_normal_key: Option<char>,
 }
 
 impl App {
@@ -92,6 +94,7 @@ impl App {
             rename_active: false,
             rename_buf: String::new(),
             rename_cursor: 0,
+            pending_normal_key: None,
         }
     }
 
@@ -269,7 +272,32 @@ impl App {
     /// Process a character key input.
     pub fn handle_char(&mut self, ch: char) {
         let action = match self.vim_mode {
-            Mode::Normal => {
+            Mode::Normal | Mode::Visual => {
+                // Handle multi-key sequences
+                if let Some(pending) = self.pending_normal_key.take() {
+                    match (pending, ch) {
+                        ('g', 'g') => {
+                            self.cursor_line = 0;
+                            self.cursor_col = 0;
+                            return;
+                        }
+                        ('d', 'd') => {
+                            self.delete_current_line();
+                            return;
+                        }
+                        _ => {
+                            // Unknown second key — discard
+                            return;
+                        }
+                    }
+                }
+
+                // Check for pending key starters
+                if ch == 'g' || ch == 'd' {
+                    self.pending_normal_key = Some(ch);
+                    return;
+                }
+
                 // Check for quit
                 if ch == 'q' {
                     self.should_quit = true;
@@ -278,7 +306,6 @@ impl App {
                 vim_bindings::handle_normal(ch)
             }
             Mode::Insert => vim_bindings::handle_insert(ch),
-            Mode::Visual => vim_bindings::handle_normal(ch),
         };
 
         self.apply_action(action);
@@ -307,6 +334,12 @@ impl App {
                 }
                 self.vim_mode = Mode::Insert;
             }
+            Action::AppendEndOfLine => {
+                // Move to end of line content, then enter Insert
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                self.cursor_col = if line_len > 0 { line_len - 1 } else { 0 };
+                self.vim_mode = Mode::Insert;
+            }
             Action::InsertChar(ch) => {
                 self.insert_char(ch);
             }
@@ -330,8 +363,58 @@ impl App {
                     self.dirty = true;
                 }
             }
+            Action::DeleteChar => {
+                let idx = self.cursor_char_index();
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                // Don't delete the trailing newline
+                let content_len = if line_len > 0 { line_len - 1 } else { 0 };
+                if self.cursor_col < content_len {
+                    self.buffer.remove(idx, idx + 1);
+                    self.dirty = true;
+                    self.clamp_cursor_col();
+                }
+            }
             Action::MoveCursor(dir) => {
                 self.move_cursor(dir);
+            }
+            Action::LineStart => {
+                self.cursor_col = 0;
+            }
+            Action::LineEnd => {
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                self.cursor_col = if line_len > 1 { line_len - 2 } else { 0 };
+            }
+            Action::GotoLastLine => {
+                self.cursor_line = self.buffer.len_lines().saturating_sub(1);
+                self.clamp_cursor_col();
+            }
+            Action::WordForward => {
+                self.word_forward();
+            }
+            Action::WordBackward => {
+                self.word_backward();
+            }
+            Action::WordEnd => {
+                self.word_end();
+            }
+            Action::OpenLineBelow => {
+                // Insert newline at end of current line, move cursor there
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                let line_end_idx = self.line_start_char_index() + line_len.saturating_sub(1);
+                self.buffer.insert(line_end_idx, "\n");
+                self.cursor_line += 1;
+                self.cursor_col = 0;
+                self.dirty = true;
+                self.vim_mode = Mode::Insert;
+            }
+            Action::OpenLineAbove => {
+                // Insert newline at start of current line, cursor on new blank line
+                let line_start = self.line_start_char_index();
+                self.buffer.insert(line_start, "\n");
+                // cursor_line stays the same (the new line pushed content down)
+                self.cursor_col = 0;
+                self.dirty = true;
+                self.vim_mode = Mode::Insert;
             }
             Action::None => {}
         }
@@ -409,6 +492,104 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Move cursor forward to the start of the next word (whitespace-delimited).
+    fn word_forward(&mut self) {
+        let text = self.buffer.rope().to_string();
+        let chars: Vec<char> = text.chars().collect();
+        let mut idx = self.cursor_char_index();
+        let len = chars.len();
+
+        // Skip current non-whitespace
+        while idx < len && !chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        // Skip whitespace
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+
+        // Convert absolute index back to line/col
+        self.set_cursor_from_char_index(idx.min(len.saturating_sub(1)));
+    }
+
+    /// Move cursor backward to the start of the previous word.
+    fn word_backward(&mut self) {
+        let text = self.buffer.rope().to_string();
+        let chars: Vec<char> = text.chars().collect();
+        let mut idx = self.cursor_char_index();
+
+        if idx == 0 {
+            return;
+        }
+        idx -= 1;
+
+        // Skip whitespace backward
+        while idx > 0 && chars[idx].is_whitespace() {
+            idx -= 1;
+        }
+        // Skip non-whitespace backward to find word start
+        while idx > 0 && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        self.set_cursor_from_char_index(idx);
+    }
+
+    /// Move cursor forward to the end of the current/next word.
+    fn word_end(&mut self) {
+        let text = self.buffer.rope().to_string();
+        let chars: Vec<char> = text.chars().collect();
+        let mut idx = self.cursor_char_index();
+        let len = chars.len();
+
+        if idx + 1 >= len {
+            return;
+        }
+        idx += 1;
+
+        // Skip whitespace
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        // Move to end of word
+        while idx + 1 < len && !chars[idx + 1].is_whitespace() {
+            idx += 1;
+        }
+
+        self.set_cursor_from_char_index(idx.min(len.saturating_sub(1)));
+    }
+
+    /// Set cursor position from an absolute char index in the buffer.
+    fn set_cursor_from_char_index(&mut self, char_idx: usize) {
+        let rope = self.buffer.rope();
+        let total_chars = rope.len_chars();
+        let idx = char_idx.min(total_chars.saturating_sub(1));
+        self.cursor_line = rope.char_to_line(idx);
+        let line_start = rope.line_to_char(self.cursor_line);
+        self.cursor_col = idx - line_start;
+    }
+
+    /// Delete the entire current line (dd).
+    fn delete_current_line(&mut self) {
+        let total = self.buffer.len_lines();
+        if total == 0 {
+            return;
+        }
+        let line_start = self.line_start_char_index();
+        let line_len = self.buffer.line(self.cursor_line).len_chars();
+        if line_len == 0 {
+            return;
+        }
+        self.buffer.remove(line_start, line_start + line_len);
+        self.dirty = true;
+
+        // Adjust cursor if we deleted the last line
+        if self.cursor_line >= self.buffer.len_lines() {
+            self.cursor_line = self.buffer.len_lines().saturating_sub(1);
+        }
+        self.clamp_cursor_col();
     }
 
     fn clamp_cursor_col(&mut self) {
@@ -639,6 +820,146 @@ mod tests {
         assert_eq!(app.vim_mode, Mode::Insert);
         app.handle_escape();
         assert_eq!(app.vim_mode, Mode::Normal);
+    }
+
+    // === Acceptance test: Vim navigation motions ===
+
+    #[test]
+    fn w_moves_to_next_word() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        app.handle_char('w');
+        assert_eq!(app.cursor_col, 6); // "world"
+    }
+
+    #[test]
+    fn b_moves_to_previous_word() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 8;
+        app.handle_char('b');
+        assert_eq!(app.cursor_col, 6); // start of "world"
+    }
+
+    #[test]
+    fn e_moves_to_end_of_word() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        app.handle_char('e');
+        assert_eq!(app.cursor_col, 4); // 'o' in "hello"
+    }
+
+    #[test]
+    fn zero_moves_to_line_start() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 5;
+        app.handle_char('0');
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn dollar_moves_to_line_end() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        app.handle_char('$');
+        assert_eq!(app.cursor_col, 10); // last char before newline
+    }
+
+    #[test]
+    fn g_moves_to_last_line() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("line one\nline two\nline three\n");
+        app.cursor_line = 0;
+        app.handle_char('G');
+        // Last line is the empty line after trailing newline (line 3)
+        assert_eq!(app.cursor_line, app.buffer.len_lines() - 1);
+    }
+
+    #[test]
+    fn x_deletes_char_under_cursor() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("abc\n");
+        app.cursor_col = 1;
+        app.handle_char('x');
+        assert_eq!(app.buffer.rope().to_string(), "ac\n");
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn o_opens_line_below() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\n");
+        app.cursor_line = 0;
+        app.handle_char('o');
+        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
+        assert_eq!(app.buffer.len_lines(), 4); // first, new blank, second, trailing
+    }
+
+    #[test]
+    fn big_o_opens_line_above() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\n");
+        app.cursor_line = 1;
+        app.handle_char('O');
+        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.cursor_line, 1); // stays on what is now the blank line
+        assert_eq!(app.cursor_col, 0);
+        assert_eq!(app.buffer.len_lines(), 4);
+    }
+
+    #[test]
+    fn big_a_moves_to_end_and_enters_insert() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 0;
+        app.handle_char('A');
+        assert_eq!(app.vim_mode, Mode::Insert);
+        // line has 6 chars (h,e,l,l,o,\n), max_col = 5
+        assert_eq!(app.cursor_col, 5);
+    }
+
+    // === Acceptance test: Multi-key sequences ===
+
+    #[test]
+    fn gg_goes_to_top() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("line one\nline two\nline three\n");
+        app.cursor_line = 2;
+        app.cursor_col = 3;
+        app.handle_char('g');
+        app.handle_char('g');
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn dd_deletes_line() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        app.cursor_line = 1;
+        app.handle_char('d');
+        app.handle_char('d');
+        let text = app.buffer.rope().to_string();
+        assert!(!text.contains("second"), "Line should be deleted, got: {}", text);
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn unknown_second_key_is_harmless() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 2;
+        let before = app.buffer.rope().to_string();
+        app.handle_char('g');
+        app.handle_char('z'); // unknown
+        assert_eq!(app.buffer.rope().to_string(), before);
+        assert_eq!(app.cursor_col, 2); // unchanged
     }
 
     // === Acceptance test: Typewriter mode centering ===
