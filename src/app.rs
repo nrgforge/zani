@@ -8,6 +8,10 @@ use crate::smart_typography;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
 use crate::wrap::wrap_line;
 
+/// Number of selectable items in the Settings Layer.
+/// 0–2: palettes, 3–6: focus modes, 7: column width.
+const SETTINGS_SELECTABLE: usize = 8;
+
 /// Application state.
 pub struct App {
     pub buffer: Buffer,
@@ -20,6 +24,7 @@ pub struct App {
     pub column_width: u16,
     pub chrome_visible: bool,
     pub settings_visible: bool,
+    pub settings_cursor: usize,
     pub should_quit: bool,
     pub file_path: Option<PathBuf>,
     pub dirty: bool,
@@ -40,6 +45,7 @@ impl App {
             column_width: 60,
             chrome_visible: false,
             settings_visible: false,
+            settings_cursor: 0,
             should_quit: false,
             file_path: None,
             dirty: false,
@@ -63,12 +69,66 @@ impl App {
     pub fn toggle_settings(&mut self) {
         self.settings_visible = !self.settings_visible;
         self.chrome_visible = self.settings_visible;
+        if self.settings_visible {
+            self.settings_cursor = self.active_palette_index();
+        }
+    }
+
+    /// Switch to a different Palette.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
     }
 
     /// Dismiss the Settings Layer.
     pub fn dismiss_settings(&mut self) {
         self.settings_visible = false;
         self.chrome_visible = false;
+    }
+
+    /// Find the current palette's position in Palette::all().
+    pub fn active_palette_index(&self) -> usize {
+        Palette::all()
+            .iter()
+            .position(|p| p.name == self.palette.name)
+            .unwrap_or(0)
+    }
+
+    /// Move the settings cursor up (wrapping).
+    pub fn settings_nav_up(&mut self) {
+        if self.settings_cursor == 0 {
+            self.settings_cursor = SETTINGS_SELECTABLE - 1;
+        } else {
+            self.settings_cursor -= 1;
+        }
+    }
+
+    /// Move the settings cursor down (wrapping).
+    pub fn settings_nav_down(&mut self) {
+        self.settings_cursor = (self.settings_cursor + 1) % SETTINGS_SELECTABLE;
+    }
+
+    /// Apply the currently selected settings item.
+    pub fn settings_apply(&mut self) {
+        let palettes = Palette::all();
+        match self.settings_cursor {
+            0..=2 => {
+                if let Some(p) = palettes.into_iter().nth(self.settings_cursor) {
+                    self.palette = p;
+                }
+            }
+            3 => self.focus_mode = FocusMode::Off,
+            4 => self.focus_mode = FocusMode::Sentence,
+            5 => self.focus_mode = FocusMode::Paragraph,
+            6 => self.focus_mode = FocusMode::Typewriter,
+            7 => {} // column width — adjusted via Left/Right, not Enter
+            _ => {}
+        }
+    }
+
+    /// Adjust column width by delta, clamped to 20–120.
+    pub fn settings_adjust_column(&mut self, delta: i16) {
+        let new = self.column_width as i16 + delta;
+        self.column_width = new.clamp(20, 120) as u16;
     }
 
     /// Process a character key input.
@@ -439,5 +499,106 @@ mod tests {
         assert_eq!(app.cursor_line, 0);
         app.handle_char('j');
         assert_eq!(app.cursor_line, 1);
+    }
+
+    // === Settings Layer navigation ===
+
+    #[test]
+    fn toggle_settings_sets_cursor_to_active_palette() {
+        let mut app = App::new();
+        app.palette = Palette::inkwell();
+        app.toggle_settings();
+        assert_eq!(app.settings_cursor, 1); // Inkwell is index 1
+    }
+
+    #[test]
+    fn settings_nav_down_wraps() {
+        let mut app = App::new();
+        app.settings_cursor = 7;
+        app.settings_nav_down();
+        assert_eq!(app.settings_cursor, 0);
+    }
+
+    #[test]
+    fn settings_nav_up_wraps() {
+        let mut app = App::new();
+        app.settings_cursor = 0;
+        app.settings_nav_up();
+        assert_eq!(app.settings_cursor, 7);
+    }
+
+    #[test]
+    fn settings_nav_down_increments() {
+        let mut app = App::new();
+        app.settings_cursor = 2;
+        app.settings_nav_down();
+        assert_eq!(app.settings_cursor, 3);
+    }
+
+    #[test]
+    fn settings_nav_up_decrements() {
+        let mut app = App::new();
+        app.settings_cursor = 5;
+        app.settings_nav_up();
+        assert_eq!(app.settings_cursor, 4);
+    }
+
+    #[test]
+    fn settings_apply_palette() {
+        let mut app = App::new();
+        app.settings_cursor = 1; // Inkwell
+        app.settings_apply();
+        assert_eq!(app.palette.name, "Inkwell");
+    }
+
+    #[test]
+    fn settings_apply_focus_mode() {
+        let mut app = App::new();
+        app.settings_cursor = 4; // Sentence
+        app.settings_apply();
+        assert_eq!(app.focus_mode, FocusMode::Sentence);
+
+        app.settings_cursor = 6; // Typewriter
+        app.settings_apply();
+        assert_eq!(app.focus_mode, FocusMode::Typewriter);
+    }
+
+    #[test]
+    fn settings_apply_column_is_noop() {
+        let mut app = App::new();
+        app.settings_cursor = 7;
+        let before = app.column_width;
+        app.settings_apply();
+        assert_eq!(app.column_width, before);
+    }
+
+    #[test]
+    fn settings_adjust_column_increases() {
+        let mut app = App::new();
+        assert_eq!(app.column_width, 60);
+        app.settings_adjust_column(5);
+        assert_eq!(app.column_width, 65);
+    }
+
+    #[test]
+    fn settings_adjust_column_clamps_low() {
+        let mut app = App::new();
+        app.column_width = 22;
+        app.settings_adjust_column(-5);
+        assert_eq!(app.column_width, 20);
+    }
+
+    #[test]
+    fn settings_adjust_column_clamps_high() {
+        let mut app = App::new();
+        app.column_width = 118;
+        app.settings_adjust_column(5);
+        assert_eq!(app.column_width, 120);
+    }
+
+    #[test]
+    fn active_palette_index_default_is_zero() {
+        let app = App::new();
+        assert_eq!(app.active_palette_index(), 0);
     }
 }

@@ -29,6 +29,39 @@ impl Palette {
         }
     }
 
+    /// Cool dark palette — deep navy with silver text.
+    pub fn inkwell() -> Self {
+        Self {
+            name: "Inkwell",
+            foreground: Color::Rgb(205, 210, 220),
+            background: Color::Rgb(30, 32, 40),
+            dimmed_foreground: Color::Rgb(90, 93, 100),
+            accent_heading: Color::Rgb(140, 170, 210),
+            accent_emphasis: Color::Rgb(180, 185, 195),
+            accent_link: Color::Rgb(130, 185, 175),
+            accent_code: Color::Rgb(160, 165, 175),
+        }
+    }
+
+    /// Warm light palette — cream paper with dark ink.
+    pub fn parchment() -> Self {
+        Self {
+            name: "Parchment",
+            foreground: Color::Rgb(60, 50, 40),
+            background: Color::Rgb(240, 230, 215),
+            dimmed_foreground: Color::Rgb(170, 163, 152),
+            accent_heading: Color::Rgb(120, 75, 40),
+            accent_emphasis: Color::Rgb(70, 60, 50),
+            accent_link: Color::Rgb(60, 95, 60),
+            accent_code: Color::Rgb(100, 90, 80),
+        }
+    }
+
+    /// Returns all built-in palettes.
+    pub fn all() -> Vec<Self> {
+        vec![Self::default_palette(), Self::inkwell(), Self::parchment()]
+    }
+
     /// Validates that this palette satisfies Invariant 3:
     /// no pure black (#000000) or pure white (#FFFFFF).
     pub fn validate(&self) -> Result<(), PaletteError> {
@@ -155,10 +188,15 @@ mod tests {
 
     // === Acceptance test: All palette color pairs meet WCAG AA ===
     #[test]
-    fn default_palette_meets_wcag_aa() {
-        let palette = Palette::default_palette();
-        // validate() checks both pure black/white AND contrast ratios
-        assert!(palette.validate().is_ok());
+    fn all_palettes_satisfy_invariant_3() {
+        for palette in Palette::all() {
+            assert!(
+                palette.validate().is_ok(),
+                "Palette '{}' fails Invariant 3: {:?}",
+                palette.name,
+                palette.validate().err()
+            );
+        }
     }
 
     // === Unit tests for the validation logic ===

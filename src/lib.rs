@@ -5,6 +5,7 @@ pub mod focus_mode;
 pub mod markdown_styling;
 pub mod palette;
 pub mod smart_typography;
+pub mod ui;
 pub mod vim_bindings;
 pub mod wrap;
 pub mod writing_surface;

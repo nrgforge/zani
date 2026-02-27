@@ -4,15 +4,10 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 
 use zani::app::App;
-use zani::focus_mode::FocusMode;
 use zani::vim_bindings::{Action, CursorShape, Direction, Mode};
-use zani::writing_surface::WritingSurface;
 use zani::writing_window;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,12 +92,12 @@ fn run(
     loop {
         // Adjust scroll to keep cursor visible
         let size = terminal.size()?;
-        let surface_height = size.height.saturating_sub(1); // reserve status line
+        let surface_height = size.height; // full height — no Chrome by default
         app.ensure_cursor_visible(surface_height);
 
         // Draw
         terminal.draw(|frame| {
-            draw(frame, app);
+            zani::ui::draw(frame, app);
         })?;
 
         // Set cursor shape based on vim mode
@@ -157,6 +152,28 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
+    // Settings Layer navigation — swallow all keys when open
+    if app.settings_visible {
+        match code {
+            KeyCode::Esc => app.dismiss_settings(),
+            KeyCode::Up | KeyCode::Char('k') => app.settings_nav_up(),
+            KeyCode::Down | KeyCode::Char('j') => app.settings_nav_down(),
+            KeyCode::Enter => app.settings_apply(),
+            KeyCode::Left | KeyCode::Char('h') => {
+                if app.settings_cursor == 7 {
+                    app.settings_adjust_column(-1);
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if app.settings_cursor == 7 {
+                    app.settings_adjust_column(1);
+                }
+            }
+            _ => {} // swallow all other keys
+        }
+        return;
+    }
+
     match code {
         KeyCode::Esc => app.handle_escape(),
         KeyCode::Char(c) => app.handle_char(c),
@@ -175,72 +192,5 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Up => app.apply_action(Action::MoveCursor(Direction::Up)),
         KeyCode::Down => app.apply_action(Action::MoveCursor(Direction::Down)),
         _ => {}
-    }
-}
-
-fn draw(frame: &mut ratatui::Frame, app: &App) {
-    let area = frame.area();
-    if area.height < 2 {
-        return; // terminal too small
-    }
-
-    let surface_area = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    let status_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
-
-    // Build Writing Surface
-    let surface = WritingSurface::new(&app.buffer, &app.palette)
-        .column_width(app.column_width)
-        .scroll_offset(app.scroll_offset)
-        .cursor(app.cursor_line, app.cursor_col)
-        .focus_mode(app.focus_mode)
-        .active_line(app.cursor_line)
-        .paragraph_bounds(app.paragraph_bounds());
-
-    // Compute cursor position before render consumes the surface
-    let visual_lines = surface.visual_lines();
-    let cursor_pos = surface.cursor_visual_position(&visual_lines);
-    let x_offset = surface.center_offset(surface_area.width);
-
-    // Render surface
-    frame.render_widget(surface, surface_area);
-
-    // Render status line
-    let mode_str = match app.vim_mode {
-        Mode::Normal => "NORMAL",
-        Mode::Insert => "INSERT",
-        Mode::Visual => "VISUAL",
-    };
-
-    let file_str = app
-        .file_path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("[scratch]");
-
-    let dirty_str = if app.dirty { " [+]" } else { "" };
-
-    let focus_str = match app.focus_mode {
-        FocusMode::Off => "",
-        FocusMode::Sentence => " | SENTENCE",
-        FocusMode::Paragraph => " | PARAGRAPH",
-        FocusMode::Typewriter => " | TYPEWRITER",
-    };
-
-    let status = format!(" {} | {}{}{}", mode_str, file_str, dirty_str, focus_str);
-    let status_style = Style::default()
-        .fg(app.palette.dimmed_foreground)
-        .bg(app.palette.background);
-    let status_widget = Paragraph::new(status).style(status_style);
-    frame.render_widget(status_widget, status_area);
-
-    // Position cursor
-    if let Some((vl_idx, col)) = cursor_pos {
-        let screen_row = vl_idx.saturating_sub(app.scroll_offset);
-        if screen_row < surface_area.height as usize {
-            let x = surface_area.x + x_offset + col;
-            let y = surface_area.y + screen_row as u16;
-            frame.set_cursor_position((x, y));
-        }
     }
 }
