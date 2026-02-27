@@ -298,6 +298,15 @@ impl App {
             Action::SwitchMode(mode) => {
                 self.vim_mode = mode;
             }
+            Action::AppendMode => {
+                // Move cursor right (clamped to line length), then enter Insert
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                let max_col = if line_len > 0 { line_len - 1 } else { 0 };
+                if self.cursor_col < max_col {
+                    self.cursor_col += 1;
+                }
+                self.vim_mode = Mode::Insert;
+            }
             Action::InsertChar(ch) => {
                 self.insert_char(ch);
             }
@@ -475,10 +484,16 @@ impl App {
         // If not found in any range, use the last match from end-of-line check
         let _ = found;
 
-        if cursor_vl < self.scroll_offset {
-            self.scroll_offset = cursor_vl;
-        } else if cursor_vl >= self.scroll_offset + height {
-            self.scroll_offset = cursor_vl - height + 1;
+        if self.focus_mode == FocusMode::Typewriter {
+            // Typewriter mode: keep cursor centered vertically
+            self.scroll_offset = cursor_vl.saturating_sub(height / 2);
+        } else {
+            // Edge-scrolling: only adjust when cursor would be off-screen
+            if cursor_vl < self.scroll_offset {
+                self.scroll_offset = cursor_vl;
+            } else if cursor_vl >= self.scroll_offset + height {
+                self.scroll_offset = cursor_vl - height + 1;
+            }
         }
     }
 
@@ -616,6 +631,67 @@ mod tests {
         assert_eq!(app.vim_mode, Mode::Insert);
         app.handle_escape();
         assert_eq!(app.vim_mode, Mode::Normal);
+    }
+
+    // === Acceptance test: Typewriter mode centering ===
+
+    #[test]
+    fn typewriter_mode_centers_cursor() {
+        let mut app = App::new();
+        // Create a buffer with 20 lines
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.buffer = Buffer::from_text(&text);
+        app.focus_mode = FocusMode::Typewriter;
+        app.cursor_line = 10;
+        app.cursor_col = 0;
+
+        let visual_lines = app.visual_lines();
+        app.ensure_cursor_visible(&visual_lines, 10); // height 10
+
+        // Cursor at visual line 10, height 10 → scroll_offset = 10 - 5 = 5
+        assert_eq!(app.scroll_offset, 5);
+    }
+
+    #[test]
+    fn typewriter_mode_at_top_clamps_scroll_to_zero() {
+        let mut app = App::new();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.buffer = Buffer::from_text(&text);
+        app.focus_mode = FocusMode::Typewriter;
+        app.cursor_line = 1;
+        app.cursor_col = 0;
+
+        let visual_lines = app.visual_lines();
+        app.ensure_cursor_visible(&visual_lines, 10);
+
+        // Cursor at visual line 1, saturating_sub(5) = 0
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    // === Acceptance test: Vim append mode ===
+
+    #[test]
+    fn a_enters_insert_with_cursor_one_right() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_line = 0;
+        app.cursor_col = 2; // on 'l'
+        app.handle_char('a');
+        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.cursor_col, 3); // moved right to after 'l'
+    }
+
+    #[test]
+    fn a_at_end_of_line_enters_insert_at_end() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hi\n");
+        app.cursor_line = 0;
+        app.cursor_col = 1; // on 'i', which is the last char before newline
+        app.handle_char('a');
+        assert_eq!(app.vim_mode, Mode::Insert);
+        // max_col = len_chars - 1 = 2 (h, i, \n → 3 chars, max=2)
+        // cursor was at 1, < 2, so moves to 2
+        assert_eq!(app.cursor_col, 2);
     }
 
     // === Unit test: Smart typography in insert mode ===

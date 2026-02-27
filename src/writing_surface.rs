@@ -119,6 +119,20 @@ impl Widget for WritingSurface<'_> {
             }
         }
 
+        // Pre-compute code block state per logical line
+        let mut code_block_state: Vec<bool> = Vec::with_capacity(self.buffer.len_lines());
+        let mut in_code_block = false;
+        for i in 0..self.buffer.len_lines() {
+            let line_text = self.buffer.line(i).to_string();
+            if markdown_styling::is_fence_line(&line_text) {
+                // Fence line itself is styled as fence, then toggle state
+                code_block_state.push(false); // fence line handled by is_fence_line check
+                in_code_block = !in_code_block;
+            } else {
+                code_block_state.push(in_code_block);
+            }
+        }
+
         // Render visible visual lines with per-character styling
         let visible_start = self.scroll_offset;
         let visible_end = (self.scroll_offset + area.height as usize).min(visual_lines.len());
@@ -128,8 +142,12 @@ impl Widget for WritingSurface<'_> {
             let line_text = self.buffer.line(vl.logical_line).to_string();
             let chars: Vec<char> = line_text.chars().collect();
 
-            // Markdown styling for this logical line
-            let md_styles = markdown_styling::style_line(&line_text);
+            // Markdown styling for this logical line (with code block context)
+            let line_in_code_block = code_block_state
+                .get(vl.logical_line)
+                .copied()
+                .unwrap_or(false);
+            let md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
 
             // Focus distance for this logical line
             let distance = focus_mode::line_distance(

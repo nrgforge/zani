@@ -30,6 +30,8 @@ impl Mode {
 pub enum Action {
     /// Switch to a different mode.
     SwitchMode(Mode),
+    /// Move cursor right (clamped), then switch to Insert mode.
+    AppendMode,
     /// Insert a character at the cursor.
     InsertChar(char),
     /// Insert a newline at the cursor.
@@ -54,7 +56,7 @@ pub enum Direction {
 pub fn handle_normal(ch: char) -> Action {
     match ch {
         'i' => Action::SwitchMode(Mode::Insert),
-        'a' => Action::SwitchMode(Mode::Insert), // TODO: move cursor right first
+        'a' => Action::AppendMode,
         'h' => Action::MoveCursor(Direction::Left),
         'l' => Action::MoveCursor(Direction::Right),
         'j' => Action::MoveCursor(Direction::Down),
@@ -99,6 +101,12 @@ mod tests {
     fn i_in_normal_switches_to_insert() {
         let action = handle_normal('i');
         assert_eq!(action, Action::SwitchMode(Mode::Insert));
+    }
+
+    #[test]
+    fn a_in_normal_returns_append_mode() {
+        let action = handle_normal('a');
+        assert_eq!(action, Action::AppendMode);
     }
 
     #[test]

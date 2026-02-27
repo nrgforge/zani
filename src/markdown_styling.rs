@@ -46,12 +46,43 @@ impl CharStyle {
     }
 }
 
+/// Check if a line is a fenced code block delimiter (starts with ```).
+pub fn is_fence_line(line: &str) -> bool {
+    line.trim_start().starts_with("```")
+}
+
 /// Parse a single line of markdown and return per-character style information.
 /// This is a render-time operation — it does not modify the text.
+///
+/// When `in_code_block` is true, all characters are styled as code and
+/// heading/bold/italic parsing is skipped. Fence lines (starting with ```)
+/// get `is_syntax + is_code` on all characters.
 pub fn style_line(line: &str) -> Vec<CharStyle> {
+    style_line_with_context(line, false)
+}
+
+/// Parse a line with code block context.
+pub fn style_line_with_context(line: &str, in_code_block: bool) -> Vec<CharStyle> {
     let chars: Vec<char> = line.chars().collect();
     let len = chars.len();
     let mut styles = vec![CharStyle::default(); len];
+
+    // Fenced code block handling
+    if is_fence_line(line) {
+        // Fence lines: all chars are syntax + code
+        for s in &mut styles {
+            s.is_syntax = true;
+            s.is_code = true;
+        }
+        return styles;
+    }
+    if in_code_block {
+        // Inside a fenced block: all chars are code, skip other parsing
+        for s in &mut styles {
+            s.is_code = true;
+        }
+        return styles;
+    }
 
     // Heading detection: line starts with # followed by space
     if let Some(heading_level) = detect_heading(&chars) {
@@ -254,6 +285,45 @@ mod tests {
         let styles = style_line(text);
         assert_eq!(styles.len(), text.chars().count());
         // Every character in the original text has a style — nothing removed
+    }
+
+    // === Acceptance test: Fenced code block styling ===
+
+    #[test]
+    fn fence_line_renders_as_syntax_and_code() {
+        let styles = style_line_with_context("```rust", false);
+        for s in &styles {
+            assert!(s.is_syntax, "Fence line chars should be syntax");
+            assert!(s.is_code, "Fence line chars should be code");
+        }
+    }
+
+    #[test]
+    fn content_inside_fence_is_code_styled() {
+        let styles = style_line_with_context("let x = 42;", true);
+        for s in &styles {
+            assert!(s.is_code, "Content inside fence should be code");
+            assert!(!s.is_syntax, "Content inside fence should not be syntax");
+        }
+    }
+
+    #[test]
+    fn content_after_closing_fence_is_normal() {
+        // After closing fence, in_code_block=false → normal parsing
+        let styles = style_line_with_context("Just normal text", false);
+        for s in &styles {
+            assert!(!s.is_code);
+            assert!(!s.is_syntax);
+        }
+    }
+
+    #[test]
+    fn heading_inside_code_block_is_not_styled_as_heading() {
+        let styles = style_line_with_context("# Not a heading", true);
+        for s in &styles {
+            assert!(!s.is_heading, "Headings should not be detected inside code blocks");
+            assert!(s.is_code, "Should be code-styled");
+        }
     }
 
     // === Unit tests ===
