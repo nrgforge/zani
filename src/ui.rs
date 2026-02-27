@@ -29,7 +29,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .paragraph_bounds(app.paragraph_bounds())
         .sentence_bounds(app.sentence_bounds())
         .color_profile(app.color_profile)
-        .vertical_offset(app.typewriter_vertical_offset);
+        .vertical_offset(app.typewriter_vertical_offset)
+        .selection(app.selection_range());
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();

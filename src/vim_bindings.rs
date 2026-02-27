@@ -60,6 +60,16 @@ pub enum Action {
     OpenLineBelow,
     /// Open line above cursor and enter Insert mode.
     OpenLineAbove,
+    /// Enter Visual mode (set selection anchor).
+    EnterVisual,
+    /// Yank (copy) the current selection to register.
+    Yank,
+    /// Delete the current selection (yanks first, vim convention).
+    DeleteSelection,
+    /// Paste register content after cursor.
+    PasteAfter,
+    /// Paste register content before cursor.
+    PasteBefore,
     /// No action (key not handled).
     None,
 }
@@ -91,6 +101,29 @@ pub fn handle_normal(ch: char) -> Action {
         'x' => Action::DeleteChar,
         'o' => Action::OpenLineBelow,
         'O' => Action::OpenLineAbove,
+        'v' => Action::EnterVisual,
+        'p' => Action::PasteAfter,
+        'P' => Action::PasteBefore,
+        _ => Action::None,
+    }
+}
+
+/// Process a key event in Visual mode.
+/// Shares movement keys with Normal, plus yank and delete.
+pub fn handle_visual(ch: char) -> Action {
+    match ch {
+        'h' => Action::MoveCursor(Direction::Left),
+        'l' => Action::MoveCursor(Direction::Right),
+        'j' => Action::MoveCursor(Direction::Down),
+        'k' => Action::MoveCursor(Direction::Up),
+        'w' => Action::WordForward,
+        'b' => Action::WordBackward,
+        'e' => Action::WordEnd,
+        '0' => Action::LineStart,
+        '$' => Action::LineEnd,
+        'G' => Action::GotoLastLine,
+        'y' => Action::Yank,
+        'd' => Action::DeleteSelection,
         _ => Action::None,
     }
 }
@@ -179,5 +212,40 @@ mod tests {
     #[test]
     fn visual_mode_has_block_cursor() {
         assert_eq!(Mode::Visual.cursor_shape(), CursorShape::Block);
+    }
+
+    #[test]
+    fn visual_mode_movement_keys() {
+        assert_eq!(handle_visual('h'), Action::MoveCursor(Direction::Left));
+        assert_eq!(handle_visual('j'), Action::MoveCursor(Direction::Down));
+        assert_eq!(handle_visual('k'), Action::MoveCursor(Direction::Up));
+        assert_eq!(handle_visual('l'), Action::MoveCursor(Direction::Right));
+        assert_eq!(handle_visual('w'), Action::WordForward);
+        assert_eq!(handle_visual('b'), Action::WordBackward);
+        assert_eq!(handle_visual('e'), Action::WordEnd);
+        assert_eq!(handle_visual('0'), Action::LineStart);
+        assert_eq!(handle_visual('$'), Action::LineEnd);
+        assert_eq!(handle_visual('G'), Action::GotoLastLine);
+    }
+
+    #[test]
+    fn visual_mode_yank_and_delete() {
+        assert_eq!(handle_visual('y'), Action::Yank);
+        assert_eq!(handle_visual('d'), Action::DeleteSelection);
+    }
+
+    #[test]
+    fn v_in_normal_enters_visual() {
+        assert_eq!(handle_normal('v'), Action::EnterVisual);
+    }
+
+    #[test]
+    fn p_in_normal_returns_paste_after() {
+        assert_eq!(handle_normal('p'), Action::PasteAfter);
+    }
+
+    #[test]
+    fn big_p_in_normal_returns_paste_before() {
+        assert_eq!(handle_normal('P'), Action::PasteBefore);
     }
 }

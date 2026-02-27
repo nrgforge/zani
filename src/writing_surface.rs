@@ -36,6 +36,8 @@ pub struct WritingSurface<'a> {
     /// Used by Typewriter mode to keep the cursor vertically centered
     /// even when there isn't enough content above to scroll.
     vertical_offset: u16,
+    /// Visual mode selection range: (start_line, start_col, end_line, end_col).
+    selection: Option<(usize, usize, usize, usize)>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -52,6 +54,7 @@ impl<'a> WritingSurface<'a> {
             sentence_bounds: None,
             color_profile: ColorProfile::TrueColor,
             vertical_offset: 0,
+            selection: None,
         }
     }
 
@@ -98,6 +101,33 @@ impl<'a> WritingSurface<'a> {
     pub fn vertical_offset(mut self, offset: u16) -> Self {
         self.vertical_offset = offset;
         self
+    }
+
+    pub fn selection(mut self, sel: Option<(usize, usize, usize, usize)>) -> Self {
+        self.selection = sel;
+        self
+    }
+
+    /// Check whether a character at (logical_line, char_col) is within the selection.
+    fn is_char_selected(&self, logical_line: usize, char_col: usize) -> bool {
+        let Some((sl, sc, el, ec)) = self.selection else {
+            return false;
+        };
+        if logical_line < sl || logical_line > el {
+            return false;
+        }
+        if sl == el {
+            // Single-line selection
+            return char_col >= sc && char_col <= ec;
+        }
+        if logical_line == sl {
+            return char_col >= sc;
+        }
+        if logical_line == el {
+            return char_col <= ec;
+        }
+        // Lines strictly between start and end are fully selected
+        true
     }
 
     /// Compute all visual lines from the buffer.
@@ -245,6 +275,15 @@ impl Widget for WritingSurface<'_> {
                         Style::default()
                             .fg(self.color_profile.map_color(self.palette.foreground))
                             .bg(self.palette.background)
+                    };
+
+                    // Swap fg/bg for selected characters
+                    let style = if self.is_char_selected(vl.logical_line, char_idx) {
+                        let fg = style.fg.unwrap_or(self.palette.foreground);
+                        let bg = style.bg.unwrap_or(self.palette.background);
+                        style.fg(bg).bg(fg)
+                    } else {
+                        style
                     };
 
                     buf[(x, y)].set_char(chars[char_idx]);
@@ -489,5 +528,36 @@ mod tests {
             surface.render(area, &mut buf);
             // No panic = pass
         }
+    }
+
+    // === Acceptance test: Selected text renders with swapped fg/bg ===
+
+    #[test]
+    fn selected_chars_have_swapped_fg_bg() {
+        let text = "Hello world";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+
+        // Select "Hello" (chars 0-4 on line 0)
+        let surface = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .selection(Some((0, 0, 0, 4)));
+
+        let mut buf = RatatuiBuffer::empty(area);
+        surface.render(area, &mut buf);
+
+        let x_offset = (80 - 60) / 2; // 10
+
+        // 'H' (char 0) is selected — fg/bg should be swapped
+        let h_cell = &buf[(x_offset, 0)];
+        assert_eq!(h_cell.symbol(), "H");
+        assert_eq!(h_cell.fg, palette.background, "Selected char fg should be palette background");
+        assert_eq!(h_cell.bg, palette.foreground, "Selected char bg should be palette foreground");
+
+        // 'w' (char 6) is NOT selected — normal colors
+        let w_cell = &buf[(x_offset + 6, 0)];
+        assert_eq!(w_cell.symbol(), "w");
+        assert_eq!(w_cell.fg, palette.foreground, "Unselected char should have normal fg");
     }
 }

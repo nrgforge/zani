@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::buffer::Buffer;
+use crate::clipboard;
 use crate::color_profile::ColorProfile;
 use crate::draft_name;
 use crate::focus_mode::{self, FocusMode};
@@ -75,6 +76,10 @@ pub struct App {
     /// the top of the document, content starts this many rows down so the cursor
     /// appears vertically centered.
     pub typewriter_vertical_offset: u16,
+    /// Anchor position (line, col) where Visual mode selection started.
+    pub selection_anchor: Option<(usize, usize)>,
+    /// Internal yank register (session-only vim register).
+    pub yank_register: Option<String>,
 }
 
 impl App {
@@ -103,6 +108,8 @@ impl App {
             rename_cursor: 0,
             pending_normal_key: None,
             typewriter_vertical_offset: 0,
+            selection_anchor: None,
+            yank_register: None,
         }
     }
 
@@ -280,7 +287,7 @@ impl App {
     /// Process a character key input.
     pub fn handle_char(&mut self, ch: char) {
         let action = match self.vim_mode {
-            Mode::Normal | Mode::Visual => {
+            Mode::Normal => {
                 // Handle multi-key sequences
                 if let Some(pending) = self.pending_normal_key.take() {
                     match (pending, ch) {
@@ -293,25 +300,40 @@ impl App {
                             self.delete_current_line();
                             return;
                         }
-                        _ => {
-                            // Unknown second key — discard
-                            return;
-                        }
+                        _ => return,
                     }
                 }
 
-                // Check for pending key starters
                 if ch == 'g' || ch == 'd' {
                     self.pending_normal_key = Some(ch);
                     return;
                 }
 
-                // Check for quit
                 if ch == 'q' {
                     self.should_quit = true;
                     return;
                 }
                 vim_bindings::handle_normal(ch)
+            }
+            Mode::Visual => {
+                // Handle multi-key sequences (gg works in Visual)
+                if let Some(pending) = self.pending_normal_key.take() {
+                    match (pending, ch) {
+                        ('g', 'g') => {
+                            self.cursor_line = 0;
+                            self.cursor_col = 0;
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
+
+                if ch == 'g' {
+                    self.pending_normal_key = Some(ch);
+                    return;
+                }
+
+                vim_bindings::handle_visual(ch)
             }
             Mode::Insert => vim_bindings::handle_insert(ch),
         };
@@ -323,6 +345,9 @@ impl App {
     pub fn handle_escape(&mut self) {
         if self.settings_visible {
             self.dismiss_settings();
+        } else if self.vim_mode == Mode::Visual {
+            self.selection_anchor = None;
+            self.vim_mode = Mode::Normal;
         } else if self.vim_mode == Mode::Insert {
             self.vim_mode = Mode::Normal;
         }
@@ -423,6 +448,74 @@ impl App {
                 self.cursor_col = 0;
                 self.dirty = true;
                 self.vim_mode = Mode::Insert;
+            }
+            Action::EnterVisual => {
+                self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.vim_mode = Mode::Visual;
+            }
+            Action::Yank => {
+                if let Some(text) = self.selected_text() {
+                    clipboard::write_osc52(&text);
+                    self.yank_register = Some(text);
+                }
+                self.selection_anchor = None;
+                self.vim_mode = Mode::Normal;
+            }
+            Action::DeleteSelection => {
+                if let Some((sl, sc, el, ec)) = self.selection_range() {
+                    // Yank first (vim convention)
+                    if let Some(text) = self.selected_text() {
+                        clipboard::write_osc52(&text);
+                        self.yank_register = Some(text);
+                    }
+                    // Delete the selection
+                    let rope = self.buffer.rope();
+                    let start_idx = rope.line_to_char(sl) + sc;
+                    let end_idx = (rope.line_to_char(el) + ec + 1).min(rope.len_chars());
+                    self.buffer.remove(start_idx, end_idx);
+                    self.dirty = true;
+                    // Move cursor to selection start
+                    self.cursor_line = sl;
+                    self.cursor_col = sc;
+                    self.clamp_cursor_col();
+                }
+                self.selection_anchor = None;
+                self.vim_mode = Mode::Normal;
+            }
+            Action::PasteAfter => {
+                if let Some(text) = self.yank_register.clone() {
+                    if text.contains('\n') {
+                        // Line-wise paste: insert on next line
+                        let line_len = self.buffer.line(self.cursor_line).len_chars();
+                        let insert_idx = self.line_start_char_index() + line_len;
+                        self.buffer.insert(insert_idx, &text);
+                        self.cursor_line += 1;
+                        self.cursor_col = 0;
+                    } else {
+                        // Char-wise paste: insert after cursor
+                        let idx = self.cursor_char_index() + 1;
+                        let idx = idx.min(self.buffer.rope().len_chars());
+                        self.buffer.insert(idx, &text);
+                        self.cursor_col += text.chars().count();
+                    }
+                    self.dirty = true;
+                }
+            }
+            Action::PasteBefore => {
+                if let Some(text) = self.yank_register.clone() {
+                    if text.contains('\n') {
+                        // Line-wise paste: insert on current line
+                        let insert_idx = self.line_start_char_index();
+                        self.buffer.insert(insert_idx, &text);
+                        self.cursor_col = 0;
+                    } else {
+                        // Char-wise paste: insert before cursor
+                        let idx = self.cursor_char_index();
+                        self.buffer.insert(idx, &text);
+                        self.cursor_col += text.chars().count().saturating_sub(1);
+                    }
+                    self.dirty = true;
+                }
             }
             Action::None => {}
         }
@@ -579,7 +672,7 @@ impl App {
         self.cursor_col = idx - line_start;
     }
 
-    /// Delete the entire current line (dd).
+    /// Delete the entire current line (dd). Yanks to register and clipboard.
     fn delete_current_line(&mut self) {
         let total = self.buffer.len_lines();
         if total == 0 {
@@ -590,6 +683,12 @@ impl App {
         if line_len == 0 {
             return;
         }
+
+        // Yank deleted line to register and clipboard
+        let deleted = self.buffer.rope().slice(line_start..line_start + line_len).to_string();
+        self.yank_register = Some(deleted.clone());
+        clipboard::write_osc52(&deleted);
+
         self.buffer.remove(line_start, line_start + line_len);
         self.dirty = true;
 
@@ -637,6 +736,32 @@ impl App {
         }
 
         Some((start, end))
+    }
+
+    /// Returns the normalized selection range (start_line, start_col, end_line, end_col).
+    /// Normalizes so start <= end regardless of anchor vs cursor order.
+    pub fn selection_range(&self) -> Option<(usize, usize, usize, usize)> {
+        let (anchor_line, anchor_col) = self.selection_anchor?;
+        let (cl, cc) = (self.cursor_line, self.cursor_col);
+        if (anchor_line, anchor_col) <= (cl, cc) {
+            Some((anchor_line, anchor_col, cl, cc))
+        } else {
+            Some((cl, cc, anchor_line, anchor_col))
+        }
+    }
+
+    /// Extract the selected text from the buffer using the current selection range.
+    pub fn selected_text(&self) -> Option<String> {
+        let (sl, sc, el, ec) = self.selection_range()?;
+        let rope = self.buffer.rope();
+        let start_idx = rope.line_to_char(sl) + sc;
+        // Include the character at end_col
+        let end_idx = rope.line_to_char(el) + ec + 1;
+        let end_idx = end_idx.min(rope.len_chars());
+        if start_idx >= end_idx {
+            return None;
+        }
+        Some(rope.slice(start_idx..end_idx).to_string())
     }
 
     /// Find the sentence boundaries containing the cursor.
@@ -1379,5 +1504,209 @@ mod tests {
             Some(PathBuf::from("/nonexistent/dir/real.md"))
         );
         assert!(!app.is_scratch);
+    }
+
+    // === Visual mode tests ===
+
+    #[test]
+    fn v_enters_visual_with_correct_anchor() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 3;
+        app.handle_char('v');
+        assert_eq!(app.vim_mode, Mode::Visual);
+        assert_eq!(app.selection_anchor, Some((0, 3)));
+    }
+
+    #[test]
+    fn movement_in_visual_preserves_anchor() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 3;
+        app.handle_char('v');
+        app.handle_char('l'); // move right
+        app.handle_char('l');
+        assert_eq!(app.vim_mode, Mode::Visual);
+        assert_eq!(app.selection_anchor, Some((0, 3))); // anchor unchanged
+        assert_eq!(app.cursor_col, 5); // cursor moved
+    }
+
+    #[test]
+    fn escape_clears_selection_and_returns_to_normal() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.handle_char('v');
+        assert_eq!(app.vim_mode, Mode::Visual);
+        app.handle_escape();
+        assert_eq!(app.vim_mode, Mode::Normal);
+        assert_eq!(app.selection_anchor, None);
+    }
+
+    #[test]
+    fn y_yanks_correct_text_to_register() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        app.handle_char('v'); // anchor at (0,0)
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l'); // cursor at (0,4) = 'o'
+        app.handle_char('y');
+        assert_eq!(app.vim_mode, Mode::Normal);
+        assert_eq!(app.yank_register, Some("hello".to_string()));
+        assert_eq!(app.selection_anchor, None);
+    }
+
+    #[test]
+    fn d_deletes_selection_and_yanks_to_register() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        app.handle_char('v');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l'); // select "hello"
+        app.handle_char('d');
+        assert_eq!(app.vim_mode, Mode::Normal);
+        assert_eq!(app.yank_register, Some("hello".to_string()));
+        assert_eq!(app.buffer.rope().to_string(), " world\n");
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn selection_range_normalizes_when_anchor_after_cursor() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 8;
+        app.handle_char('v'); // anchor at (0,8)
+        app.handle_char('h');
+        app.handle_char('h');
+        app.handle_char('h'); // cursor at (0,5)
+        let range = app.selection_range().unwrap();
+        assert_eq!(range, (0, 5, 0, 8)); // normalized: start < end
+    }
+
+    #[test]
+    fn selected_text_works_multiline() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\nworld\n");
+        app.cursor_col = 3;
+        app.handle_char('v'); // anchor at (0,3)
+        app.handle_char('j'); // move down to line 1
+        app.handle_char('l'); // cursor at (1,4)
+        let text = app.selected_text().unwrap();
+        assert_eq!(text, "lo\nworld");
+    }
+
+    #[test]
+    fn gg_works_in_visual_mode() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        app.cursor_line = 2;
+        app.handle_char('v');
+        app.handle_char('g');
+        app.handle_char('g');
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.vim_mode, Mode::Visual); // stays in Visual
+    }
+
+    #[test]
+    fn q_does_not_quit_in_visual_mode() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.handle_char('v');
+        app.handle_char('q'); // should be a no-op, not quit
+        assert!(!app.should_quit);
+        assert_eq!(app.vim_mode, Mode::Visual);
+    }
+
+    // === Paste tests ===
+
+    #[test]
+    fn p_inserts_register_content_after_cursor_charwise() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("ab\n");
+        app.cursor_col = 0;
+        app.yank_register = Some("XY".to_string());
+        app.handle_char('p');
+        assert_eq!(app.buffer.rope().to_string(), "aXYb\n");
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn big_p_inserts_before_cursor_charwise() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("ab\n");
+        app.cursor_col = 1;
+        app.yank_register = Some("XY".to_string());
+        app.handle_char('P');
+        assert_eq!(app.buffer.rope().to_string(), "aXYb\n");
+    }
+
+    #[test]
+    fn p_multiline_inserts_on_next_line() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\n");
+        app.cursor_line = 0;
+        app.yank_register = Some("new\n".to_string());
+        app.handle_char('p');
+        let text = app.buffer.rope().to_string();
+        assert_eq!(text, "first\nnew\nsecond\n");
+        assert_eq!(app.cursor_line, 1);
+    }
+
+    #[test]
+    fn big_p_multiline_inserts_on_current_line() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\n");
+        app.cursor_line = 1;
+        app.yank_register = Some("new\n".to_string());
+        app.handle_char('P');
+        let text = app.buffer.rope().to_string();
+        assert_eq!(text, "first\nnew\nsecond\n");
+    }
+
+    #[test]
+    fn empty_register_paste_is_noop() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.yank_register = None;
+        let before = app.buffer.rope().to_string();
+        app.handle_char('p');
+        assert_eq!(app.buffer.rope().to_string(), before);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn dd_populates_register_with_deleted_line() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        app.cursor_line = 1;
+        app.handle_char('d');
+        app.handle_char('d');
+        assert_eq!(app.yank_register, Some("second\n".to_string()));
+        assert!(!app.buffer.rope().to_string().contains("second"));
+    }
+
+    #[test]
+    fn yank_then_paste_round_trip() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_col = 0;
+        // Select "hello"
+        app.handle_char('v');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('l');
+        app.handle_char('y');
+        // Move to end of "world"
+        app.handle_char('$');
+        // Paste after
+        app.handle_char('p');
+        let text = app.buffer.rope().to_string();
+        assert!(text.contains("hello"), "Yanked text should be pasted");
     }
 }
