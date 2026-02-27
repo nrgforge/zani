@@ -30,7 +30,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
     // Build Writing Surface
     let surface = WritingSurface::new(&app.buffer, &app.palette)
         .column_width(app.column_width)
-        .scroll_offset(app.scroll_offset)
+        .scroll_offset(app.scroll_display.round() as usize)
         .cursor(app.cursor_line, app.cursor_col)
         .focus_mode(app.focus_mode)
         .active_line(app.cursor_line)
@@ -66,7 +66,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
         frame.set_cursor_position((cursor_x, area.y));
     } else if let Some((vl_idx, col)) = cursor_pos {
-        let screen_row = vl_idx.saturating_sub(app.scroll_offset);
+        let screen_row = vl_idx.saturating_sub(app.scroll_display.round() as usize);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
             let y = surface_area.y + app.typewriter_vertical_offset + screen_row as u16;

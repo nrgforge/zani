@@ -66,6 +66,7 @@ pub struct App {
     pub cursor_line: usize,
     pub cursor_col: usize,
     pub scroll_offset: usize,
+    pub scroll_display: f64,
     pub column_width: u16,
     pub chrome_visible: bool,
     pub settings_visible: bool,
@@ -108,6 +109,7 @@ impl App {
             cursor_line: 0,
             cursor_col: 0,
             scroll_offset: 0,
+            scroll_display: 0.0,
             column_width: 60,
             chrome_visible: false,
             settings_visible: false,
@@ -967,6 +969,8 @@ impl App {
             return;
         }
 
+        let old_offset = self.scroll_offset;
+
         // Find the cursor's visual line position
         let mut cursor_vl = 0;
         let mut found = false;
@@ -1007,6 +1011,19 @@ impl App {
                 self.scroll_offset = cursor_vl;
             } else if cursor_vl >= self.scroll_offset + height {
                 self.scroll_offset = cursor_vl - height + 1;
+            }
+        }
+
+        if self.scroll_offset != old_offset {
+            let from = self.scroll_display;
+            let to = self.scroll_offset as f64;
+            if (from - to).abs() > 0.01 {
+                use crate::animation::{Easing, TransitionKind};
+                self.animations.start(
+                    TransitionKind::Scroll { from, to },
+                    std::time::Duration::from_millis(150),
+                    Easing::EaseOut,
+                );
             }
         }
     }
@@ -2293,6 +2310,21 @@ mod tests {
         app.set_cursor_from_char_index(total_chars.saturating_sub(1));
         assert_eq!(app.selection_anchor, Some((0, 0)));
         assert!(app.cursor_line > 0 || app.cursor_col > 0);
+    }
+
+    #[test]
+    fn scroll_animation_starts_on_scroll_change() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text(&"line\n".repeat(50));
+        app.scroll_display = 0.0;
+        app.scroll_offset = 0;
+        let visual_lines = app.visual_lines();
+        app.cursor_line = 30;
+        app.cursor_col = 0;
+        app.ensure_cursor_visible(&visual_lines, 20);
+        assert!(app.scroll_offset > 0);
+        assert!(app.animations.is_active());
+        assert!(app.animations.scroll_progress().is_some());
     }
 
     #[test]

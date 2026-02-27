@@ -120,6 +120,15 @@ fn run(
         })?;
         app.animations.tick();
 
+        // Update smooth scroll display value
+        if let Some(progress) = app.animations.scroll_progress() {
+            if let Some((from, to)) = app.animations.scroll_values() {
+                app.scroll_display = from + (to - from) * progress;
+            }
+        } else {
+            app.scroll_display = app.scroll_offset as f64;
+        }
+
         // Set cursor shape based on vim mode
         let cursor_style = match app.cursor_shape() {
             CursorShape::Bar => crossterm::cursor::SetCursorStyle::BlinkingBar,
