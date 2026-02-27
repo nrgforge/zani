@@ -118,6 +118,7 @@ fn run(
         terminal.draw(|frame| {
             zani::ui::draw(frame, app);
         })?;
+        app.animations.tick();
 
         // Set cursor shape based on vim mode
         let cursor_style = match app.cursor_shape() {
@@ -126,8 +127,13 @@ fn run(
         };
         crossterm::execute!(terminal.backend_mut(), cursor_style)?;
 
-        // Poll for input (250ms timeout enables autosave checks)
-        if event::poll(Duration::from_millis(250))? {
+        // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
+        let poll_timeout = if app.animations.is_active() {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(250)
+        };
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handle_key(app, key.code, key.modifiers);

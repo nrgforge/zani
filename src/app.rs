@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::animation::AnimationManager;
 use crate::buffer::Buffer;
 use crate::clipboard;
 use crate::color_profile::ColorProfile;
@@ -92,6 +93,7 @@ pub struct App {
     pub undo_history: UndoHistory,
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
+    pub animations: AnimationManager,
 }
 
 impl App {
@@ -125,6 +127,7 @@ impl App {
             yank_register: None,
             undo_history: UndoHistory::new(),
             find_state: None,
+            animations: AnimationManager::new(),
         }
     }
 
