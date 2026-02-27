@@ -65,6 +65,7 @@ struct SettingsRow {
 
 /// Render the Settings Layer overlay centered on screen.
 fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
+    let overlay_width = 48u16.min(area.width);
     let all_palettes = Palette::all();
     let items = SettingsItem::all();
 
@@ -112,7 +113,14 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
                     .unwrap_or("[scratch]");
-                format!("  File        {}", file_str)
+                let prefix = "  File        ";
+                let avail = (overlay_width as usize).saturating_sub(2 + prefix.len());
+                if file_str.len() <= avail {
+                    format!("{}{}", prefix, file_str)
+                } else {
+                    let skip = file_str.len() - (avail - 2);
+                    format!("{}..{}", prefix, &file_str[skip..])
+                }
             }
         };
 
@@ -170,24 +178,59 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                 let buf = &app.rename_buf;
                 let cursor_pos = app.rename_cursor;
                 let chars: Vec<char> = buf.chars().collect();
-                let before: String = chars[..cursor_pos].iter().collect();
-                let after: String = if cursor_pos < chars.len() {
-                    chars[cursor_pos + 1..].iter().collect()
+
+                // Available width for filename inside overlay (border + prefix)
+                let avail = (overlay_width as usize).saturating_sub(2 + prefix.len());
+
+                // Determine visible window that keeps the cursor in view.
+                // We show up to `avail` chars, biased toward the cursor position.
+                let ellipsis = "..";
+                let ellipsis_len = ellipsis.len();
+                let (vis_start, show_ellipsis) = if chars.len() <= avail {
+                    // Entire name fits
+                    (0, false)
                 } else {
-                    String::new()
+                    // Need to truncate. Keep cursor visible with some context after it.
+                    // Reserve space for ellipsis at the start.
+                    let content_avail = avail.saturating_sub(ellipsis_len);
+                    // Position the window so cursor is visible
+                    let ideal_start = cursor_pos.saturating_sub(content_avail / 2);
+                    let start = if ideal_start + content_avail > chars.len() {
+                        chars.len().saturating_sub(content_avail)
+                    } else {
+                        ideal_start
+                    };
+                    if start == 0 { (0, false) } else { (start, true) }
                 };
-                let cursor_ch = if cursor_pos < chars.len() {
-                    chars[cursor_pos].to_string()
+
+                let vis_end = (if show_ellipsis {
+                    vis_start + avail.saturating_sub(ellipsis_len)
+                } else {
+                    vis_start + avail
+                }).min(chars.len());
+
+                // Build the visible portion, splitting around the cursor
+                let vis_cursor = cursor_pos.saturating_sub(vis_start);
+                let vis_chars = &chars[vis_start..vis_end];
+
+                let before: String = vis_chars[..vis_cursor.min(vis_chars.len())].iter().collect();
+                let cursor_ch = if vis_cursor < vis_chars.len() {
+                    vis_chars[vis_cursor].to_string()
                 } else {
                     " ".to_string()
                 };
+                let after_start = (vis_cursor + 1).min(vis_chars.len());
+                let after: String = vis_chars[after_start..].iter().collect();
 
-                return Line::from(vec![
-                    Span::styled(prefix.to_string(), normal_style),
-                    Span::styled(before, normal_style),
-                    Span::styled(cursor_ch, rename_cursor_style),
-                    Span::styled(after, normal_style),
-                ]);
+                let mut spans = vec![Span::styled(prefix.to_string(), normal_style)];
+                if show_ellipsis {
+                    spans.push(Span::styled(ellipsis.to_string(), normal_style));
+                }
+                spans.push(Span::styled(before, normal_style));
+                spans.push(Span::styled(cursor_ch, rename_cursor_style));
+                spans.push(Span::styled(after, normal_style));
+
+                return Line::from(spans);
             }
 
             let style = if row.cursor_index == Some(app.settings_cursor) {
@@ -216,7 +259,6 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     let content_rows = lines.len();
     let overlay_height = (content_rows as u16 + 2).min(area.height);
-    let overlay_width = 48u16.min(area.width);
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
     let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
     let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
