@@ -261,6 +261,11 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                         app.cursor_line,
                         app.cursor_col,
                     ));
+                    app.animations.start(
+                        zani::animation::TransitionKind::OverlayOpacity { appearing: true },
+                        Duration::from_millis(150),
+                        zani::animation::Easing::EaseOut,
+                    );
                 }
             }
             KeyCode::Char('z') => {

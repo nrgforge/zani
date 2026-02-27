@@ -60,7 +60,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
 
     // Find overlay bar at top of screen
     if let Some(ref fs) = app.find_state {
-        draw_find_bar(frame, fs, &effective, area);
+        let find_opacity = app.animations.overlay_progress().unwrap_or(1.0);
+        draw_find_bar(frame, fs, &effective, area, find_opacity);
     }
 
     // Position cursor
@@ -85,12 +86,16 @@ fn draw_find_bar(
     fs: &crate::find::FindState,
     palette: &Palette,
     area: Rect,
+    opacity: f64,
 ) {
     let bar_area = Rect::new(area.x, area.y, area.width, 1);
     frame.render_widget(Clear, bar_area);
 
+    let effective_fg = crate::palette::interpolate(&palette.background, &palette.foreground, opacity);
+    let effective_dim = crate::palette::interpolate(&palette.background, &palette.dimmed_foreground, opacity);
+
     let bar_style = Style::default()
-        .fg(palette.foreground)
+        .fg(effective_fg)
         .bg(palette.background);
 
     let prefix = "Find: ";
@@ -108,7 +113,7 @@ fn draw_find_bar(
         Span::styled(
             match_info,
             Style::default()
-                .fg(palette.dimmed_foreground)
+                .fg(effective_dim)
                 .bg(palette.background),
         ),
     ];
