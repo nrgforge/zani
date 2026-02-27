@@ -104,21 +104,30 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         cursor_index: Some(7),
     });
 
-    // Status information (not selectable)
-    let mode_str = match app.vim_mode {
-        Mode::Normal => "NORMAL",
-        Mode::Insert => "INSERT",
-        Mode::Visual => "VISUAL",
-    };
+    // Blank line before file row
+    rows.push(SettingsRow { text: String::new(), cursor_index: None });
+
+    // File row (cursor index 8)
     let file_str = app
         .file_path
         .as_ref()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("[scratch]");
+    rows.push(SettingsRow {
+        text: format!("  File        {}", file_str),
+        cursor_index: Some(8),
+    });
+
+    // Status information (not selectable)
+    let mode_str = match app.vim_mode {
+        Mode::Normal => "NORMAL",
+        Mode::Insert => "INSERT",
+        Mode::Visual => "VISUAL",
+    };
     let dirty_str = if app.dirty { " [+]" } else { "" };
     rows.push(SettingsRow {
-        text: format!("  {} | {}{}", mode_str, file_str, dirty_str),
+        text: format!("  {}{}", mode_str, dirty_str),
         cursor_index: None,
     });
 
@@ -145,7 +154,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     let content_rows = lines.len();
     let overlay_height = (content_rows as u16 + 2).min(area.height);
-    let overlay_width = 34u16.min(area.width);
+    let overlay_width = 48u16.min(area.width);
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
     let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
     let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
@@ -421,6 +430,44 @@ mod tests {
             }
         }
         panic!("Could not find 'Inkwell' row in rendered buffer");
+    }
+
+    // === File row in Settings ===
+
+    #[test]
+    fn settings_layer_shows_file_row() {
+        let mut app = App::new();
+        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("File"),
+            "Settings Layer should show File label"
+        );
+        assert!(
+            text.contains("draft.md"),
+            "File row should show the filename"
+        );
+    }
+
+    #[test]
+    fn settings_layer_shows_scratch_name() {
+        let mut app = App::new().with_scratch_name();
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("File"),
+            "Settings Layer should show File label for scratch"
+        );
+        // Scratch name ends with .md
+        assert!(
+            text.contains(".md"),
+            "File row should show the scratch filename"
+        );
     }
 
     // === Acceptance test: Settings Layer is dismissed ===

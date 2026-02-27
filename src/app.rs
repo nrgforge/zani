@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::buffer::Buffer;
+use crate::draft_name;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::smart_typography;
@@ -9,8 +10,8 @@ use crate::vim_bindings::{self, Action, CursorShape, Mode};
 use crate::wrap::wrap_line;
 
 /// Number of selectable items in the Settings Layer.
-/// 0–2: palettes, 3–6: focus modes, 7: column width.
-const SETTINGS_SELECTABLE: usize = 8;
+/// 0–2: palettes, 3–6: focus modes, 7: column width, 8: file.
+const SETTINGS_SELECTABLE: usize = 9;
 
 /// Application state.
 pub struct App {
@@ -27,6 +28,7 @@ pub struct App {
     pub settings_cursor: usize,
     pub should_quit: bool,
     pub file_path: Option<PathBuf>,
+    pub is_scratch: bool,
     pub dirty: bool,
     pub last_save: Option<Instant>,
     pub autosave_interval: Duration,
@@ -48,6 +50,7 @@ impl App {
             settings_cursor: 0,
             should_quit: false,
             file_path: None,
+            is_scratch: false,
             dirty: false,
             last_save: None,
             autosave_interval: Duration::from_secs(3),
@@ -57,6 +60,12 @@ impl App {
     pub fn with_file(mut self, path: PathBuf, content: &str) -> Self {
         self.buffer = Buffer::from_text(content);
         self.file_path = Some(path);
+        self
+    }
+
+    pub fn with_scratch_name(mut self) -> Self {
+        self.file_path = Some(PathBuf::from(draft_name::generate()));
+        self.is_scratch = true;
         self
     }
 
@@ -121,6 +130,7 @@ impl App {
             5 => self.focus_mode = FocusMode::Paragraph,
             6 => self.focus_mode = FocusMode::Typewriter,
             7 => {} // column width — adjusted via Left/Right, not Enter
+            8 => {} // file — rename deferred
             _ => {}
         }
     }
@@ -514,7 +524,7 @@ mod tests {
     #[test]
     fn settings_nav_down_wraps() {
         let mut app = App::new();
-        app.settings_cursor = 7;
+        app.settings_cursor = 8;
         app.settings_nav_down();
         assert_eq!(app.settings_cursor, 0);
     }
@@ -524,7 +534,7 @@ mod tests {
         let mut app = App::new();
         app.settings_cursor = 0;
         app.settings_nav_up();
-        assert_eq!(app.settings_cursor, 7);
+        assert_eq!(app.settings_cursor, 8);
     }
 
     #[test]
@@ -600,5 +610,36 @@ mod tests {
     fn active_palette_index_default_is_zero() {
         let app = App::new();
         assert_eq!(app.active_palette_index(), 0);
+    }
+
+    // === Scratch buffer ===
+
+    #[test]
+    fn scratch_sets_file_path() {
+        let app = App::new().with_scratch_name();
+        assert!(app.file_path.is_some());
+        assert!(app.is_scratch);
+    }
+
+    #[test]
+    fn scratch_enables_autosave() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        let name = crate::draft_name::generate();
+        app.file_path = Some(dir.path().join(&name));
+        app.is_scratch = true;
+        app.vim_mode = Mode::Insert;
+        app.handle_char('x');
+        assert!(app.dirty);
+        let saved = app.autosave();
+        assert!(saved, "scratch buffer should autosave");
+    }
+
+    #[test]
+    fn explicit_file_is_not_scratch() {
+        let tmp = NamedTempFile::new().unwrap();
+        let app = App::new().with_file(tmp.path().to_path_buf(), "hello");
+        assert!(!app.is_scratch);
+        assert!(app.file_path.is_some());
     }
 }

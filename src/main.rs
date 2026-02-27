@@ -57,6 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref path) = file_path {
         let content = std::fs::read_to_string(path).unwrap_or_default();
         app = app.with_file(path.clone(), &content);
+    } else {
+        app = app.with_scratch_name();
     }
 
     // Initialize terminal
