@@ -27,7 +27,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .focus_mode(app.focus_mode)
         .active_line(app.cursor_line)
         .paragraph_bounds(app.paragraph_bounds())
-        .sentence_bounds(app.sentence_bounds());
+        .sentence_bounds(app.sentence_bounds())
+        .color_profile(app.color_profile);
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();

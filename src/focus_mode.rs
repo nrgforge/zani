@@ -3,9 +3,10 @@ use ratatui::style::Color;
 use crate::palette::{self, Palette};
 
 /// Focus Mode variants that control which text is dimmed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusMode {
     /// No dimming. All text at full brightness.
+    #[default]
     Off,
     /// Current sentence at full brightness, everything else dimmed.
     Sentence,

@@ -4,6 +4,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::buffer::Buffer;
+use crate::color_profile::ColorProfile;
 use crate::focus_mode::{self, FocusMode};
 use crate::markdown_styling;
 use crate::palette::Palette;
@@ -29,6 +30,8 @@ pub struct WritingSurface<'a> {
     paragraph_bounds: Option<(usize, usize)>,
     /// Sentence bounds (start, end) as absolute char indices for sentence focus mode.
     sentence_bounds: Option<(usize, usize)>,
+    /// Terminal color capability for rendering.
+    color_profile: ColorProfile,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -43,6 +46,7 @@ impl<'a> WritingSurface<'a> {
             active_line: 0,
             paragraph_bounds: None,
             sentence_bounds: None,
+            color_profile: ColorProfile::TrueColor,
         }
     }
 
@@ -78,6 +82,11 @@ impl<'a> WritingSurface<'a> {
 
     pub fn sentence_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
         self.sentence_bounds = bounds;
+        self
+    }
+
+    pub fn color_profile(mut self, profile: ColorProfile) -> Self {
+        self.color_profile = profile;
         self
     }
 
@@ -120,9 +129,10 @@ impl Widget for WritingSurface<'_> {
         let x_offset = self.center_offset(area.width);
 
         // Fill background
+        let bg = self.color_profile.map_color(self.palette.background);
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
-                buf[(x, y)].set_style(Style::default().bg(self.palette.background));
+                buf[(x, y)].set_style(Style::default().bg(bg));
                 buf[(x, y)].set_char(' ');
             }
         }
@@ -198,18 +208,29 @@ impl Widget for WritingSurface<'_> {
                     // Resolve markdown style for this character
                     let style = if char_idx < md_styles.len() {
                         let resolved = md_styles[char_idx].resolve(self.palette);
-                        // Compose with focus dimming
+                        // Compose with focus dimming, respecting color profile
                         if distance > 0 {
-                            let base_fg = resolved.fg.unwrap_or(self.palette.foreground);
-                            let dimmed =
-                                focus_mode::apply_dimming(&base_fg, self.palette, distance);
-                            resolved.fg(dimmed)
+                            match self.color_profile {
+                                ColorProfile::Basic => {
+                                    // Basic: use DIM modifier instead of color interpolation
+                                    resolved.add_modifier(ratatui::style::Modifier::DIM)
+                                }
+                                _ => {
+                                    // TrueColor/Color256: interpolate, then map color
+                                    let base_fg = resolved.fg.unwrap_or(self.palette.foreground);
+                                    let dimmed =
+                                        focus_mode::apply_dimming(&base_fg, self.palette, distance);
+                                    resolved.fg(self.color_profile.map_color(dimmed))
+                                }
+                            }
                         } else {
-                            resolved
+                            // Map foreground color for non-TrueColor profiles
+                            let fg = resolved.fg.unwrap_or(self.palette.foreground);
+                            resolved.fg(self.color_profile.map_color(fg))
                         }
                     } else {
                         Style::default()
-                            .fg(self.palette.foreground)
+                            .fg(self.color_profile.map_color(self.palette.foreground))
                             .bg(self.palette.background)
                     };
 
@@ -401,5 +422,59 @@ mod tests {
         let area = Rect::new(0, 0, 80, 10);
         let _buf = render_surface("", 60, area);
         // No panic = pass
+    }
+
+    // === Acceptance test: Basic profile uses DIM modifier for dimming ===
+
+    #[test]
+    fn basic_profile_uses_dim_modifier_for_focus_dimming() {
+        use ratatui::style::Modifier;
+        use crate::color_profile::ColorProfile;
+
+        let text = "Hello world";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+
+        // Typewriter mode with active_line=5 means line 0 is dimmed
+        let surface = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .focus_mode(FocusMode::Typewriter)
+            .active_line(5)
+            .color_profile(ColorProfile::Basic);
+
+        let mut buf = RatatuiBuffer::empty(area);
+        surface.render(area, &mut buf);
+
+        let x_offset = (80 - 60) / 2; // 10
+        let cell = &buf[(x_offset, 0)];
+        assert_eq!(cell.symbol(), "H");
+        assert!(
+            cell.modifier.contains(Modifier::DIM),
+            "Basic profile should use DIM modifier for dimmed text"
+        );
+    }
+
+    // === Unit test: All color profiles render without panic ===
+
+    #[test]
+    fn all_profiles_render_without_panic() {
+        use crate::color_profile::ColorProfile;
+
+        let text = "Test text for rendering";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+
+        for profile in [ColorProfile::TrueColor, ColorProfile::Color256, ColorProfile::Basic] {
+            let surface = WritingSurface::new(&buffer, &palette)
+                .column_width(60)
+                .focus_mode(FocusMode::Typewriter)
+                .active_line(0)
+                .color_profile(profile);
+            let mut buf = RatatuiBuffer::empty(area);
+            surface.render(area, &mut buf);
+            // No panic = pass
+        }
     }
 }

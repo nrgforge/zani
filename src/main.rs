@@ -7,6 +7,8 @@ use crossterm::terminal;
 use ratatui::Terminal;
 
 use zani::app::{App, SettingsItem};
+use zani::color_profile::ColorProfile;
+use zani::config::Config;
 use zani::vim_bindings::{Action, CursorShape, Direction, Mode};
 use zani::writing_window;
 
@@ -52,8 +54,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Detect terminal color capability
+    let color_profile = ColorProfile::detect();
+
+    // Load persisted config
+    let config = Config::load();
+
     // Create application state
     let mut app = App::new();
+    app.color_profile = color_profile;
+    app.set_palette(config.resolve_palette());
+    app.focus_mode = config.focus_mode;
+    app.column_width = config.column_width;
     if let Some(ref path) = file_path {
         let content = std::fs::read_to_string(path).unwrap_or_default();
         app = app.with_file(path.clone(), &content);
@@ -134,12 +146,23 @@ fn run(
     Ok(())
 }
 
+/// Persist current settings to config file (best-effort, errors silently ignored).
+fn save_config(app: &App) {
+    let config = Config {
+        palette: app.palette.name.to_string(),
+        focus_mode: app.focus_mode,
+        column_width: app.column_width,
+    };
+    let _ = config.save();
+}
+
 fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     // Ctrl combinations — checked first, independent of vim mode
     if modifiers.contains(KeyModifiers::CONTROL) {
         match code {
             KeyCode::Char('f') => {
                 app.focus_mode = app.focus_mode.next();
+                save_config(app);
             }
             KeyCode::Char('p') => {
                 app.toggle_settings();
@@ -175,15 +198,20 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             KeyCode::Esc => app.dismiss_settings(),
             KeyCode::Up | KeyCode::Char('k') => app.settings_nav_up(),
             KeyCode::Down | KeyCode::Char('j') => app.settings_nav_down(),
-            KeyCode::Enter => app.settings_apply(),
+            KeyCode::Enter => {
+                app.settings_apply();
+                save_config(app);
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 if SettingsItem::at(app.settings_cursor) == Some(SettingsItem::ColumnWidth) {
                     app.settings_adjust_column(-1);
+                    save_config(app);
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 if SettingsItem::at(app.settings_cursor) == Some(SettingsItem::ColumnWidth) {
                     app.settings_adjust_column(1);
+                    save_config(app);
                 }
             }
             _ => {} // swallow all other keys

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::buffer::Buffer;
+use crate::color_profile::ColorProfile;
 use crate::draft_name;
 use crate::focus_mode::{self, FocusMode};
 use crate::palette::Palette;
@@ -50,6 +51,7 @@ pub struct App {
     pub buffer: Buffer,
     pub palette: Palette,
     pub focus_mode: FocusMode,
+    pub color_profile: ColorProfile,
     pub vim_mode: Mode,
     pub cursor_line: usize,
     pub cursor_col: usize,
@@ -77,6 +79,7 @@ impl App {
             buffer: Buffer::new(),
             palette: Palette::default_palette(),
             focus_mode: FocusMode::Off,
+            color_profile: ColorProfile::TrueColor,
             vim_mode: Mode::Normal,
             cursor_line: 0,
             cursor_col: 0,

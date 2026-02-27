@@ -1,5 +1,6 @@
 pub mod app;
 pub mod buffer;
+pub mod config;
 pub mod draft_name;
 pub mod color_profile;
 pub mod focus_mode;
