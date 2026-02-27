@@ -61,6 +61,8 @@ struct SettingsRow {
     cursor_index: Option<usize>,
     /// Optional color swatches (bg colors for 2-char blocks) appended after text.
     swatches: Vec<ratatui::style::Color>,
+    /// Whether this row is a section subheading (rendered dimmed).
+    is_heading: bool,
 }
 
 /// Render the Settings Layer overlay centered on screen.
@@ -75,15 +77,19 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     for (cursor_idx, item) in items.iter().enumerate() {
         let group = match item {
-            SettingsItem::Palette(_) => "palette",
-            SettingsItem::FocusMode(_) => "focus",
-            SettingsItem::ColumnWidth => "column",
-            SettingsItem::File => "file",
+            SettingsItem::Palette(_) => "Palette",
+            SettingsItem::FocusMode(_) => "Focus",
+            SettingsItem::ColumnWidth => "Document",
+            SettingsItem::File => "Document",
         };
 
-        // Insert blank separator when group changes (and before the first group)
+        // Insert subheading when group changes
         if prev_group != Some(group) {
-            rows.push(SettingsRow { text: String::new(), cursor_index: None, swatches: vec![] });
+            // Blank line before subheading (except first group)
+            if prev_group.is_some() {
+                rows.push(SettingsRow { text: String::new(), cursor_index: None, swatches: vec![], is_heading: false });
+            }
+            rows.push(SettingsRow { text: format!("  {}", group), cursor_index: None, swatches: vec![], is_heading: true });
             prev_group = Some(group);
         }
 
@@ -137,6 +143,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             text,
             cursor_index: Some(cursor_idx),
             swatches,
+            is_heading: false,
         });
     }
 
@@ -151,6 +158,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         text: format!("  {}{}", mode_str, dirty_str),
         cursor_index: None,
         swatches: vec![],
+        is_heading: false,
     });
 
     // Determine preview palette: if cursor is on a palette row, preview those colors
@@ -244,6 +252,10 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
             let style = if row.cursor_index == Some(app.settings_cursor) {
                 cursor_style
+            } else if row.is_heading {
+                Style::default()
+                    .fg(preview_palette.dimmed_foreground)
+                    .bg(preview_palette.background)
             } else {
                 normal_style
             };
