@@ -66,6 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.set_palette(config.resolve_palette());
     app.focus_mode = config.focus_mode;
     app.column_width = config.column_width;
+    app.editing_mode = config.editing_mode;
+    if app.editing_mode == zani::editing_mode::EditingMode::Standard {
+        app.vim_mode = zani::vim_bindings::Mode::Insert;
+    }
     if let Some(ref path) = file_path {
         let content = std::fs::read_to_string(path).unwrap_or_default();
         app = app.with_file(path.clone(), &content);
@@ -152,6 +156,7 @@ fn save_config(app: &App) {
         palette: app.palette.name.to_string(),
         focus_mode: app.focus_mode,
         column_width: app.column_width,
+        editing_mode: app.editing_mode,
     };
     let _ = config.save();
 }
@@ -160,9 +165,60 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     // Ctrl combinations — checked first, independent of vim mode
     if modifiers.contains(KeyModifiers::CONTROL) {
         match code {
-            KeyCode::Char('f') => {
-                app.focus_mode = app.focus_mode.next();
-                save_config(app);
+            KeyCode::Char('c') => {
+                // Copy selection if any, otherwise no-op
+                if let Some(text) = app.selected_text() {
+                    zani::clipboard::write_osc52(&text);
+                    app.yank_register = Some(text);
+                    app.selection_anchor = None;
+                    if app.vim_mode == Mode::Visual {
+                        app.vim_mode = Mode::Normal;
+                    }
+                }
+            }
+            KeyCode::Char('x') => {
+                // Cut: copy selection then delete it
+                if let Some(text) = app.selected_text() {
+                    zani::clipboard::write_osc52(&text);
+                    app.yank_register = Some(text);
+                    app.delete_selection_silent();
+                    app.selection_anchor = None;
+                    if app.vim_mode == Mode::Visual {
+                        app.vim_mode = Mode::Normal;
+                    }
+                }
+            }
+            KeyCode::Char('v') => {
+                // Paste from yank register at cursor
+                if let Some(text) = app.yank_register.clone() {
+                    // In Standard mode with selection, replace selection first
+                    if app.editing_mode == zani::editing_mode::EditingMode::Standard
+                        && app.selection_anchor.is_some()
+                    {
+                        app.delete_selection_silent();
+                        app.selection_anchor = None;
+                    }
+                    let idx = app.cursor_char_index();
+                    app.buffer.insert(idx, &text);
+                    // Advance cursor past inserted text
+                    let char_count = text.chars().count();
+                    app.set_cursor_from_char_index(idx + char_count);
+                    app.dirty = true;
+                }
+            }
+            KeyCode::Char('a') => {
+                // Select all
+                let total_chars = app.buffer.rope().len_chars();
+                app.selection_anchor = Some((0, 0));
+                if total_chars > 0 {
+                    app.set_cursor_from_char_index(total_chars.saturating_sub(1));
+                }
+                if app.editing_mode == zani::editing_mode::EditingMode::Vim {
+                    app.vim_mode = Mode::Visual;
+                }
+            }
+            KeyCode::Char('q') => {
+                app.should_quit = true;
             }
             KeyCode::Char('p') => {
                 app.toggle_settings();
@@ -170,8 +226,74 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             KeyCode::Char('s') => {
                 app.autosave();
             }
-            KeyCode::Char('c') | KeyCode::Char('q') => {
-                app.should_quit = true;
+            KeyCode::Char('f') => {
+                if app.find_state.is_none() {
+                    app.find_state = Some(zani::find::FindState::new(
+                        app.cursor_line,
+                        app.cursor_col,
+                    ));
+                }
+            }
+            KeyCode::Char('z') => {
+                app.apply_action(Action::Undo);
+            }
+            KeyCode::Char('y') => {
+                app.apply_action(Action::Redo);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Find overlay — swallow all keys when active
+    if let Some(ref mut find) = app.find_state {
+        match code {
+            KeyCode::Esc => {
+                // Cancel: restore cursor to pre-search position
+                let (line, col) = find.saved_cursor;
+                app.cursor_line = line;
+                app.cursor_col = col;
+                app.find_state = None;
+            }
+            KeyCode::Enter => {
+                // Jump to current match and close find
+                if let Some((line, col)) = find.current_match_pos() {
+                    app.cursor_line = line;
+                    app.cursor_col = col;
+                }
+                app.find_state = None;
+            }
+            KeyCode::Backspace => {
+                find.backspace();
+                find.search(&app.buffer);
+                // Jump cursor to first match for live preview
+                if let Some((line, col)) = find.current_match_pos() {
+                    app.cursor_line = line;
+                    app.cursor_col = col;
+                }
+            }
+            KeyCode::Up => {
+                find.prev_match();
+                if let Some((line, col)) = find.current_match_pos() {
+                    app.cursor_line = line;
+                    app.cursor_col = col;
+                }
+            }
+            KeyCode::Down => {
+                find.next_match();
+                if let Some((line, col)) = find.current_match_pos() {
+                    app.cursor_line = line;
+                    app.cursor_col = col;
+                }
+            }
+            KeyCode::Char(c) => {
+                find.insert_char(c);
+                find.search(&app.buffer);
+                // Jump cursor to first match for live preview
+                if let Some((line, col)) = find.current_match_pos() {
+                    app.cursor_line = line;
+                    app.cursor_col = col;
+                }
             }
             _ => {}
         }
@@ -219,23 +341,82 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
+    let is_standard = app.editing_mode == zani::editing_mode::EditingMode::Standard;
+
+    // Shift+Arrow/Home/End extends selection
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        match code {
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+            | KeyCode::Home | KeyCode::End => {
+                app.extend_selection(code);
+                return;
+            }
+            _ => {}
+        }
+    }
+
     match code {
         KeyCode::Esc => app.handle_escape(),
         KeyCode::Char(c) => app.handle_char(c),
         KeyCode::Backspace => {
-            if app.vim_mode == Mode::Insert {
-                app.apply_action(Action::DeleteBack);
+            if is_standard || app.vim_mode == Mode::Insert {
+                // In Standard mode with selection, delete selection instead
+                if is_standard && app.selection_anchor.is_some() {
+                    app.delete_selection_silent();
+                    app.selection_anchor = None;
+                } else {
+                    app.apply_action(Action::DeleteBack);
+                }
             }
         }
         KeyCode::Enter => {
-            if app.vim_mode == Mode::Insert {
+            if is_standard || app.vim_mode == Mode::Insert {
+                if is_standard && app.selection_anchor.is_some() {
+                    app.delete_selection_silent();
+                    app.selection_anchor = None;
+                }
                 app.apply_action(Action::InsertNewline);
             }
         }
-        KeyCode::Left => app.apply_action(Action::MoveCursor(Direction::Left)),
-        KeyCode::Right => app.apply_action(Action::MoveCursor(Direction::Right)),
-        KeyCode::Up => app.apply_action(Action::MoveCursor(Direction::Up)),
-        KeyCode::Down => app.apply_action(Action::MoveCursor(Direction::Down)),
+        KeyCode::Delete => {
+            app.apply_action(Action::DeleteChar);
+        }
+        KeyCode::Home => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::LineStart);
+        }
+        KeyCode::End => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::LineEnd);
+        }
+        KeyCode::Left => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::MoveCursor(Direction::Left));
+        }
+        KeyCode::Right => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::MoveCursor(Direction::Right));
+        }
+        KeyCode::Up => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::MoveCursor(Direction::Up));
+        }
+        KeyCode::Down => {
+            if is_standard {
+                app.selection_anchor = None;
+            }
+            app.apply_action(Action::MoveCursor(Direction::Down));
+        }
         _ => {}
     }
 }

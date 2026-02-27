@@ -70,6 +70,10 @@ pub enum Action {
     PasteAfter,
     /// Paste register content before cursor.
     PasteBefore,
+    /// Undo the last change.
+    Undo,
+    /// Redo the last undone change.
+    Redo,
     /// No action (key not handled).
     None,
 }

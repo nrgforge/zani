@@ -38,6 +38,10 @@ pub struct WritingSurface<'a> {
     vertical_offset: u16,
     /// Visual mode selection range: (start_line, start_col, end_line, end_col).
     selection: Option<(usize, usize, usize, usize)>,
+    /// Find match ranges: (line, start_col, end_col) for highlighting.
+    find_matches: Vec<(usize, usize, usize)>,
+    /// The current (active) find match index, if any.
+    find_current: Option<usize>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -55,6 +59,8 @@ impl<'a> WritingSurface<'a> {
             color_profile: ColorProfile::TrueColor,
             vertical_offset: 0,
             selection: None,
+            find_matches: Vec::new(),
+            find_current: None,
         }
     }
 
@@ -108,6 +114,12 @@ impl<'a> WritingSurface<'a> {
         self
     }
 
+    pub fn find_matches(mut self, matches: Vec<(usize, usize, usize)>, current: Option<usize>) -> Self {
+        self.find_matches = matches;
+        self.find_current = current;
+        self
+    }
+
     /// Check whether a character at (logical_line, char_col) is within the selection.
     fn is_char_selected(&self, logical_line: usize, char_col: usize) -> bool {
         let Some((sl, sc, el, ec)) = self.selection else {
@@ -128,6 +140,17 @@ impl<'a> WritingSurface<'a> {
         }
         // Lines strictly between start and end are fully selected
         true
+    }
+
+    /// Check if a character at (line, col) is in a find match.
+    /// Returns Some(true) for current match, Some(false) for other matches, None if not a match.
+    fn find_match_kind(&self, logical_line: usize, char_col: usize) -> Option<bool> {
+        for (i, &(line, start, end)) in self.find_matches.iter().enumerate() {
+            if logical_line == line && char_col >= start && char_col < end {
+                return Some(self.find_current == Some(i));
+            }
+        }
+        None
     }
 
     /// Compute all visual lines from the buffer.
@@ -284,6 +307,19 @@ impl Widget for WritingSurface<'_> {
                         style.fg(bg).bg(fg)
                     } else {
                         style
+                    };
+
+                    // Find match highlighting
+                    let style = match self.find_match_kind(vl.logical_line, char_idx) {
+                        Some(true) => {
+                            // Current match: inverted accent
+                            style.fg(self.palette.background).bg(self.palette.accent_heading)
+                        }
+                        Some(false) => {
+                            // Other matches: dimmed accent background
+                            style.bg(self.palette.dimmed_foreground)
+                        }
+                        None => style,
                     };
 
                     buf[(x, y)].set_char(chars[char_idx]);

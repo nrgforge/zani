@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 
@@ -17,6 +18,9 @@ pub struct Config {
     /// Prose column width.
     #[serde(default = "default_column_width")]
     pub column_width: u16,
+    /// Editing mode (vim or standard).
+    #[serde(default)]
+    pub editing_mode: EditingMode,
 }
 
 fn default_palette_name() -> String {
@@ -33,6 +37,7 @@ impl Default for Config {
             palette: default_palette_name(),
             focus_mode: FocusMode::Off,
             column_width: default_column_width(),
+            editing_mode: EditingMode::default(),
         }
     }
 }
@@ -109,6 +114,7 @@ mod focus_mode_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editing_mode::EditingMode;
 
     #[test]
     fn default_config_values() {
@@ -116,6 +122,7 @@ mod tests {
         assert_eq!(config.palette, "Ember");
         assert_eq!(config.focus_mode, FocusMode::Off);
         assert_eq!(config.column_width, 60);
+        assert_eq!(config.editing_mode, EditingMode::Vim);
     }
 
     #[test]
@@ -124,6 +131,7 @@ mod tests {
             palette: "Inkwell".to_string(),
             focus_mode: FocusMode::Typewriter,
             column_width: 72,
+            editing_mode: EditingMode::Standard,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&toml_str).unwrap();
@@ -143,6 +151,24 @@ mod tests {
     fn empty_toml_gives_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn missing_editing_mode_defaults_to_vim() {
+        let toml_str = r#"palette = "Ember""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.editing_mode, EditingMode::Vim);
+    }
+
+    #[test]
+    fn editing_mode_round_trip() {
+        let config = Config {
+            editing_mode: EditingMode::Standard,
+            ..Config::default()
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.editing_mode, EditingMode::Standard);
     }
 
     #[test]

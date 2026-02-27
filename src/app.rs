@@ -5,9 +5,12 @@ use crate::buffer::Buffer;
 use crate::clipboard;
 use crate::color_profile::ColorProfile;
 use crate::draft_name;
+use crate::editing_mode::EditingMode;
+use crate::find::FindState;
 use crate::focus_mode::{self, FocusMode};
 use crate::palette::Palette;
 use crate::smart_typography;
+use crate::undo::UndoHistory;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
 use crate::wrap::{self, VisualLine};
 
@@ -15,6 +18,8 @@ use crate::wrap::{self, VisualLine};
 /// Defines the logical meaning of each row, replacing magic indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsItem {
+    /// An editing mode choice (Vim or Standard).
+    EditingMode(EditingMode),
     /// A palette choice (index into Palette::all()).
     Palette(usize),
     /// A focus mode choice.
@@ -29,6 +34,8 @@ impl SettingsItem {
     /// Returns the ordered list of all selectable settings items.
     pub fn all() -> Vec<SettingsItem> {
         let mut items = Vec::new();
+        items.push(SettingsItem::EditingMode(EditingMode::Vim));
+        items.push(SettingsItem::EditingMode(EditingMode::Standard));
         for i in 0..Palette::all().len() {
             items.push(SettingsItem::Palette(i));
         }
@@ -52,6 +59,7 @@ pub struct App {
     pub buffer: Buffer,
     pub palette: Palette,
     pub focus_mode: FocusMode,
+    pub editing_mode: EditingMode,
     pub color_profile: ColorProfile,
     pub vim_mode: Mode,
     pub cursor_line: usize,
@@ -80,6 +88,10 @@ pub struct App {
     pub selection_anchor: Option<(usize, usize)>,
     /// Internal yank register (session-only vim register).
     pub yank_register: Option<String>,
+    /// Undo/redo history.
+    pub undo_history: UndoHistory,
+    /// Find overlay state (None when find is not active).
+    pub find_state: Option<FindState>,
 }
 
 impl App {
@@ -88,6 +100,7 @@ impl App {
             buffer: Buffer::new(),
             palette: Palette::default_palette(),
             focus_mode: FocusMode::Off,
+            editing_mode: EditingMode::default(),
             color_profile: ColorProfile::TrueColor,
             vim_mode: Mode::Normal,
             cursor_line: 0,
@@ -110,6 +123,8 @@ impl App {
             typewriter_vertical_offset: 0,
             selection_anchor: None,
             yank_register: None,
+            undo_history: UndoHistory::new(),
+            find_state: None,
         }
     }
 
@@ -125,8 +140,11 @@ impl App {
         self
     }
 
-    /// The cursor shape based on current vim mode.
+    /// The cursor shape based on current editing and vim mode.
     pub fn cursor_shape(&self) -> CursorShape {
+        if self.editing_mode == EditingMode::Standard {
+            return CursorShape::Bar;
+        }
         self.vim_mode.cursor_shape()
     }
 
@@ -135,7 +153,10 @@ impl App {
         self.settings_visible = !self.settings_visible;
         self.chrome_visible = self.settings_visible;
         if self.settings_visible {
-            self.settings_cursor = self.active_palette_index();
+            // Find the index of the active palette in the full settings item list
+            let items = SettingsItem::all();
+            let target = SettingsItem::Palette(self.active_palette_index());
+            self.settings_cursor = items.iter().position(|i| *i == target).unwrap_or(0);
         }
     }
 
@@ -180,6 +201,18 @@ impl App {
             return;
         };
         match item {
+            SettingsItem::EditingMode(mode) => {
+                self.editing_mode = mode;
+                match mode {
+                    EditingMode::Standard => {
+                        self.vim_mode = Mode::Insert;
+                        self.pending_normal_key = None;
+                    }
+                    EditingMode::Vim => {
+                        self.vim_mode = Mode::Normal;
+                    }
+                }
+            }
             SettingsItem::Palette(idx) => {
                 if let Some(p) = Palette::all().into_iter().nth(idx) {
                     self.palette = p;
@@ -286,6 +319,20 @@ impl App {
 
     /// Process a character key input.
     pub fn handle_char(&mut self, ch: char) {
+        // Standard mode: always insert characters directly
+        if self.editing_mode == EditingMode::Standard {
+            if ch.is_control() {
+                return;
+            }
+            // Selection replaces on type
+            if self.selection_anchor.is_some() {
+                self.delete_selection_silent();
+                self.selection_anchor = None;
+            }
+            self.insert_char(ch);
+            return;
+        }
+
         let action = match self.vim_mode {
             Mode::Normal => {
                 // Handle multi-key sequences
@@ -345,6 +392,9 @@ impl App {
     pub fn handle_escape(&mut self) {
         if self.settings_visible {
             self.dismiss_settings();
+        } else if self.editing_mode == EditingMode::Standard {
+            // In Standard mode, Escape just clears selection
+            self.selection_anchor = None;
         } else if self.vim_mode == Mode::Visual {
             self.selection_anchor = None;
             self.vim_mode = Mode::Normal;
@@ -356,7 +406,10 @@ impl App {
     pub fn apply_action(&mut self, action: Action) {
         match action {
             Action::SwitchMode(mode) => {
-                self.vim_mode = mode;
+                // In Standard mode, vim_mode must stay Insert
+                if self.editing_mode != EditingMode::Standard {
+                    self.vim_mode = mode;
+                }
             }
             Action::AppendMode => {
                 // Move cursor one right of current position, then enter Insert.
@@ -378,20 +431,27 @@ impl App {
             }
             Action::InsertNewline => {
                 let idx = self.cursor_char_index();
+                self.undo_history.commit_group();
+                self.undo_history.record_insert(idx, "\n");
                 self.buffer.insert(idx, "\n");
                 self.cursor_line += 1;
                 self.cursor_col = 0;
                 self.dirty = true;
+                self.undo_history.commit_group();
             }
             Action::DeleteBack => {
                 let idx = self.cursor_char_index();
                 if idx > 0 {
+                    let deleted: String = self.buffer.rope().slice(idx - 1..idx).to_string();
+                    self.undo_history.record_delete(idx - 1, &deleted);
                     self.buffer.remove(idx - 1, idx);
                     if self.cursor_col > 0 {
                         self.cursor_col -= 1;
                     } else if self.cursor_line > 0 {
                         self.cursor_line -= 1;
                         self.cursor_col = self.buffer.line(self.cursor_line).len_chars().saturating_sub(1);
+                        // Crossed a line boundary — commit group
+                        self.undo_history.commit_group();
                     }
                     self.dirty = true;
                 }
@@ -402,6 +462,8 @@ impl App {
                 // Don't delete the trailing newline
                 let content_len = if line_len > 0 { line_len - 1 } else { 0 };
                 if self.cursor_col < content_len {
+                    let deleted: String = self.buffer.rope().slice(idx..idx + 1).to_string();
+                    self.undo_history.record_delete(idx, &deleted);
                     self.buffer.remove(idx, idx + 1);
                     self.dirty = true;
                     self.clamp_cursor_col();
@@ -517,6 +579,61 @@ impl App {
                     self.dirty = true;
                 }
             }
+            Action::Undo => {
+                self.undo_history.commit_group();
+                if let Some(ops) = self.undo_history.undo() {
+                    // Apply inverse operations in reverse order
+                    for op in ops.iter().rev() {
+                        match op {
+                            crate::undo::Operation::Insert { pos, text } => {
+                                // Undo an insert = delete
+                                let end = pos + text.chars().count();
+                                self.buffer.remove(*pos, end);
+                            }
+                            crate::undo::Operation::Delete { pos, text } => {
+                                // Undo a delete = insert
+                                self.buffer.insert(*pos, text);
+                            }
+                        }
+                    }
+                    // Position cursor at the location of the first operation
+                    if let Some(op) = ops.first() {
+                        let pos = match op {
+                            crate::undo::Operation::Insert { pos, .. } => *pos,
+                            crate::undo::Operation::Delete { pos, .. } => *pos,
+                        };
+                        self.set_cursor_from_char_index(pos);
+                    }
+                    self.dirty = true;
+                }
+            }
+            Action::Redo => {
+                if let Some(ops) = self.undo_history.redo() {
+                    // Re-apply operations in original order
+                    for op in &ops {
+                        match op {
+                            crate::undo::Operation::Insert { pos, text } => {
+                                self.buffer.insert(*pos, text);
+                            }
+                            crate::undo::Operation::Delete { pos, text } => {
+                                let end = pos + text.chars().count();
+                                self.buffer.remove(*pos, end);
+                            }
+                        }
+                    }
+                    // Position cursor after the last operation
+                    if let Some(op) = ops.last() {
+                        let pos = match op {
+                            crate::undo::Operation::Insert { pos, text } => {
+                                pos + text.chars().count()
+                            }
+                            crate::undo::Operation::Delete { pos, .. } => *pos,
+                        };
+                        self.set_cursor_from_char_index(pos);
+                    }
+                    self.dirty = true;
+                }
+            }
             Action::None => {}
         }
     }
@@ -530,18 +647,28 @@ impl App {
             // Delete preceding characters
             if edit.delete_before > 0 {
                 let start = idx.saturating_sub(edit.delete_before);
+                let deleted: String = self.buffer.rope().slice(start..idx).to_string();
+                self.undo_history.record_delete(start, &deleted);
                 self.buffer.remove(start, idx);
                 self.cursor_col -= edit.delete_before;
             }
             // Insert replacement
             let new_idx = self.cursor_char_index();
+            self.undo_history.record_insert(new_idx, edit.insert);
             self.buffer.insert(new_idx, edit.insert);
             self.cursor_col += edit.insert.chars().count();
         } else {
-            self.buffer.insert(idx, &ch.to_string());
+            let s = ch.to_string();
+            self.undo_history.record_insert(idx, &s);
+            self.buffer.insert(idx, &s);
             self.cursor_col += 1;
         }
         self.dirty = true;
+
+        // Commit undo group on whitespace (each word is one undo unit)
+        if ch == ' ' || ch == '\t' {
+            self.undo_history.commit_group();
+        }
     }
 
     /// Get the text preceding the cursor position (on the current line).
@@ -555,7 +682,7 @@ impl App {
     }
 
     /// Calculate the character index in the buffer for the current cursor position.
-    fn cursor_char_index(&self) -> usize {
+    pub fn cursor_char_index(&self) -> usize {
         self.line_start_char_index() + self.cursor_col
     }
 
@@ -663,7 +790,7 @@ impl App {
     }
 
     /// Set cursor position from an absolute char index in the buffer.
-    fn set_cursor_from_char_index(&mut self, char_idx: usize) {
+    pub fn set_cursor_from_char_index(&mut self, char_idx: usize) {
         let rope = self.buffer.rope();
         let total_chars = rope.len_chars();
         let idx = char_idx.min(total_chars.saturating_sub(1));
@@ -689,6 +816,10 @@ impl App {
         self.yank_register = Some(deleted.clone());
         clipboard::write_osc52(&deleted);
 
+        self.undo_history.commit_group();
+        self.undo_history.record_delete(line_start, &deleted);
+        self.undo_history.commit_group();
+
         self.buffer.remove(line_start, line_start + line_len);
         self.dirty = true;
 
@@ -697,6 +828,54 @@ impl App {
             self.cursor_line = self.buffer.len_lines().saturating_sub(1);
         }
         self.clamp_cursor_col();
+    }
+
+    /// Extend selection by moving the cursor while keeping (or setting) the anchor.
+    /// Used for Shift+Arrow selection in both modes.
+    pub fn extend_selection(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+
+        // Set anchor if not already selecting
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+        }
+
+        // Move cursor
+        match code {
+            KeyCode::Left => self.move_cursor(vim_bindings::Direction::Left),
+            KeyCode::Right => self.move_cursor(vim_bindings::Direction::Right),
+            KeyCode::Up => self.move_cursor(vim_bindings::Direction::Up),
+            KeyCode::Down => self.move_cursor(vim_bindings::Direction::Down),
+            KeyCode::Home => self.cursor_col = 0,
+            KeyCode::End => {
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                self.cursor_col = if line_len > 1 { line_len - 2 } else { 0 };
+            }
+            _ => {}
+        }
+
+        // In Vim mode, switch to Visual if not already
+        if self.editing_mode == EditingMode::Vim && self.vim_mode != Mode::Visual {
+            self.vim_mode = Mode::Visual;
+        }
+    }
+
+    /// Delete the current selection without yanking (for Standard mode replace-on-type).
+    pub fn delete_selection_silent(&mut self) {
+        if let Some((sl, sc, el, ec)) = self.selection_range() {
+            let rope = self.buffer.rope();
+            let start_idx = rope.line_to_char(sl) + sc;
+            let end_idx = (rope.line_to_char(el) + ec + 1).min(rope.len_chars());
+            let deleted = rope.slice(start_idx..end_idx).to_string();
+            self.undo_history.commit_group();
+            self.undo_history.record_delete(start_idx, &deleted);
+            self.undo_history.commit_group();
+            self.buffer.remove(start_idx, end_idx);
+            self.dirty = true;
+            self.cursor_line = sl;
+            self.cursor_col = sc;
+            self.clamp_cursor_col();
+        }
     }
 
     fn clamp_cursor_col(&mut self) {
@@ -869,6 +1048,7 @@ fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editing_mode::EditingMode;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -876,8 +1056,8 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 3 palettes + 4 focus modes + 1 column width + 1 file = 9
-        assert_eq!(SettingsItem::all().len(), 9);
+        // 2 editing modes + 3 palettes + 4 focus modes + 1 column width + 1 file = 11
+        assert_eq!(SettingsItem::all().len(), 11);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
@@ -1210,13 +1390,13 @@ mod tests {
         let mut app = App::new();
         app.palette = Palette::inkwell();
         app.toggle_settings();
-        assert_eq!(app.settings_cursor, 1); // Inkwell is index 1
+        assert_eq!(app.settings_cursor, 3); // Inkwell is at position 3 (2 editing modes + Ember + Inkwell)
     }
 
     #[test]
     fn settings_nav_down_wraps() {
         let mut app = App::new();
-        app.settings_cursor = 8;
+        app.settings_cursor = 10;
         app.settings_nav_down();
         assert_eq!(app.settings_cursor, 0);
     }
@@ -1226,7 +1406,7 @@ mod tests {
         let mut app = App::new();
         app.settings_cursor = 0;
         app.settings_nav_up();
-        assert_eq!(app.settings_cursor, 8);
+        assert_eq!(app.settings_cursor, 10);
     }
 
     #[test]
@@ -1248,7 +1428,7 @@ mod tests {
     #[test]
     fn settings_apply_palette() {
         let mut app = App::new();
-        app.settings_cursor = 1; // Inkwell
+        app.settings_cursor = 3; // Inkwell (2 editing modes + Ember=2, Inkwell=3)
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
     }
@@ -1256,11 +1436,11 @@ mod tests {
     #[test]
     fn settings_apply_focus_mode() {
         let mut app = App::new();
-        app.settings_cursor = 4; // Sentence
+        app.settings_cursor = 6; // Sentence
         app.settings_apply();
         assert_eq!(app.focus_mode, FocusMode::Sentence);
 
-        app.settings_cursor = 6; // Typewriter
+        app.settings_cursor = 8; // Typewriter
         app.settings_apply();
         assert_eq!(app.focus_mode, FocusMode::Typewriter);
     }
@@ -1268,7 +1448,7 @@ mod tests {
     #[test]
     fn settings_apply_column_is_noop() {
         let mut app = App::new();
-        app.settings_cursor = 7;
+        app.settings_cursor = 9;
         let before = app.column_width;
         app.settings_apply();
         assert_eq!(app.column_width, before);
@@ -1481,7 +1661,7 @@ mod tests {
     fn settings_apply_file_opens_rename() {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.settings_cursor = 8;
+        app.settings_cursor = 10;
         app.settings_apply();
         assert!(app.rename_active);
         assert_eq!(app.rename_buf, "draft.md");
@@ -1504,6 +1684,401 @@ mod tests {
             Some(PathBuf::from("/nonexistent/dir/real.md"))
         );
         assert!(!app.is_scratch);
+    }
+
+    // === Editing mode tests ===
+
+    #[test]
+    fn settings_apply_switches_to_standard_mode() {
+        let mut app = App::new();
+        app.settings_cursor = 1; // Standard
+        app.settings_apply();
+        assert_eq!(app.editing_mode, EditingMode::Standard);
+        assert_eq!(app.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn settings_apply_switches_to_vim_mode() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.settings_cursor = 0; // Vim
+        app.settings_apply();
+        assert_eq!(app.editing_mode, EditingMode::Vim);
+        assert_eq!(app.vim_mode, Mode::Normal);
+    }
+
+    #[test]
+    fn switching_to_standard_clears_pending_normal_key() {
+        let mut app = App::new();
+        app.pending_normal_key = Some('g');
+        app.settings_cursor = 1; // Standard
+        app.settings_apply();
+        assert_eq!(app.pending_normal_key, None);
+    }
+
+    // === Standard mode tests ===
+
+    #[test]
+    fn standard_mode_typing_inserts_directly() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 5;
+        app.handle_char('!');
+        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+    }
+
+    #[test]
+    fn standard_mode_escape_clears_selection_not_mode() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.selection_anchor = Some((0, 2));
+        app.handle_escape();
+        assert_eq!(app.selection_anchor, None);
+        assert_eq!(app.vim_mode, Mode::Insert); // stays in Insert
+    }
+
+    #[test]
+    fn standard_mode_cursor_is_always_bar() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        assert_eq!(app.cursor_shape(), CursorShape::Bar);
+    }
+
+    #[test]
+    fn standard_mode_typing_replaces_selection() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello world\n");
+        // Select "hello" (0,0) to (0,4)
+        app.selection_anchor = Some((0, 0));
+        app.cursor_col = 4;
+        app.handle_char('X');
+        assert_eq!(app.buffer.rope().to_string(), "X world\n");
+        assert_eq!(app.selection_anchor, None);
+    }
+
+    #[test]
+    fn standard_mode_q_inserts_q_not_quit() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("\n");
+        app.cursor_col = 0;
+        app.handle_char('q');
+        assert!(!app.should_quit);
+        assert!(app.buffer.rope().to_string().contains('q'));
+    }
+
+    // === Mode leakage prevention tests ===
+
+    #[test]
+    fn standard_mode_vim_mode_stays_insert() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        // SwitchMode should be ignored in Standard mode
+        app.apply_action(Action::SwitchMode(Mode::Normal));
+        assert_eq!(app.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn standard_mode_escape_keeps_insert() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.handle_escape();
+        assert_eq!(app.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn standard_mode_vim_keys_insert_literally() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("\n");
+        app.cursor_col = 0;
+        // 'i' should insert 'i', not switch to Insert mode
+        app.handle_char('i');
+        assert!(app.buffer.rope().to_string().contains('i'));
+        assert_eq!(app.vim_mode, Mode::Insert);
+    }
+
+    // === Full round-trip test ===
+
+    #[test]
+    fn standard_mode_full_round_trip() {
+        let mut app = App::new();
+        // Switch to Standard mode
+        app.settings_cursor = 1;
+        app.settings_apply();
+        assert_eq!(app.editing_mode, EditingMode::Standard);
+        assert_eq!(app.vim_mode, Mode::Insert);
+
+        // Type text
+        app.buffer = Buffer::from_text("\n");
+        app.cursor_col = 0;
+        app.handle_char('h');
+        app.handle_char('i');
+        assert_eq!(app.buffer.rope().to_string(), "hi\n");
+
+        // Select with shift+arrow (via extend_selection)
+        use crossterm::event::KeyCode;
+        app.cursor_col = 0;
+        app.extend_selection(KeyCode::Right);
+        app.extend_selection(KeyCode::Right);
+        assert_eq!(app.selection_anchor, Some((0, 0)));
+        assert_eq!(app.cursor_col, 2);
+
+        // Copy (simulating Ctrl+C behavior)
+        if let Some(text) = app.selected_text() {
+            app.yank_register = Some(text);
+            app.selection_anchor = None;
+        }
+        assert!(app.yank_register.is_some());
+
+        // Paste "hi" specifically to test the flow
+        app.yank_register = Some("hi".to_string());
+        app.cursor_col = 2;
+        if let Some(text) = app.yank_register.clone() {
+            let idx = app.cursor_char_index();
+            app.buffer.insert(idx, &text);
+            app.set_cursor_from_char_index(idx + text.chars().count());
+            app.dirty = true;
+        }
+        assert_eq!(app.buffer.rope().to_string(), "hihi\n");
+
+        // Switch back to Vim mode
+        app.settings_cursor = 0;
+        app.settings_apply();
+        assert_eq!(app.editing_mode, EditingMode::Vim);
+        assert_eq!(app.vim_mode, Mode::Normal);
+    }
+
+    // === Find tests ===
+
+    #[test]
+    fn find_state_opens_and_closes() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        assert!(app.find_state.is_none());
+        app.find_state = Some(crate::find::FindState::new(0, 0));
+        assert!(app.find_state.is_some());
+        app.find_state = None;
+        assert!(app.find_state.is_none());
+    }
+
+    #[test]
+    fn find_escape_restores_cursor() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.cursor_line = 0;
+        app.cursor_col = 3;
+        let fs = crate::find::FindState::new(0, 3);
+        app.find_state = Some(fs);
+        // Simulate moving cursor to a match
+        app.cursor_col = 6;
+        // Cancel find — should restore
+        let saved = app.find_state.as_ref().unwrap().saved_cursor;
+        app.cursor_line = saved.0;
+        app.cursor_col = saved.1;
+        app.find_state = None;
+        assert_eq!(app.cursor_col, 3);
+    }
+
+    // === Undo/Redo integration tests ===
+
+    #[test]
+    fn undo_restores_previous_state() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.vim_mode = Mode::Insert;
+        app.cursor_col = 5;
+        app.handle_char('!');
+        app.undo_history.commit_group();
+        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), "hello\n");
+    }
+
+    #[test]
+    fn undo_then_redo_restores_change() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        app.vim_mode = Mode::Insert;
+        app.cursor_col = 5;
+        app.handle_char('!');
+        app.undo_history.commit_group();
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), "hello\n");
+        app.apply_action(Action::Redo);
+        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+    }
+
+    #[test]
+    fn multiple_undos_walk_back_through_history() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("\n");
+        app.vim_mode = Mode::Insert;
+        app.cursor_col = 0;
+        // Type "a " (space commits group)
+        app.handle_char('a');
+        app.handle_char(' ');
+        // Type "b " (space commits group)
+        app.handle_char('b');
+        app.handle_char(' ');
+        app.undo_history.commit_group();
+        assert_eq!(app.buffer.rope().to_string(), "a b \n");
+        // Undo "b "
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), "a \n");
+        // Undo "a "
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), "\n");
+    }
+
+    #[test]
+    fn redo_cleared_on_new_edit_after_undo() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("\n");
+        app.vim_mode = Mode::Insert;
+        app.cursor_col = 0;
+        app.handle_char('a');
+        app.undo_history.commit_group();
+        app.apply_action(Action::Undo);
+        // New edit
+        app.cursor_col = 0;
+        app.handle_char('b');
+        app.undo_history.commit_group();
+        // Redo should not bring back 'a'
+        app.apply_action(Action::Redo);
+        // Buffer should still be "b\n" — redo is no-op
+        assert_eq!(app.buffer.rope().to_string(), "b\n");
+    }
+
+    #[test]
+    fn delete_then_undo_restores_text() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("abc\n");
+        app.vim_mode = Mode::Insert;
+        app.cursor_col = 3;
+        app.apply_action(Action::DeleteBack);
+        app.undo_history.commit_group();
+        assert_eq!(app.buffer.rope().to_string(), "ab\n");
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), "abc\n");
+    }
+
+    #[test]
+    fn empty_undo_redo_are_noops() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\n");
+        let before = app.buffer.rope().to_string();
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.rope().to_string(), before);
+        app.apply_action(Action::Redo);
+        assert_eq!(app.buffer.rope().to_string(), before);
+    }
+
+    // === Shift+Arrow selection tests ===
+
+    #[test]
+    fn shift_right_sets_anchor_and_extends() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 0;
+        app.extend_selection(KeyCode::Right);
+        assert_eq!(app.selection_anchor, Some((0, 0)));
+        assert_eq!(app.cursor_col, 1);
+    }
+
+    #[test]
+    fn shift_left_extends_backward() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 3;
+        app.extend_selection(KeyCode::Left);
+        assert_eq!(app.selection_anchor, Some((0, 3)));
+        assert_eq!(app.cursor_col, 2);
+    }
+
+    #[test]
+    fn shift_down_extends_to_next_line() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\nworld\n");
+        app.cursor_line = 0;
+        app.cursor_col = 2;
+        app.extend_selection(KeyCode::Down);
+        assert_eq!(app.selection_anchor, Some((0, 2)));
+        assert_eq!(app.cursor_line, 1);
+    }
+
+    #[test]
+    fn shift_home_selects_to_line_start() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 3;
+        app.extend_selection(KeyCode::Home);
+        assert_eq!(app.selection_anchor, Some((0, 3)));
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn shift_end_selects_to_line_end() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 0;
+        app.extend_selection(KeyCode::End);
+        assert_eq!(app.selection_anchor, Some((0, 0)));
+        assert_eq!(app.cursor_col, 4); // 'o' position
+    }
+
+    #[test]
+    fn multiple_shift_arrows_accumulate_selection() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 0;
+        app.extend_selection(KeyCode::Right);
+        app.extend_selection(KeyCode::Right);
+        app.extend_selection(KeyCode::Right);
+        assert_eq!(app.selection_anchor, Some((0, 0)));
+        assert_eq!(app.cursor_col, 3);
+    }
+
+    #[test]
+    fn shift_arrow_in_vim_enters_visual() {
+        use crossterm::event::KeyCode;
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Vim;
+        app.vim_mode = Mode::Normal;
+        app.buffer = Buffer::from_text("hello\n");
+        app.cursor_col = 0;
+        app.extend_selection(KeyCode::Right);
+        assert_eq!(app.vim_mode, Mode::Visual);
+        assert_eq!(app.selection_anchor, Some((0, 0)));
     }
 
     // === Visual mode tests ===
@@ -1688,6 +2263,33 @@ mod tests {
         app.handle_char('d');
         assert_eq!(app.yank_register, Some("second\n".to_string()));
         assert!(!app.buffer.rope().to_string().contains("second"));
+    }
+
+    // === Ctrl key operation tests ===
+
+    #[test]
+    fn delete_selection_silent_removes_without_yanking() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world\n");
+        app.selection_anchor = Some((0, 0));
+        app.cursor_col = 4;
+        app.yank_register = None;
+        app.delete_selection_silent();
+        assert_eq!(app.buffer.rope().to_string(), " world\n");
+        assert_eq!(app.yank_register, None);
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn select_all_sets_anchor_and_moves_cursor_to_end() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello\nworld\n");
+        // Simulate Ctrl+A behavior
+        let total_chars = app.buffer.rope().len_chars();
+        app.selection_anchor = Some((0, 0));
+        app.set_cursor_from_char_index(total_chars.saturating_sub(1));
+        assert_eq!(app.selection_anchor, Some((0, 0)));
+        assert!(app.cursor_line > 0 || app.cursor_col > 0);
     }
 
     #[test]

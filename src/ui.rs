@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::app::{App, SettingsItem};
+use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::vim_bindings::Mode;
@@ -19,6 +20,13 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
     // Full area for the Writing Surface — no Chrome by default (Invariant 1)
     let surface_area = area;
 
+    // Compute find match ranges for the writing surface
+    let (find_ranges, find_current) = if let Some(ref fs) = app.find_state {
+        (fs.match_ranges(), if fs.matches.is_empty() { None } else { Some(fs.current_match) })
+    } else {
+        (Vec::new(), None)
+    };
+
     // Build Writing Surface
     let surface = WritingSurface::new(&app.buffer, &app.palette)
         .column_width(app.column_width)
@@ -30,7 +38,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .sentence_bounds(app.sentence_bounds())
         .color_profile(app.color_profile)
         .vertical_offset(app.typewriter_vertical_offset)
-        .selection(app.selection_range());
+        .selection(app.selection_range())
+        .find_matches(find_ranges, find_current);
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();
@@ -45,8 +54,18 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         draw_settings_layer(frame, app, area);
     }
 
+    // Find overlay bar at top of screen
+    if let Some(ref fs) = app.find_state {
+        draw_find_bar(frame, app, fs, area);
+    }
+
     // Position cursor
-    if let Some((vl_idx, col)) = cursor_pos {
+    if let Some(ref fs) = app.find_state {
+        // Place cursor in the find bar
+        let find_prefix_len = 6u16; // "Find: "
+        let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
+        frame.set_cursor_position((cursor_x, area.y));
+    } else if let Some((vl_idx, col)) = cursor_pos {
         let screen_row = vl_idx.saturating_sub(app.scroll_offset);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
@@ -54,6 +73,54 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
             frame.set_cursor_position((x, y));
         }
     }
+}
+
+/// Render the find bar at the top of the screen.
+fn draw_find_bar(
+    frame: &mut ratatui::Frame,
+    app: &App,
+    fs: &crate::find::FindState,
+    area: Rect,
+) {
+    let bar_area = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(Clear, bar_area);
+
+    let bar_style = Style::default()
+        .fg(app.palette.foreground)
+        .bg(app.palette.background);
+
+    let prefix = "Find: ";
+    let match_info = if fs.query.is_empty() {
+        String::new()
+    } else if fs.matches.is_empty() {
+        " [no matches]".to_string()
+    } else {
+        format!(" [{}/{}]", fs.current_match + 1, fs.matches.len())
+    };
+
+    let mut spans = vec![
+        Span::styled(prefix, bar_style),
+        Span::styled(fs.query.clone(), bar_style),
+        Span::styled(
+            match_info,
+            Style::default()
+                .fg(app.palette.dimmed_foreground)
+                .bg(app.palette.background),
+        ),
+    ];
+
+    // Pad the rest of the bar
+    let used: usize = prefix.len() + fs.query.len() + spans[2].content.len();
+    if area.width as usize > used {
+        spans.push(Span::styled(
+            " ".repeat(area.width as usize - used),
+            bar_style,
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(Text::from(vec![line])).style(bar_style);
+    frame.render_widget(paragraph, bar_area);
 }
 
 /// A row in the settings overlay, optionally selectable.
@@ -78,6 +145,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
     for (cursor_idx, item) in items.iter().enumerate() {
         let group = match item {
+            SettingsItem::EditingMode(_) => "Editing",
             SettingsItem::Palette(_) => "Palette",
             SettingsItem::FocusMode(_) => "Focus",
             SettingsItem::ColumnWidth => "Document",
@@ -95,6 +163,14 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         }
 
         let text = match item {
+            SettingsItem::EditingMode(mode) => {
+                let label = match mode {
+                    EditingMode::Vim => "Vim",
+                    EditingMode::Standard => "Standard",
+                };
+                let marker = if *mode == app.editing_mode { ">" } else { " " };
+                format!("  {} {}", marker, label)
+            }
             SettingsItem::Palette(idx) => {
                 let palette = &all_palettes[*idx];
                 let marker = if palette.name == app.palette.name { ">" } else { " " };
@@ -149,10 +225,14 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     }
 
     // Status information (not selectable)
-    let mode_str = match app.vim_mode {
-        Mode::Normal => "NORMAL",
-        Mode::Insert => "INSERT",
-        Mode::Visual => "VISUAL",
+    let mode_str = if app.editing_mode == EditingMode::Standard {
+        "STANDARD"
+    } else {
+        match app.vim_mode {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
+        }
     };
     let dirty_str = if app.dirty { " [+]" } else { "" };
     rows.push(SettingsRow {
@@ -472,6 +552,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn settings_layer_shows_standard_mode_label() {
+        let mut app = App::new();
+        app.editing_mode = crate::editing_mode::EditingMode::Standard;
+        app.vim_mode = crate::vim_bindings::Mode::Insert;
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("STANDARD"),
+            "Settings Layer should show 'STANDARD' when in Standard editing mode"
+        );
+        assert!(
+            !text.contains("INSERT"),
+            "Settings Layer should not show 'INSERT' in Standard editing mode"
+        );
+    }
+
+    #[test]
+    fn settings_layer_shows_editing_mode_options() {
+        let mut app = App::new();
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("Editing"),
+            "Settings Layer should show 'Editing' group heading"
+        );
+        assert!(
+            text.contains("Vim"),
+            "Settings Layer should list Vim option"
+        );
+        assert!(
+            text.contains("Standard"),
+            "Settings Layer should list Standard option"
+        );
+        assert!(
+            text.contains("> Vim"),
+            "Active editing mode 'Vim' should be indicated with '>'"
+        );
+    }
+
     // === Acceptance test: Writer switches palette via Settings Layer ===
 
     #[test]
@@ -678,12 +802,12 @@ mod tests {
 
     #[test]
     fn settings_previews_hovered_palette_colors() {
-        let mut app = App::new(); // default is Ember (cursor_idx 0)
+        let mut app = App::new(); // default is Ember
         app.toggle_settings();
 
-        // Move cursor to Inkwell (idx 1)
+        // Move cursor to Inkwell (next palette after Ember)
         app.settings_nav_down();
-        assert_eq!(app.settings_cursor, 1);
+        assert_eq!(app.settings_cursor, 3); // Inkwell at index 3
 
         let inkwell = Palette::inkwell();
         let buf = render_app(&app, 80, 24);
@@ -717,7 +841,7 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        app.settings_cursor = 8;
+        app.settings_cursor = 10;
         app.rename_open();
 
         let buf = render_app(&app, 80, 24);
@@ -738,7 +862,7 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/abc.md"));
         app.toggle_settings();
-        app.settings_cursor = 8;
+        app.settings_cursor = 10;
         app.rename_open();
         // Cursor at end (position 6), so cursor char is a space
         // Move cursor to start to test on 'a'
