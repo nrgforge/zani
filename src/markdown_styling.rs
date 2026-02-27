@@ -13,6 +13,8 @@ pub struct CharStyle {
     pub is_heading: bool,
     /// Whether this is inside a code block or inline code.
     pub is_code: bool,
+    /// Whether this is the visible text of a markdown link.
+    pub is_link_text: bool,
 }
 
 impl Default for CharStyle {
@@ -22,6 +24,7 @@ impl Default for CharStyle {
             modifier: Modifier::empty(),
             is_heading: false,
             is_code: false,
+            is_link_text: false,
         }
     }
 }
@@ -33,6 +36,8 @@ impl CharStyle {
             palette.dimmed_foreground
         } else if self.is_heading {
             palette.accent_heading
+        } else if self.is_link_text {
+            palette.accent_link
         } else if self.is_code {
             palette.accent_code
         } else {
@@ -156,6 +161,30 @@ pub fn style_line_with_context(line: &str, in_code_block: bool) -> Vec<CharStyle
             }
         }
 
+        // Markdown link: [text](url)
+        if chars[i] == '[' {
+            if let Some((text_end, url_start, url_end)) = find_link(&chars, i) {
+                // '[' is syntax
+                styles[i].is_syntax = true;
+                // Link text
+                for j in (i + 1)..text_end {
+                    styles[j].is_link_text = true;
+                }
+                // ']' is syntax
+                styles[text_end].is_syntax = true;
+                // '(' is syntax
+                styles[url_start - 1].is_syntax = true;
+                // URL chars are syntax
+                for j in url_start..url_end {
+                    styles[j].is_syntax = true;
+                }
+                // ')' is syntax
+                styles[url_end].is_syntax = true;
+                i = url_end + 1;
+                continue;
+            }
+        }
+
         i += 1;
     }
 
@@ -188,6 +217,28 @@ fn find_closing(chars: &[char], start: usize, delim: &[char; 2]) -> Option<usize
         i += 1;
     }
     None
+}
+
+/// Find a markdown link starting at `start` (which should be `[`).
+/// Returns (text_end, url_start, url_end) where:
+/// - text_end is the index of `]`
+/// - url_start is the index of the first URL char (after `(`)
+/// - url_end is the index of `)`
+fn find_link(chars: &[char], start: usize) -> Option<(usize, usize, usize)> {
+    if start >= chars.len() || chars[start] != '[' {
+        return None;
+    }
+    // Find closing ]
+    let text_end = find_closing_single(chars, start + 1, ']')?;
+    // Must be immediately followed by (
+    let paren_open = text_end + 1;
+    if paren_open >= chars.len() || chars[paren_open] != '(' {
+        return None;
+    }
+    // Find closing )
+    let url_end = find_closing_single(chars, paren_open + 1, ')')?;
+    let url_start = paren_open + 1;
+    Some((text_end, url_start, url_end))
 }
 
 /// Find closing single-char delimiter starting from `start`.
@@ -375,5 +426,100 @@ mod tests {
         let s = CharStyle::default();
         let style = s.resolve(&palette);
         assert_eq!(style.fg.unwrap(), palette.foreground);
+    }
+
+    // === Markdown link tests ===
+
+    #[test]
+    fn link_text_has_is_link_text() {
+        // [click](https://example.com)
+        let styles = style_line("[click](https://example.com)");
+        // '[' at 0 is syntax
+        assert!(styles[0].is_syntax);
+        // "click" at 1-5 is link_text
+        for i in 1..6 {
+            assert!(styles[i].is_link_text, "char {} should be link_text", i);
+            assert!(!styles[i].is_syntax);
+        }
+        // ']' at 6 is syntax
+        assert!(styles[6].is_syntax);
+    }
+
+    #[test]
+    fn link_brackets_and_url_are_syntax() {
+        let styles = style_line("[click](https://example.com)");
+        // '[' at 0
+        assert!(styles[0].is_syntax);
+        // ']' at 6
+        assert!(styles[6].is_syntax);
+        // '(' at 7
+        assert!(styles[7].is_syntax);
+        // URL chars 8..27 are syntax
+        for i in 8..27 {
+            assert!(styles[i].is_syntax, "URL char {} should be syntax", i);
+        }
+        // ')' at 27
+        assert!(styles[27].is_syntax);
+    }
+
+    #[test]
+    fn resolve_link_text_uses_accent_link() {
+        let palette = Palette::default_palette();
+        let s = CharStyle { is_link_text: true, ..Default::default() };
+        let style = s.resolve(&palette);
+        assert_eq!(style.fg.unwrap(), palette.accent_link);
+    }
+
+    #[test]
+    fn incomplete_link_no_close_bracket_is_plain() {
+        let styles = style_line("[no close");
+        for s in &styles {
+            assert!(!s.is_link_text);
+            assert!(!s.is_syntax);
+        }
+    }
+
+    #[test]
+    fn bracket_without_url_is_plain() {
+        let styles = style_line("[text] no url");
+        // Without (url) immediately after ], this is not a link
+        for s in &styles {
+            assert!(!s.is_link_text);
+        }
+    }
+
+    #[test]
+    fn link_inside_code_block_not_detected() {
+        let styles = style_line_with_context("[link](url)", true);
+        for s in &styles {
+            assert!(!s.is_link_text, "Links inside code blocks should not be detected");
+            assert!(s.is_code);
+        }
+    }
+
+    #[test]
+    fn adjacent_links_detected_separately() {
+        let styles = style_line("[a](u1)[b](u2)");
+        // First link: [a](u1) = positions 0-6
+        assert!(styles[1].is_link_text); // 'a'
+        assert!(styles[0].is_syntax);    // '['
+        // Second link: [b](u2) = positions 7-14
+        assert!(styles[8].is_link_text); // 'b'
+        assert!(styles[7].is_syntax);    // '['
+    }
+
+    #[test]
+    fn link_with_empty_text_handles_correctly() {
+        let styles = style_line("[](url)");
+        // '[' at 0 is syntax
+        assert!(styles[0].is_syntax);
+        // ']' at 1 is syntax
+        assert!(styles[1].is_syntax);
+        // '(' at 2 is syntax
+        assert!(styles[2].is_syntax);
+        // No link_text chars (empty text)
+        for s in &styles {
+            assert!(!s.is_link_text);
+        }
     }
 }
