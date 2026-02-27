@@ -26,7 +26,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .cursor(app.cursor_line, app.cursor_col)
         .focus_mode(app.focus_mode)
         .active_line(app.cursor_line)
-        .paragraph_bounds(app.paragraph_bounds());
+        .paragraph_bounds(app.paragraph_bounds())
+        .sentence_bounds(app.sentence_bounds());
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();
@@ -56,6 +57,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
 struct SettingsRow {
     text: String,
     cursor_index: Option<usize>,
+    /// Optional color swatches (bg colors for 2-char blocks) appended after text.
+    swatches: Vec<ratatui::style::Color>,
 }
 
 /// Render the Settings Layer overlay centered on screen.
@@ -77,7 +80,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
 
         // Insert blank separator when group changes (and before the first group)
         if prev_group != Some(group) {
-            rows.push(SettingsRow { text: String::new(), cursor_index: None });
+            rows.push(SettingsRow { text: String::new(), cursor_index: None, swatches: vec![] });
             prev_group = Some(group);
         }
 
@@ -111,9 +114,18 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             }
         };
 
+        let swatches = match item {
+            SettingsItem::Palette(idx) => {
+                let p = &all_palettes[*idx];
+                vec![p.background, p.foreground, p.accent_heading]
+            }
+            _ => vec![],
+        };
+
         rows.push(SettingsRow {
             text,
             cursor_index: Some(cursor_idx),
+            swatches,
         });
     }
 
@@ -127,6 +139,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     rows.push(SettingsRow {
         text: format!("  {}{}", mode_str, dirty_str),
         cursor_index: None,
+        swatches: vec![],
     });
 
     // Styles
@@ -180,7 +193,22 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             } else {
                 normal_style
             };
-            Line::from(Span::styled(row.text.clone(), style))
+
+            if row.swatches.is_empty() {
+                Line::from(Span::styled(row.text.clone(), style))
+            } else {
+                // Multi-span line: label + color swatches
+                let mut spans = vec![Span::styled(row.text.clone(), style)];
+                spans.push(Span::styled(" ", style));
+                for color in &row.swatches {
+                    spans.push(Span::styled(
+                        "  ",
+                        Style::default().bg(*color),
+                    ));
+                    spans.push(Span::styled(" ", style));
+                }
+                Line::from(spans)
+            }
         })
         .collect();
 
@@ -532,6 +560,52 @@ mod tests {
             !text.contains("Settings"),
             "After dismissal, Settings title should not be visible"
         );
+    }
+
+    // === Acceptance test: Color swatches in Settings ===
+
+    #[test]
+    fn palette_rows_have_color_swatches() {
+        let mut app = App::new();
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+
+        // Find the row containing "Ember" and check for swatch bg colors
+        let ember = Palette::default_palette();
+        let area = buf.area;
+        for y in area.top()..area.bottom() {
+            let mut row_text = String::new();
+            for x in area.left()..area.right() {
+                row_text.push_str(buf[(x, y)].symbol());
+            }
+            if row_text.contains("Ember") {
+                // Look for cells with the palette's background color as bg
+                let mut found_bg_swatch = false;
+                let mut found_fg_swatch = false;
+                let mut found_accent_swatch = false;
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    if cell.bg == ember.background {
+                        found_bg_swatch = true;
+                    }
+                    if cell.bg == ember.foreground {
+                        found_fg_swatch = true;
+                    }
+                    if cell.bg == ember.accent_heading {
+                        // Cursor row also uses accent_heading as bg,
+                        // but swatch cells have space as symbol
+                        if cell.symbol() == " " {
+                            found_accent_swatch = true;
+                        }
+                    }
+                }
+                assert!(found_bg_swatch, "Should have swatch with palette background color");
+                assert!(found_fg_swatch, "Should have swatch with palette foreground color");
+                assert!(found_accent_swatch, "Should have swatch with accent heading color");
+                return;
+            }
+        }
+        panic!("Could not find 'Ember' row in rendered buffer");
     }
 
     // === Inline rename rendering ===

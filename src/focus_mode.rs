@@ -60,6 +60,73 @@ pub fn dim_color(palette: &Palette, distance: usize) -> Color {
     apply_dimming(&palette.foreground, palette, distance)
 }
 
+/// Find the sentence boundaries containing the cursor position.
+///
+/// A sentence ends at [.!?] followed by whitespace, newline, or EOF.
+/// Empty lines are hard boundaries. Returns the start (inclusive) and
+/// end (exclusive) char indices of the active sentence.
+///
+/// `text` is the full buffer text, `cursor_idx` is the char index of the cursor.
+pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize)> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let cursor_idx = cursor_idx.min(len.saturating_sub(1));
+
+    // Find sentence start: scan backward from cursor
+    let mut start = cursor_idx;
+    while start > 0 {
+        let prev = start - 1;
+        // Hard boundary: double newline (empty line)
+        if chars[prev] == '\n' && start < len && chars[start] == '\n' {
+            start = start + 1; // start after the empty line
+            break;
+        }
+        // Sentence boundary: [.!?] followed by whitespace
+        if prev > 0 && is_sentence_end(chars[prev - 1]) && chars[prev].is_whitespace() {
+            // Current char is the start of the next sentence
+            // But we need to skip leading whitespace
+            start = prev;
+            while start < cursor_idx && chars[start].is_whitespace() && chars[start] != '\n' {
+                start += 1;
+            }
+            break;
+        }
+        // Also check: [.!?] at position prev, and start is whitespace
+        if is_sentence_end(chars[prev]) && chars[start].is_whitespace() {
+            while start < cursor_idx && chars[start].is_whitespace() && chars[start] != '\n' {
+                start += 1;
+            }
+            break;
+        }
+        start = prev;
+    }
+
+    // Find sentence end: scan forward from cursor
+    let mut end = cursor_idx;
+    while end < len {
+        if is_sentence_end(chars[end]) {
+            // Include the sentence-ending punctuation
+            end += 1;
+            break;
+        }
+        // Hard boundary: double newline
+        if chars[end] == '\n' && end + 1 < len && chars[end + 1] == '\n' {
+            break;
+        }
+        end += 1;
+    }
+
+    Some((start, end))
+}
+
+fn is_sentence_end(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?')
+}
+
 /// Determine the distance of a given logical line from the active region,
 /// based on the current FocusMode and cursor position.
 ///
@@ -191,6 +258,55 @@ mod tests {
         assert_eq!(line_distance(FocusMode::Typewriter, 6, 5, None), 1);
         assert_eq!(line_distance(FocusMode::Typewriter, 3, 5, None), 2);
         assert_eq!(line_distance(FocusMode::Typewriter, 8, 5, None), 3);
+    }
+
+    // === Acceptance test: Sentence boundary parsing ===
+
+    #[test]
+    fn single_sentence() {
+        let text = "Hello world.";
+        let bounds = sentence_bounds_at(text, 5);
+        assert_eq!(bounds, Some((0, 12))); // entire text is one sentence
+    }
+
+    #[test]
+    fn multi_sentence_on_one_line() {
+        let text = "First sentence. Second sentence.";
+        // Cursor in "Second" (char 16)
+        let bounds = sentence_bounds_at(text, 20);
+        assert_eq!(bounds, Some((16, 32)));
+    }
+
+    #[test]
+    fn cursor_in_first_of_two_sentences() {
+        let text = "First sentence. Second sentence.";
+        // Cursor in "First" (char 3)
+        let bounds = sentence_bounds_at(text, 3);
+        assert_eq!(bounds, Some((0, 15)));
+    }
+
+    #[test]
+    fn sentence_spanning_lines() {
+        let text = "This is a sentence\nthat spans lines.";
+        // Cursor at char 5 ("is")
+        let bounds = sentence_bounds_at(text, 5);
+        assert_eq!(bounds, Some((0, 36))); // entire text is one sentence
+    }
+
+    #[test]
+    fn empty_line_is_hard_boundary() {
+        let text = "Paragraph one.\n\nParagraph two.";
+        // Cursor in "two" (char 20)
+        let bounds = sentence_bounds_at(text, 20);
+        assert!(bounds.is_some());
+        let (start, end) = bounds.unwrap();
+        assert!(start >= 16, "Should not cross empty line boundary, got start={}", start);
+        assert_eq!(end, 30);
+    }
+
+    #[test]
+    fn empty_text_returns_none() {
+        assert_eq!(sentence_bounds_at("", 0), None);
     }
 
     // === Unit test: apply_dimming matches dim_color for palette.foreground ===

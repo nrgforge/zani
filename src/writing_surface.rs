@@ -27,6 +27,8 @@ pub struct WritingSurface<'a> {
     active_line: usize,
     /// Paragraph bounds (start, end) for paragraph focus mode.
     paragraph_bounds: Option<(usize, usize)>,
+    /// Sentence bounds (start, end) as absolute char indices for sentence focus mode.
+    sentence_bounds: Option<(usize, usize)>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -40,6 +42,7 @@ impl<'a> WritingSurface<'a> {
             focus_mode: FocusMode::Off,
             active_line: 0,
             paragraph_bounds: None,
+            sentence_bounds: None,
         }
     }
 
@@ -70,6 +73,11 @@ impl<'a> WritingSurface<'a> {
 
     pub fn paragraph_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
         self.paragraph_bounds = bounds;
+        self
+    }
+
+    pub fn sentence_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
+        self.sentence_bounds = bounds;
         self
     }
 
@@ -119,19 +127,26 @@ impl Widget for WritingSurface<'_> {
             }
         }
 
-        // Pre-compute code block state per logical line
+        // Pre-compute per-logical-line metadata
         let mut code_block_state: Vec<bool> = Vec::with_capacity(self.buffer.len_lines());
+        let mut line_char_offsets: Vec<usize> = Vec::with_capacity(self.buffer.len_lines());
         let mut in_code_block = false;
+        let mut char_offset = 0;
         for i in 0..self.buffer.len_lines() {
             let line_text = self.buffer.line(i).to_string();
+            line_char_offsets.push(char_offset);
+            char_offset += line_text.chars().count();
             if markdown_styling::is_fence_line(&line_text) {
-                // Fence line itself is styled as fence, then toggle state
-                code_block_state.push(false); // fence line handled by is_fence_line check
+                code_block_state.push(false);
                 in_code_block = !in_code_block;
             } else {
                 code_block_state.push(in_code_block);
             }
         }
+
+        // Sentence mode: use per-character distance
+        let use_sentence_dimming = self.focus_mode == FocusMode::Sentence
+            && self.sentence_bounds.is_some();
 
         // Render visible visual lines with per-character styling
         let visible_start = self.scroll_offset;
@@ -149,18 +164,37 @@ impl Widget for WritingSurface<'_> {
                 .unwrap_or(false);
             let md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
 
-            // Focus distance for this logical line
-            let distance = focus_mode::line_distance(
-                self.focus_mode,
-                vl.logical_line,
-                self.active_line,
-                self.paragraph_bounds,
-            );
+            // Focus distance for this logical line (used for non-Sentence modes)
+            let line_distance = if use_sentence_dimming {
+                0 // unused; per-char distance computed below
+            } else {
+                focus_mode::line_distance(
+                    self.focus_mode,
+                    vl.logical_line,
+                    self.active_line,
+                    self.paragraph_bounds,
+                )
+            };
+
+            // Absolute char offset for this logical line
+            let abs_line_start = line_char_offsets
+                .get(vl.logical_line)
+                .copied()
+                .unwrap_or(0);
 
             let y = area.top() + screen_row as u16;
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
                 if x < area.right() && char_idx < chars.len() {
+                    // Compute per-character distance for Sentence mode
+                    let distance = if use_sentence_dimming {
+                        let abs_idx = abs_line_start + char_idx;
+                        let (s_start, s_end) = self.sentence_bounds.unwrap();
+                        if abs_idx >= s_start && abs_idx < s_end { 0 } else { 1 }
+                    } else {
+                        line_distance
+                    };
+
                     // Resolve markdown style for this character
                     let style = if char_idx < md_styles.len() {
                         let resolved = md_styles[char_idx].resolve(self.palette);
@@ -212,6 +246,38 @@ mod tests {
             lines.push(line.trim_end().to_string());
         }
         lines
+    }
+
+    // === Acceptance test: Sentence mode per-character dimming ===
+
+    #[test]
+    fn sentence_mode_dims_outside_active_sentence() {
+        let text = "First. Second.";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+
+        // Cursor in "Second" — sentence bounds should be (7, 14)
+        let surface = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .focus_mode(FocusMode::Sentence)
+            .active_line(0)
+            .sentence_bounds(Some((7, 14)));
+
+        let mut buf = RatatuiBuffer::empty(area);
+        surface.render(area, &mut buf);
+
+        let x_offset = (80 - 60) / 2; // 10
+
+        // 'F' (char 0) is outside active sentence — should be dimmed
+        let f_cell = &buf[(x_offset, 0)];
+        assert_eq!(f_cell.symbol(), "F");
+        assert_ne!(f_cell.fg, palette.foreground, "'F' should be dimmed (outside active sentence)");
+
+        // 'S' (char 7) is inside active sentence — should be bright
+        let s_cell = &buf[(x_offset + 7, 0)];
+        assert_eq!(s_cell.symbol(), "S");
+        assert_eq!(s_cell.fg, palette.foreground, "'S' should be bright (inside active sentence)");
     }
 
     // === Acceptance test: Text wraps at prose-width column ===

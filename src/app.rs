@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::buffer::Buffer;
 use crate::draft_name;
-use crate::focus_mode::FocusMode;
+use crate::focus_mode::{self, FocusMode};
 use crate::palette::Palette;
 use crate::smart_typography;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
@@ -448,6 +448,14 @@ impl App {
         }
 
         Some((start, end))
+    }
+
+    /// Find the sentence boundaries containing the cursor.
+    /// Returns (start, end) as absolute char indices into the buffer.
+    pub fn sentence_bounds(&self) -> Option<(usize, usize)> {
+        let text = self.buffer.rope().to_string();
+        let cursor_idx = self.cursor_char_index();
+        focus_mode::sentence_bounds_at(&text, cursor_idx)
     }
 
     /// Compute visual lines for the current buffer and column width.
