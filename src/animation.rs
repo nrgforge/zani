@@ -317,4 +317,30 @@ mod tests {
         mgr.tick();
         assert!(!mgr.is_active(), "Expected no active transitions after tick removes completed");
     }
+
+    // === Task 10: Final Polish ===
+
+    #[test]
+    fn multiple_animation_kinds_coexist() {
+        let mut m = AnimationManager::new();
+        m.start(
+            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            Duration::from_millis(150),
+            Easing::EaseOut,
+        );
+        m.start(
+            TransitionKind::FocusDimming { from_line: 0, to_line: 5 },
+            Duration::from_millis(150),
+            Easing::EaseOut,
+        );
+        m.start(
+            TransitionKind::OverlayOpacity { appearing: true },
+            Duration::from_millis(150),
+            Easing::EaseOut,
+        );
+        assert_eq!(m.transitions.len(), 3);
+        assert!(m.scroll_progress().is_some());
+        assert!(m.focus_progress().is_some());
+        assert!(m.overlay_progress().is_some());
+    }
 }
