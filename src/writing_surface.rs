@@ -32,6 +32,10 @@ pub struct WritingSurface<'a> {
     sentence_bounds: Option<(usize, usize)>,
     /// Terminal color capability for rendering.
     color_profile: ColorProfile,
+    /// Vertical offset (rows from top) to start rendering content.
+    /// Used by Typewriter mode to keep the cursor vertically centered
+    /// even when there isn't enough content above to scroll.
+    vertical_offset: u16,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -47,6 +51,7 @@ impl<'a> WritingSurface<'a> {
             paragraph_bounds: None,
             sentence_bounds: None,
             color_profile: ColorProfile::TrueColor,
+            vertical_offset: 0,
         }
     }
 
@@ -87,6 +92,11 @@ impl<'a> WritingSurface<'a> {
 
     pub fn color_profile(mut self, profile: ColorProfile) -> Self {
         self.color_profile = profile;
+        self
+    }
+
+    pub fn vertical_offset(mut self, offset: u16) -> Self {
+        self.vertical_offset = offset;
         self
     }
 
@@ -160,7 +170,10 @@ impl Widget for WritingSurface<'_> {
 
         // Render visible visual lines with per-character styling
         let visible_start = self.scroll_offset;
-        let visible_end = (self.scroll_offset + area.height as usize).min(visual_lines.len());
+
+        // Clamp visible end to account for vertical offset
+        let effective_height = (area.height as usize).saturating_sub(self.vertical_offset as usize);
+        let visible_end = (self.scroll_offset + effective_height).min(visual_lines.len());
 
         for (screen_row, vl_idx) in (visible_start..visible_end).enumerate() {
             let vl = &visual_lines[vl_idx];
@@ -192,7 +205,7 @@ impl Widget for WritingSurface<'_> {
                 .copied()
                 .unwrap_or(0);
 
-            let y = area.top() + screen_row as u16;
+            let y = area.top() + self.vertical_offset + screen_row as u16;
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
                 if x < area.right() && char_idx < chars.len() {

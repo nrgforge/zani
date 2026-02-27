@@ -71,6 +71,10 @@ pub struct App {
     pub rename_cursor: usize,
     /// Pending first key of a multi-key Normal mode sequence (e.g., 'g' for gg, 'd' for dd).
     pub pending_normal_key: Option<char>,
+    /// Vertical offset for Typewriter mode rendering. When the cursor is near
+    /// the top of the document, content starts this many rows down so the cursor
+    /// appears vertically centered.
+    pub typewriter_vertical_offset: u16,
 }
 
 impl App {
@@ -98,6 +102,7 @@ impl App {
             rename_buf: String::new(),
             rename_cursor: 0,
             pending_normal_key: None,
+            typewriter_vertical_offset: 0,
         }
     }
 
@@ -678,8 +683,18 @@ impl App {
 
         if self.focus_mode == FocusMode::Typewriter {
             // Typewriter mode: keep cursor centered vertically
-            self.scroll_offset = cursor_vl.saturating_sub(height / 2);
+            let center = height / 2;
+            if cursor_vl >= center {
+                // Enough content above — scroll so cursor lands at center
+                self.scroll_offset = cursor_vl - center;
+                self.typewriter_vertical_offset = 0;
+            } else {
+                // Near top of document — push content down so cursor is centered
+                self.scroll_offset = 0;
+                self.typewriter_vertical_offset = (center - cursor_vl) as u16;
+            }
         } else {
+            self.typewriter_vertical_offset = 0;
             // Edge-scrolling: only adjust when cursor would be off-screen
             if cursor_vl < self.scroll_offset {
                 self.scroll_offset = cursor_vl;
@@ -982,10 +997,11 @@ mod tests {
 
         // Cursor at visual line 10, height 10 → scroll_offset = 10 - 5 = 5
         assert_eq!(app.scroll_offset, 5);
+        assert_eq!(app.typewriter_vertical_offset, 0);
     }
 
     #[test]
-    fn typewriter_mode_at_top_clamps_scroll_to_zero() {
+    fn typewriter_mode_at_top_uses_vertical_offset() {
         let mut app = App::new();
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.buffer = Buffer::from_text(&text);
@@ -996,8 +1012,10 @@ mod tests {
         let visual_lines = app.visual_lines();
         app.ensure_cursor_visible(&visual_lines, 10);
 
-        // Cursor at visual line 1, saturating_sub(5) = 0
+        // Cursor at visual line 1, center = 5
+        // Not enough content above → scroll stays 0, vertical offset pushes down
         assert_eq!(app.scroll_offset, 0);
+        assert_eq!(app.typewriter_vertical_offset, 4); // center(5) - cursor_vl(1)
     }
 
     // === Acceptance test: Vim append mode ===

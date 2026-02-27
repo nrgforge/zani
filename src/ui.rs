@@ -28,7 +28,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .active_line(app.cursor_line)
         .paragraph_bounds(app.paragraph_bounds())
         .sentence_bounds(app.sentence_bounds())
-        .color_profile(app.color_profile);
+        .color_profile(app.color_profile)
+        .vertical_offset(app.typewriter_vertical_offset);
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();
@@ -48,7 +49,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         let screen_row = vl_idx.saturating_sub(app.scroll_offset);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
-            let y = surface_area.y + screen_row as u16;
+            let y = surface_area.y + app.typewriter_vertical_offset + screen_row as u16;
             frame.set_cursor_position((x, y));
         }
     }
