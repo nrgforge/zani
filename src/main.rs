@@ -154,6 +154,20 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
+    // Inline rename — swallow all keys when active
+    if app.rename_active {
+        match code {
+            KeyCode::Esc => app.rename_cancel(),
+            KeyCode::Enter => app.rename_confirm(),
+            KeyCode::Backspace => app.rename_backspace(),
+            KeyCode::Left => app.rename_cursor_left(),
+            KeyCode::Right => app.rename_cursor_right(),
+            KeyCode::Char(c) => app.rename_insert(c),
+            _ => {}
+        }
+        return;
+    }
+
     // Settings Layer navigation — swallow all keys when open
     if app.settings_visible {
         match code {

@@ -32,6 +32,9 @@ pub struct App {
     pub dirty: bool,
     pub last_save: Option<Instant>,
     pub autosave_interval: Duration,
+    pub rename_active: bool,
+    pub rename_buf: String,
+    pub rename_cursor: usize,
 }
 
 impl App {
@@ -54,6 +57,9 @@ impl App {
             dirty: false,
             last_save: None,
             autosave_interval: Duration::from_secs(3),
+            rename_active: false,
+            rename_buf: String::new(),
+            rename_cursor: 0,
         }
     }
 
@@ -130,7 +136,7 @@ impl App {
             5 => self.focus_mode = FocusMode::Paragraph,
             6 => self.focus_mode = FocusMode::Typewriter,
             7 => {} // column width — adjusted via Left/Right, not Enter
-            8 => {} // file — rename deferred
+            8 => self.rename_open(),
             _ => {}
         }
     }
@@ -139,6 +145,93 @@ impl App {
     pub fn settings_adjust_column(&mut self, delta: i16) {
         let new = self.column_width as i16 + delta;
         self.column_width = new.clamp(20, 120) as u16;
+    }
+
+    /// Open inline rename: seed buffer with current filename, cursor at end.
+    pub fn rename_open(&mut self) {
+        let name = self
+            .file_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        self.rename_buf = name;
+        self.rename_cursor = self.rename_buf.chars().count();
+        self.rename_active = true;
+    }
+
+    /// Insert a character at cursor position (filters out `/`).
+    pub fn rename_insert(&mut self, ch: char) {
+        if ch == '/' {
+            return;
+        }
+        let byte_idx = char_to_byte_index(&self.rename_buf, self.rename_cursor);
+        self.rename_buf.insert(byte_idx, ch);
+        self.rename_cursor += 1;
+    }
+
+    /// Delete the character before the cursor.
+    pub fn rename_backspace(&mut self) {
+        if self.rename_cursor == 0 {
+            return;
+        }
+        self.rename_cursor -= 1;
+        let byte_idx = char_to_byte_index(&self.rename_buf, self.rename_cursor);
+        // Find the byte length of the char at this position
+        let ch = self.rename_buf[byte_idx..].chars().next().unwrap();
+        self.rename_buf.replace_range(byte_idx..byte_idx + ch.len_utf8(), "");
+    }
+
+    /// Move rename cursor left.
+    pub fn rename_cursor_left(&mut self) {
+        if self.rename_cursor > 0 {
+            self.rename_cursor -= 1;
+        }
+    }
+
+    /// Move rename cursor right.
+    pub fn rename_cursor_right(&mut self) {
+        if self.rename_cursor < self.rename_buf.chars().count() {
+            self.rename_cursor += 1;
+        }
+    }
+
+    /// Cancel rename, clearing state.
+    pub fn rename_cancel(&mut self) {
+        self.rename_active = false;
+        self.rename_buf.clear();
+        self.rename_cursor = 0;
+    }
+
+    /// Confirm rename: rename on disk, update file_path, clear scratch flag.
+    /// Empty name is treated as cancel.
+    pub fn rename_confirm(&mut self) {
+        if self.rename_buf.trim().is_empty() {
+            self.rename_cancel();
+            return;
+        }
+
+        if let Some(old_path) = &self.file_path {
+            let new_path = old_path.with_file_name(&self.rename_buf);
+
+            // Only attempt fs::rename if old file exists on disk
+            if old_path.exists() {
+                if std::fs::rename(old_path, &new_path).is_err() {
+                    // Stay in rename mode so user can retry or Esc
+                    return;
+                }
+            }
+
+            self.file_path = Some(new_path);
+            if self.is_scratch {
+                self.is_scratch = false;
+            }
+        }
+
+        self.rename_active = false;
+        self.rename_buf.clear();
+        self.rename_cursor = 0;
     }
 
     /// Process a character key input.
@@ -384,6 +477,14 @@ impl App {
         }
         false
     }
+}
+
+/// Convert a char index to a byte index in a UTF-8 string.
+fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
 }
 
 #[cfg(test)]
@@ -641,5 +742,176 @@ mod tests {
         let app = App::new().with_file(tmp.path().to_path_buf(), "hello");
         assert!(!app.is_scratch);
         assert!(app.file_path.is_some());
+    }
+
+    // === Inline rename ===
+
+    #[test]
+    fn rename_open_seeds_buffer_with_filename() {
+        let mut app = App::new();
+        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.rename_open();
+        assert!(app.rename_active);
+        assert_eq!(app.rename_buf, "draft.md");
+        assert_eq!(app.rename_cursor, 8); // "draft.md".len()
+    }
+
+    #[test]
+    fn rename_insert_adds_char_at_cursor() {
+        let mut app = App::new();
+        app.rename_active = true;
+        app.rename_buf = "ab".to_string();
+        app.rename_cursor = 1;
+        app.rename_insert('X');
+        assert_eq!(app.rename_buf, "aXb");
+        assert_eq!(app.rename_cursor, 2);
+    }
+
+    #[test]
+    fn rename_insert_filters_slash() {
+        let mut app = App::new();
+        app.rename_active = true;
+        app.rename_buf = "ab".to_string();
+        app.rename_cursor = 1;
+        app.rename_insert('/');
+        assert_eq!(app.rename_buf, "ab");
+        assert_eq!(app.rename_cursor, 1);
+    }
+
+    #[test]
+    fn rename_backspace_deletes_before_cursor() {
+        let mut app = App::new();
+        app.rename_active = true;
+        app.rename_buf = "abc".to_string();
+        app.rename_cursor = 2;
+        app.rename_backspace();
+        assert_eq!(app.rename_buf, "ac");
+        assert_eq!(app.rename_cursor, 1);
+    }
+
+    #[test]
+    fn rename_backspace_at_start_is_noop() {
+        let mut app = App::new();
+        app.rename_active = true;
+        app.rename_buf = "abc".to_string();
+        app.rename_cursor = 0;
+        app.rename_backspace();
+        assert_eq!(app.rename_buf, "abc");
+        assert_eq!(app.rename_cursor, 0);
+    }
+
+    #[test]
+    fn rename_cursor_left_right() {
+        let mut app = App::new();
+        app.rename_active = true;
+        app.rename_buf = "abc".to_string();
+        app.rename_cursor = 1;
+
+        app.rename_cursor_left();
+        assert_eq!(app.rename_cursor, 0);
+
+        app.rename_cursor_left(); // at start, stays 0
+        assert_eq!(app.rename_cursor, 0);
+
+        app.rename_cursor_right();
+        assert_eq!(app.rename_cursor, 1);
+
+        app.rename_cursor = 3; // at end
+        app.rename_cursor_right(); // stays at end
+        assert_eq!(app.rename_cursor, 3);
+    }
+
+    #[test]
+    fn rename_cancel_clears_state() {
+        let mut app = App::new();
+        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.rename_open();
+        assert!(app.rename_active);
+
+        app.rename_cancel();
+        assert!(!app.rename_active);
+        assert!(app.rename_buf.is_empty());
+        assert_eq!(app.rename_cursor, 0);
+    }
+
+    #[test]
+    fn rename_confirm_renames_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("old.md");
+        std::fs::write(&old_path, "content").unwrap();
+
+        let mut app = App::new();
+        app.file_path = Some(old_path.clone());
+        app.rename_open();
+        // Clear buffer and type new name
+        app.rename_buf = "new.md".to_string();
+        app.rename_cursor = 6;
+        app.rename_confirm();
+
+        assert!(!app.rename_active);
+        let new_path = dir.path().join("new.md");
+        assert_eq!(app.file_path, Some(new_path.clone()));
+        assert!(new_path.exists());
+        assert!(!old_path.exists());
+    }
+
+    #[test]
+    fn rename_confirm_empty_name_cancels() {
+        let mut app = App::new();
+        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.rename_open();
+        app.rename_buf = "".to_string();
+        app.rename_cursor = 0;
+        app.rename_confirm();
+
+        assert!(!app.rename_active);
+        // file_path unchanged
+        assert_eq!(app.file_path, Some(PathBuf::from("/tmp/draft.md")));
+    }
+
+    #[test]
+    fn rename_confirm_clears_scratch_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("scratch.md");
+        std::fs::write(&old_path, "").unwrap();
+
+        let mut app = App::new();
+        app.file_path = Some(old_path);
+        app.is_scratch = true;
+        app.rename_open();
+        app.rename_buf = "real.md".to_string();
+        app.rename_cursor = 7;
+        app.rename_confirm();
+
+        assert!(!app.is_scratch);
+    }
+
+    #[test]
+    fn settings_apply_file_opens_rename() {
+        let mut app = App::new();
+        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.settings_cursor = 8;
+        app.settings_apply();
+        assert!(app.rename_active);
+        assert_eq!(app.rename_buf, "draft.md");
+    }
+
+    #[test]
+    fn rename_confirm_unsaved_scratch_updates_path_without_fs_rename() {
+        // File doesn't exist on disk — should just update path
+        let mut app = App::new();
+        app.file_path = Some(PathBuf::from("/nonexistent/dir/scratch.md"));
+        app.is_scratch = true;
+        app.rename_open();
+        app.rename_buf = "real.md".to_string();
+        app.rename_cursor = 7;
+        app.rename_confirm();
+
+        assert!(!app.rename_active);
+        assert_eq!(
+            app.file_path,
+            Some(PathBuf::from("/nonexistent/dir/real.md"))
+        );
+        assert!(!app.is_scratch);
     }
 }

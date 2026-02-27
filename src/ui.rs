@@ -139,10 +139,41 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         .fg(app.palette.background)
         .bg(app.palette.accent_heading);
 
+    // Style for the rename cursor character (inverted fg/bg)
+    let rename_cursor_style = Style::default()
+        .fg(app.palette.background)
+        .bg(app.palette.foreground);
+
     // Convert rows to styled Lines
     let lines: Vec<Line> = rows
         .iter()
         .map(|row| {
+            // Rename-active file row: multi-span with visible cursor
+            if app.rename_active && row.cursor_index == Some(8) {
+                let prefix = "  File        ";
+                let buf = &app.rename_buf;
+                let cursor_pos = app.rename_cursor;
+                let chars: Vec<char> = buf.chars().collect();
+                let before: String = chars[..cursor_pos].iter().collect();
+                let after: String = if cursor_pos < chars.len() {
+                    chars[cursor_pos + 1..].iter().collect()
+                } else {
+                    String::new()
+                };
+                let cursor_ch = if cursor_pos < chars.len() {
+                    chars[cursor_pos].to_string()
+                } else {
+                    " ".to_string()
+                };
+
+                return Line::from(vec![
+                    Span::styled(prefix.to_string(), normal_style),
+                    Span::styled(before, normal_style),
+                    Span::styled(cursor_ch, rename_cursor_style),
+                    Span::styled(after, normal_style),
+                ]);
+            }
+
             let style = if row.cursor_index == Some(app.settings_cursor) {
                 cursor_style
             } else {
@@ -500,5 +531,71 @@ mod tests {
             !text.contains("Settings"),
             "After dismissal, Settings title should not be visible"
         );
+    }
+
+    // === Inline rename rendering ===
+
+    #[test]
+    fn rename_mode_shows_editable_text() {
+        let mut app = App::new();
+        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.toggle_settings();
+        app.settings_cursor = 8;
+        app.rename_open();
+
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("File"),
+            "Rename mode should show File label"
+        );
+        assert!(
+            text.contains("draft.md"),
+            "Rename mode should show editable filename"
+        );
+    }
+
+    #[test]
+    fn rename_cursor_char_has_inverted_style() {
+        let mut app = App::new();
+        app.file_path = Some(std::path::PathBuf::from("/tmp/abc.md"));
+        app.toggle_settings();
+        app.settings_cursor = 8;
+        app.rename_open();
+        // Cursor at end (position 6), so cursor char is a space
+        // Move cursor to start to test on 'a'
+        app.rename_cursor = 0;
+
+        let buf = render_app(&app, 80, 24);
+
+        // Find the row containing "File" and the rename text
+        let area = buf.area;
+        for y in area.top()..area.bottom() {
+            let mut row_text = String::new();
+            for x in area.left()..area.right() {
+                row_text.push_str(buf[(x, y)].symbol());
+            }
+            if row_text.contains("File") && row_text.contains("abc.md") {
+                // Find the 'a' character — it should have inverted colors
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    if cell.symbol() == "a" {
+                        // Cursor char: fg=background, bg=foreground
+                        assert_eq!(
+                            cell.fg, app.palette.background,
+                            "Cursor char fg should be palette background"
+                        );
+                        assert_eq!(
+                            cell.bg, app.palette.foreground,
+                            "Cursor char bg should be palette foreground"
+                        );
+                        return;
+                    }
+                }
+                panic!("Could not find 'a' character in rename row");
+            }
+        }
+        panic!("Could not find File row with rename text");
     }
 }
