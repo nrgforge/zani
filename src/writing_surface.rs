@@ -352,6 +352,7 @@ mod tests {
     use super::*;
     use ratatui::buffer::Buffer as RatatuiBuffer;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
 
     fn render_surface(text: &str, width: u16, area: Rect) -> RatatuiBuffer {
         let buffer = Buffer::from_text(text);
@@ -586,21 +587,52 @@ mod tests {
     // === Acceptance test: Focus animation blends distances without panic ===
 
     #[test]
-    fn focus_animation_blends_without_panic() {
+    fn focus_animation_blends_distances() {
         let text = "Line 0\nLine 1\nLine 2\nLine 3\nLine 4";
         let buffer = Buffer::from_text(text);
         let palette = Palette::default_palette();
         let area = Rect::new(0, 0, 80, 5);
+        let x_offset = 10; // column_width 60 → left margin = (80-60)/2 = 10
 
-        let surface = WritingSurface::new(&buffer, &palette)
+        // Without animation: active_line=4, so line 0 is distance 4 (heavily dimmed)
+        let no_anim = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .focus_mode(FocusMode::Typewriter)
+            .active_line(4);
+        let mut buf_no_anim = RatatuiBuffer::empty(area);
+        no_anim.render(area, &mut buf_no_anim);
+        let line0_no_anim_fg = buf_no_anim[(x_offset, 0)].fg;
+
+        // With animation at progress=0.5 from line 0→4:
+        // Line 0 blended distance = 0*0.5 + 4*0.5 = 2 (less dimmed than distance 4)
+        let with_anim = WritingSurface::new(&buffer, &palette)
             .column_width(60)
             .focus_mode(FocusMode::Typewriter)
             .active_line(4)
             .focus_animation(Some((0.5, 0, 4)));
+        let mut buf_anim = RatatuiBuffer::empty(area);
+        with_anim.render(area, &mut buf_anim);
+        let line0_anim_fg = buf_anim[(x_offset, 0)].fg;
 
-        let mut buf = RatatuiBuffer::empty(area);
-        surface.render(area, &mut buf);
-        // No panic = pass. Visual blending verified manually.
+        // During blend, line 0 should be less dimmed than without animation
+        // (distance 2 vs distance 4 → closer to foreground color)
+        assert_ne!(
+            line0_anim_fg, line0_no_anim_fg,
+            "Animation should change line 0's dimming level"
+        );
+
+        // Verify the blended color is brighter (closer to foreground) than the static one.
+        // With TrueColor, foreground is brighter than background, so higher RGB values = less dimmed.
+        if let (Color::Rgb(ar, ag, ab), Color::Rgb(nr, ng, nb)) =
+            (line0_anim_fg, line0_no_anim_fg)
+        {
+            let anim_brightness = ar as u32 + ag as u32 + ab as u32;
+            let static_brightness = nr as u32 + ng as u32 + nb as u32;
+            assert!(
+                anim_brightness > static_brightness,
+                "Blended line should be brighter (less dimmed): anim={anim_brightness} vs static={static_brightness}"
+            );
+        }
     }
 
     // === Acceptance test: Selected text renders with swapped fg/bg ===

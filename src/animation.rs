@@ -98,7 +98,7 @@ impl AnimationManager {
     }
 
     pub fn is_active(&self) -> bool {
-        !self.transitions.is_empty()
+        self.transitions.iter().any(|t| !t.is_complete())
     }
 
     pub fn tick(&mut self) {
@@ -313,9 +313,11 @@ mod tests {
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
         });
-        assert!(mgr.is_active());
+        // Completed transition is in the vec but not active
+        assert!(!mgr.is_active());
+        assert_eq!(mgr.transitions.len(), 1, "Completed transition still in vec before tick");
         mgr.tick();
-        assert!(!mgr.is_active(), "Expected no active transitions after tick removes completed");
+        assert!(mgr.transitions.is_empty(), "tick() should prune completed transitions");
     }
 
     // === Task 10: Final Polish ===
