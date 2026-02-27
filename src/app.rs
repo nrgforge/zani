@@ -334,10 +334,10 @@ impl App {
                 self.vim_mode = mode;
             }
             Action::AppendMode => {
-                // Move cursor right (clamped to line length), then enter Insert
+                // Move cursor one right of current position, then enter Insert.
+                // In Insert mode the cursor can sit past the last char (append position).
                 let line_len = self.buffer.line(self.cursor_line).len_chars();
-                let max_col = if line_len > 0 { line_len - 1 } else { 0 };
-                if self.cursor_col < max_col {
+                if self.cursor_col < line_len {
                     self.cursor_col += 1;
                 }
                 self.vim_mode = Mode::Insert;
