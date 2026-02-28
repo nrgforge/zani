@@ -644,4 +644,54 @@ mod tests {
         assert_eq!(w_cell.symbol(), "w");
         assert_eq!(w_cell.fg, palette.foreground, "Unselected char should have normal fg");
     }
+
+    // === Sentence fade queue regression test ===
+
+    #[test]
+    fn multiple_sentence_fades_apply_per_region_opacity() {
+        // "First. Second. Third." — active sentence is "Third." (15..21)
+        // Two fading regions at different opacities
+        let text = "First. Second. Third.";
+        let buffer = Buffer::from_text(text);
+        let palette = Palette::default_palette();
+        let area = Rect::new(0, 0, 80, 5);
+        let x_offset = (80 - 60) / 2; // 10
+
+        let fades = vec![(0usize, 6usize, 0.8f64), (7usize, 14usize, 0.5f64)];
+
+        let surface = WritingSurface::new(&buffer, &palette)
+            .column_width(60)
+            .focus_mode(FocusMode::Sentence)
+            .sentence_bounds(Some((15, 21)))
+            .sentence_fades(&fades)
+            .line_opacities(&[1.0]);
+
+        let mut buf = RatatuiBuffer::empty(area);
+        surface.render(area, &mut buf);
+
+        // 'F' (char 0) — in first fade region (opacity 0.8)
+        let f_cell = &buf[(x_offset, 0)];
+        assert_eq!(f_cell.symbol(), "F");
+
+        // 'S' (char 7) — in second fade region (opacity 0.5)
+        let s_cell = &buf[(x_offset + 7, 0)];
+        assert_eq!(s_cell.symbol(), "S");
+
+        // 'T' (char 15) — in active sentence (full brightness)
+        let t_cell = &buf[(x_offset + 15, 0)];
+        assert_eq!(t_cell.symbol(), "T");
+        assert_eq!(t_cell.fg, palette.foreground, "Active sentence should be full brightness");
+
+        // Different fade opacities produce different colors
+        assert_ne!(f_cell.fg, t_cell.fg, "Fading char should differ from active");
+        assert_ne!(s_cell.fg, t_cell.fg, "More-faded char should differ from active");
+        assert_ne!(f_cell.fg, s_cell.fg, "Different fade opacities should differ from each other");
+
+        // Higher opacity (0.8) should be brighter than lower (0.5)
+        if let (Color::Rgb(fr, fg, fb), Color::Rgb(sr, sg, sb)) = (f_cell.fg, s_cell.fg) {
+            let bright_f = fr as u32 + fg as u32 + fb as u32;
+            let bright_s = sr as u32 + sg as u32 + sb as u32;
+            assert!(bright_f > bright_s, "Opacity 0.8 should be brighter than 0.5");
+        }
+    }
 }

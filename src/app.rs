@@ -2626,4 +2626,135 @@ mod tests {
             assert!((o - 1.0).abs() < f64::EPSILON, "Line {} should be bright in Off mode", i);
         }
     }
+
+    // === Sentence fade queue regression tests ===
+
+    #[test]
+    fn rapid_typing_after_period_preserves_fade() {
+        let mut app = App::new();
+        app.focus_mode = FocusMode::Sentence;
+
+        // Cursor in "Hello world."
+        app.buffer = Buffer::from_text("Hello world.");
+        app.cursor_line = 0;
+        app.cursor_col = 5;
+        app.update_dim_layers();
+        assert!(app.sentence_fades.is_empty(), "No fades initially");
+
+        // Simulate typing space after period: "Hello world. "
+        app.buffer = Buffer::from_text("Hello world. ");
+        app.cursor_col = 12;
+        app.update_dim_layers();
+        assert_eq!(app.sentence_fades.len(), 1, "One fade after leaving sentence");
+        let original_start = app.sentence_fades[0].0;
+
+        // Simulate typing 'T': "Hello world. T"
+        app.buffer = Buffer::from_text("Hello world. T");
+        app.cursor_col = 13;
+        app.update_dim_layers();
+
+        // The original "Hello world." fade must survive the second sentence change
+        assert!(
+            app.sentence_fades.iter().any(|(s, _, _)| *s == original_start),
+            "Original sentence fade must survive rapid typing"
+        );
+    }
+
+    #[test]
+    fn multiple_sentences_fade_independently() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("First.\n\nSecond.\n\nThird.");
+        app.focus_mode = FocusMode::Sentence;
+
+        // Start in first sentence
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+
+        // Move to second sentence
+        app.cursor_line = 2;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert_eq!(app.sentence_fades.len(), 1);
+
+        // Move to third sentence
+        app.cursor_line = 4;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert_eq!(app.sentence_fades.len(), 2, "Two sentences should be fading simultaneously");
+
+        // Both should have high opacity (just started or recently started)
+        let snap = app.sentence_fade_snapshot();
+        assert!(snap[0].2 > 0.5, "First fade should still be in progress");
+        assert!(snap[1].2 > 0.9, "Second fade should have just started");
+    }
+
+    #[test]
+    fn returning_to_fading_sentence_reverses_fade() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("First.\n\nSecond.");
+        app.focus_mode = FocusMode::Sentence;
+
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+
+        // Move to second — first starts fading toward 0.6
+        app.cursor_line = 2;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert_eq!(app.sentence_fades.len(), 1);
+        assert!((app.sentence_fades[0].2.target - 0.6).abs() < f64::EPSILON);
+
+        // Return to first — should reverse that entry toward 1.0
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert!((app.sentence_fades[0].2.target - 1.0).abs() < f64::EPSILON, "Should reverse to 1.0");
+    }
+
+    #[test]
+    fn completed_fades_are_pruned() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("First.\n\nSecond.");
+        app.focus_mode = FocusMode::Sentence;
+
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+
+        app.cursor_line = 2;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert_eq!(app.sentence_fades.len(), 1);
+
+        // Backdate the animation past its 1800ms duration
+        app.sentence_fades[0].2.start_time =
+            Some(Instant::now() - Duration::from_millis(2000));
+
+        // Next update should prune the completed entry
+        app.update_dim_layers();
+        assert!(app.sentence_fades.is_empty(), "Completed fade should be pruned");
+    }
+
+    #[test]
+    fn mode_switch_clears_fade_queue() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("First.\n\nSecond.");
+        app.focus_mode = FocusMode::Sentence;
+
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+
+        app.cursor_line = 2;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+        assert!(!app.sentence_fades.is_empty());
+
+        // Switch to Off
+        app.focus_mode = FocusMode::Off;
+        app.update_dim_layers();
+        assert!(app.sentence_fades.is_empty(), "Off mode should clear all fades");
+    }
 }
