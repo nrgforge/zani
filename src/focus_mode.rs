@@ -28,39 +28,6 @@ impl FocusMode {
     }
 }
 
-/// Apply focus dimming to any foreground color based on its distance
-/// from the Active Region.
-///
-/// `base_fg` is the resolved foreground color (may differ from `palette.foreground`
-/// for headings, code, etc.). `distance` is 0 for the Active Region (full brightness),
-/// and increases for text further away.
-///
-/// Returns `base_fg` unchanged at distance 0. At distance > 0, interpolates
-/// toward the palette background:
-/// - distance 1 → ~40% toward background
-/// - distance 2 → ~65% toward background
-/// - distance 3+ → ~80% toward background
-pub fn apply_dimming(base_fg: &Color, palette: &Palette, distance: usize) -> Color {
-    if distance == 0 {
-        return *base_fg;
-    }
-
-    let t = match distance {
-        1 => 0.4,
-        2 => 0.65,
-        _ => 0.8,
-    };
-
-    palette::interpolate(base_fg, &palette.background, t)
-}
-
-/// Compute the foreground color for a character based on its distance
-/// from the Active Region. Convenience wrapper around `apply_dimming`
-/// that always uses the palette's foreground as the base color.
-pub fn dim_color(palette: &Palette, distance: usize) -> Color {
-    apply_dimming(&palette.foreground, palette, distance)
-}
-
 /// Apply dimming to a foreground color using an opacity factor (0.0–1.0).
 /// opacity=1.0 returns base_fg unchanged. opacity=0.0 returns background.
 /// Intermediate values interpolate linearly toward the background.
@@ -139,49 +106,6 @@ pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize
 
 fn is_sentence_end(ch: char) -> bool {
     matches!(ch, '.' | '!' | '?')
-}
-
-/// Determine the distance of a given logical line from the active region,
-/// based on the current FocusMode and cursor position.
-///
-/// For Sentence mode, `active_line` is the line containing the active sentence.
-/// For Paragraph mode, `active_line` is the line within the active paragraph.
-///
-/// Returns 0 for the active region, > 0 for surrounding text.
-pub fn line_distance(
-    mode: FocusMode,
-    logical_line: usize,
-    active_logical_line: usize,
-    paragraph_bounds: Option<(usize, usize)>,
-) -> usize {
-    match mode {
-        FocusMode::Off => 0,
-        FocusMode::Sentence => {
-            // Simplified: sentence focus dims everything not on the cursor's line.
-            // A more refined implementation would parse sentence boundaries.
-            if logical_line == active_logical_line {
-                0
-            } else {
-                1
-            }
-        }
-        FocusMode::Paragraph => {
-            if let Some((para_start, para_end)) = paragraph_bounds {
-                if logical_line >= para_start && logical_line <= para_end {
-                    0
-                } else {
-                    // Distance in paragraphs — approximate by line distance from bounds
-                    let dist_from_start = para_start.saturating_sub(logical_line);
-                    let dist_from_end = logical_line.saturating_sub(para_end);
-                    let line_dist = dist_from_start.max(dist_from_end);
-                    // Rough: every ~3 lines counts as another paragraph distance step
-                    (line_dist / 3).max(1)
-                }
-            } else {
-                if logical_line == active_logical_line { 0 } else { 1 }
-            }
-        }
-    }
 }
 
 /// Configuration pairing duration and easing curve for dimming transitions.
@@ -357,71 +281,6 @@ impl DimLayer {
 mod tests {
     use super::*;
 
-    // === Acceptance test: Focus Mode off shows all text at full brightness ===
-
-    #[test]
-    fn off_mode_returns_zero_distance_for_all_lines() {
-        for line in 0..10 {
-            assert_eq!(line_distance(FocusMode::Off, line, 5, None), 0);
-        }
-    }
-
-    #[test]
-    fn off_mode_dim_color_is_full_foreground() {
-        let palette = Palette::default_palette();
-        let color = dim_color(&palette, 0);
-        assert_eq!(color, palette.foreground);
-    }
-
-    // === Acceptance test: Sentence Focus Mode dims surrounding text ===
-
-    #[test]
-    fn sentence_mode_active_line_is_zero_distance() {
-        assert_eq!(line_distance(FocusMode::Sentence, 5, 5, None), 0);
-    }
-
-    #[test]
-    fn sentence_mode_other_lines_are_nonzero_distance() {
-        assert!(line_distance(FocusMode::Sentence, 3, 5, None) > 0);
-        assert!(line_distance(FocusMode::Sentence, 7, 5, None) > 0);
-    }
-
-    #[test]
-    fn sentence_mode_dimmed_color_differs_from_foreground() {
-        let palette = Palette::default_palette();
-        let active = dim_color(&palette, 0);
-        let dimmed = dim_color(&palette, 1);
-        assert_ne!(active, dimmed);
-    }
-
-    // === Acceptance test: Paragraph Focus Mode dims surrounding text ===
-
-    #[test]
-    fn paragraph_mode_active_paragraph_is_zero_distance() {
-        // Paragraph spans lines 3-5
-        assert_eq!(line_distance(FocusMode::Paragraph, 3, 4, Some((3, 5))), 0);
-        assert_eq!(line_distance(FocusMode::Paragraph, 4, 4, Some((3, 5))), 0);
-        assert_eq!(line_distance(FocusMode::Paragraph, 5, 4, Some((3, 5))), 0);
-    }
-
-    #[test]
-    fn paragraph_mode_adjacent_text_is_dimmed() {
-        // Line 1 is outside paragraph 3-5
-        let dist = line_distance(FocusMode::Paragraph, 1, 4, Some((3, 5)));
-        assert!(dist > 0);
-    }
-
-    #[test]
-    fn paragraph_mode_further_text_is_more_dimmed() {
-        let palette = Palette::default_palette();
-        let near = dim_color(&palette, 1);
-        let far = dim_color(&palette, 3);
-        // "more dimmed" = closer to background
-        // We can check that far is interpolated further toward background
-        // by checking it differs from near
-        assert_ne!(near, far);
-    }
-
     // === Acceptance test: Sentence boundary parsing ===
 
     #[test]
@@ -469,18 +328,6 @@ mod tests {
     #[test]
     fn empty_text_returns_none() {
         assert_eq!(sentence_bounds_at("", 0), None);
-    }
-
-    // === Unit test: apply_dimming matches dim_color for palette.foreground ===
-
-    #[test]
-    fn apply_dimming_with_foreground_matches_dim_color() {
-        let palette = Palette::default_palette();
-        for distance in 0..5 {
-            let from_dim = dim_color(&palette, distance);
-            let from_apply = apply_dimming(&palette.foreground, &palette, distance);
-            assert_eq!(from_dim, from_apply, "Mismatch at distance {}", distance);
-        }
     }
 
     // === Acceptance test: Focus Mode toggle ===

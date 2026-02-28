@@ -1,8 +1,7 @@
 use zani::buffer::Buffer;
-use zani::focus_mode::{self, FocusMode};
+use zani::focus_mode;
 use zani::markdown_styling;
 use zani::palette::{self, Palette};
-use zani::wrap::wrap_line;
 
 /// Integration test: Writing Surface applies both Focus Dimming
 /// and Markdown Styling in one render pass.
@@ -16,21 +15,19 @@ fn focus_dimming_and_markdown_styling_compose() {
     let palette = Palette::default_palette();
     let text = "## Heading\n\nSome **bold** text in the body paragraph.\n\nAnother paragraph here.";
     let buffer = Buffer::from_text(text);
-    let active_line = 2; // "Some **bold** text..." is the active paragraph
+    let line_count = buffer.len_lines();
+
+    // Active paragraph is just line 2
+    let opacities = focus_mode::paragraph_target_opacities(line_count, Some((2, 2)));
 
     // For each line, compute both layers
-    for line_idx in 0..buffer.len_lines() {
+    for line_idx in 0..line_count {
         let line_text = buffer.line(line_idx).to_string();
         let md_styles = markdown_styling::style_line(&line_text);
-        let distance = focus_mode::line_distance(
-            FocusMode::Paragraph,
-            line_idx,
-            active_line,
-            Some((2, 2)), // active paragraph is just line 2
-        );
-        let focus_color = focus_mode::dim_color(&palette, distance);
+        let opacity = opacities[line_idx];
+        let focus_color = focus_mode::apply_dimming_with_opacity(&palette.foreground, &palette, opacity);
 
-        for (i, ms) in md_styles.iter().enumerate() {
+        for ms in md_styles.iter() {
             let md_resolved = ms.resolve(&palette);
 
             // If syntax: should be dimmed from markdown styling
@@ -42,8 +39,8 @@ fn focus_dimming_and_markdown_styling_compose() {
                 );
             }
 
-            // If in active region (distance 0): markdown styling at full color
-            if distance == 0 && !ms.is_syntax && !ms.is_heading && !ms.is_code {
+            // If in active region (opacity 1.0): markdown styling at full color
+            if opacity >= 1.0 && !ms.is_syntax && !ms.is_heading && !ms.is_code {
                 assert_eq!(
                     md_resolved.fg.unwrap(),
                     palette.foreground,
@@ -52,7 +49,7 @@ fn focus_dimming_and_markdown_styling_compose() {
             }
 
             // Focus dimming color should differ from foreground for non-active regions
-            if distance > 0 {
+            if opacity < 1.0 {
                 assert_ne!(
                     focus_color, palette.foreground,
                     "Non-active region should have dimmed focus color"
@@ -62,20 +59,12 @@ fn focus_dimming_and_markdown_styling_compose() {
             // Composed color: for a non-syntax, non-active character,
             // we'd apply both markdown resolved color AND focus dimming.
             // The composed result should not exceed the palette's color range.
-            if distance > 0 && !ms.is_syntax {
+            if opacity < 1.0 && !ms.is_syntax {
                 // The final color would be the focus-dimmed version of the
                 // markdown resolved foreground. Both are interpolations toward
                 // background, so the composed result stays within range.
                 let base_fg = md_resolved.fg.unwrap();
-                let composed = palette::interpolate(
-                    &base_fg,
-                    &palette.background,
-                    match distance {
-                        1 => 0.4,
-                        2 => 0.65,
-                        _ => 0.8,
-                    },
-                );
+                let composed = focus_mode::apply_dimming_with_opacity(&base_fg, &palette, opacity);
                 // Verify it's a valid RGB color (always true for interpolation,
                 // but this documents the composition)
                 if let ratatui::style::Color::Rgb(r, g, b) = composed {
@@ -126,8 +115,8 @@ fn palette_switch_updates_all_styling() {
     );
 
     // Focus dimming endpoints should change
-    let dim_a = focus_mode::dim_color(&palette_a, 1);
-    let dim_b = focus_mode::dim_color(&palette_b, 1);
+    let dim_a = focus_mode::apply_dimming_with_opacity(&palette_a.foreground, &palette_a, 0.6);
+    let dim_b = focus_mode::apply_dimming_with_opacity(&palette_b.foreground, &palette_b, 0.6);
     assert_ne!(dim_a, dim_b, "Palette switch should change dimming colors");
 }
 
