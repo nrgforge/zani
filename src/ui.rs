@@ -7,6 +7,7 @@ use crate::app::{App, SettingsItem};
 use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
+use crate::scroll_mode::ScrollMode;
 use crate::vim_bindings::Mode;
 use crate::writing_surface::WritingSurface;
 
@@ -158,6 +159,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             SettingsItem::EditingMode(_) => "Editing",
             SettingsItem::Palette(_) => "Palette",
             SettingsItem::FocusMode(_) => "Focus",
+            SettingsItem::ScrollMode(_) => "Scroll",
             SettingsItem::ColumnWidth => "Document",
             SettingsItem::File => "Document",
         };
@@ -192,9 +194,16 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     FocusMode::Off => "Off",
                     FocusMode::Sentence => "Sentence",
                     FocusMode::Paragraph => "Paragraph",
-                    FocusMode::Typewriter => "Typewriter",
                 };
                 let marker = if *mode == app.focus_mode { ">" } else { " " };
+                format!("  {} {}", marker, label)
+            }
+            SettingsItem::ScrollMode(mode) => {
+                let label = match mode {
+                    ScrollMode::Edge => "Edge",
+                    ScrollMode::Typewriter => "Typewriter",
+                };
+                let marker = if *mode == app.scroll_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::ColumnWidth => {
@@ -509,7 +518,7 @@ mod tests {
         let mut app = App::new();
         app.buffer = crate::buffer::Buffer::from_text("The quick brown fox");
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -531,7 +540,10 @@ mod tests {
         assert!(text.contains("Off"), "Should list Off focus mode");
         assert!(text.contains("Sentence"), "Should list Sentence focus mode");
         assert!(text.contains("Paragraph"), "Should list Paragraph focus mode");
-        assert!(text.contains("Typewriter"), "Should list Typewriter focus mode");
+
+        // Scroll mode options should be listed
+        assert!(text.contains("Edge"), "Should list Edge scroll mode");
+        assert!(text.contains("Typewriter"), "Should list Typewriter scroll mode");
 
         // Active focus mode should be indicated
         assert!(
@@ -865,10 +877,10 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        app.settings_cursor = 10;
+        app.settings_cursor = 11; // File
         app.rename_open();
 
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -888,7 +900,7 @@ mod tests {
         app.toggle_settings();
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
-        app.settings_cursor = 10;
+        app.settings_cursor = 11; // File
         app.rename_open();
         // Cursor at end (position 6), so cursor char is a space
         // Move cursor to start to test on 'a'

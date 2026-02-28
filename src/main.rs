@@ -65,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.color_profile = color_profile;
     app.set_palette(config.resolve_palette());
     app.focus_mode = config.focus_mode;
+    app.scroll_mode = config.scroll_mode;
     app.column_width = config.column_width;
     app.editing_mode = config.editing_mode;
     if app.editing_mode == zani::editing_mode::EditingMode::Standard {
@@ -137,7 +138,6 @@ fn run(
         crossterm::execute!(terminal.backend_mut(), cursor_style)?;
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
-        let line_before_input = app.cursor_line;
         let poll_timeout = if app.animations.is_active() {
             Duration::from_millis(16)
         } else {
@@ -150,19 +150,6 @@ fn run(
                 }
                 _ => {}
             }
-        }
-
-        if app.cursor_line != line_before_input
-            && app.focus_mode != zani::focus_mode::FocusMode::Off
-        {
-            app.animations.start(
-                zani::animation::TransitionKind::FocusDimming {
-                    from_line: line_before_input,
-                    to_line: app.cursor_line,
-                },
-                Duration::from_millis(150),
-                zani::animation::Easing::EaseOut,
-            );
         }
 
         // Autosave on idle
@@ -186,6 +173,7 @@ fn save_config(app: &App) {
         focus_mode: app.focus_mode,
         column_width: app.column_width,
         editing_mode: app.editing_mode,
+        scroll_mode: app.scroll_mode,
     };
     let _ = config.save();
 }

@@ -15,18 +15,15 @@ pub enum FocusMode {
     Sentence,
     /// Current paragraph at full brightness, nearby paragraphs partially dimmed.
     Paragraph,
-    /// Current line stays centered, surrounding text dimmed.
-    Typewriter,
 }
 
 impl FocusMode {
-    /// Cycle to the next variant: Off → Sentence → Paragraph → Typewriter → Off.
+    /// Cycle to the next variant: Off → Sentence → Paragraph → Off.
     pub fn next(self) -> Self {
         match self {
             Self::Off => Self::Sentence,
             Self::Sentence => Self::Paragraph,
-            Self::Paragraph => Self::Typewriter,
-            Self::Typewriter => Self::Off,
+            Self::Paragraph => Self::Off,
         }
     }
 }
@@ -184,15 +181,6 @@ pub fn line_distance(
             } else {
                 if logical_line == active_logical_line { 0 } else { 1 }
             }
-        }
-        FocusMode::Typewriter => {
-            // Distance is measured in lines from the active line
-            let diff = if logical_line > active_logical_line {
-                logical_line - active_logical_line
-            } else {
-                active_logical_line - logical_line
-            };
-            diff
         }
     }
 }
@@ -435,17 +423,6 @@ mod tests {
         assert_ne!(near, far);
     }
 
-    // === Acceptance test: Typewriter Mode ===
-
-    #[test]
-    fn typewriter_mode_distance_increases_from_active_line() {
-        assert_eq!(line_distance(FocusMode::Typewriter, 5, 5, None), 0);
-        assert_eq!(line_distance(FocusMode::Typewriter, 4, 5, None), 1);
-        assert_eq!(line_distance(FocusMode::Typewriter, 6, 5, None), 1);
-        assert_eq!(line_distance(FocusMode::Typewriter, 3, 5, None), 2);
-        assert_eq!(line_distance(FocusMode::Typewriter, 8, 5, None), 3);
-    }
-
     // === Acceptance test: Sentence boundary parsing ===
 
     #[test]
@@ -516,8 +493,6 @@ mod tests {
         assert_eq!(mode, FocusMode::Sentence);
         let mode = mode.next();
         assert_eq!(mode, FocusMode::Paragraph);
-        let mode = mode.next();
-        assert_eq!(mode, FocusMode::Typewriter);
         let mode = mode.next();
         assert_eq!(mode, FocusMode::Off);
     }

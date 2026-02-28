@@ -545,7 +545,7 @@ mod tests {
         // Typewriter mode with active_line=5 means line 0 is dimmed
         let surface = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Typewriter)
+            .focus_mode(FocusMode::Paragraph)
             .active_line(5)
             .color_profile(ColorProfile::Basic);
 
@@ -575,7 +575,7 @@ mod tests {
         for profile in [ColorProfile::TrueColor, ColorProfile::Color256, ColorProfile::Basic] {
             let surface = WritingSurface::new(&buffer, &palette)
                 .column_width(60)
-                .focus_mode(FocusMode::Typewriter)
+                .focus_mode(FocusMode::Paragraph)
                 .active_line(0)
                 .color_profile(profile);
             let mut buf = RatatuiBuffer::empty(area);
@@ -594,28 +594,29 @@ mod tests {
         let area = Rect::new(0, 0, 80, 5);
         let x_offset = 10; // column_width 60 → left margin = (80-60)/2 = 10
 
-        // Without animation: active_line=4, so line 0 is distance 4 (heavily dimmed)
+        // Without animation: active_line=4, so line 0 is distance 1 (dimmed)
         let no_anim = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Typewriter)
+            .focus_mode(FocusMode::Sentence)
             .active_line(4);
         let mut buf_no_anim = RatatuiBuffer::empty(area);
         no_anim.render(area, &mut buf_no_anim);
         let line0_no_anim_fg = buf_no_anim[(x_offset, 0)].fg;
 
-        // With animation at progress=0.5 from line 0→4:
-        // Line 0 blended distance = 0*0.5 + 4*0.5 = 2 (less dimmed than distance 4)
+        // With animation at progress=0.1 from line 0→4:
+        // Line 0: old_dist=0 (was active), new_dist=1 (not active)
+        // blended = 0*0.9 + 1*0.1 = 0.1, rounds to 0 (brighter than static distance 1)
         let with_anim = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Typewriter)
+            .focus_mode(FocusMode::Sentence)
             .active_line(4)
-            .focus_animation(Some((0.5, 0, 4)));
+            .focus_animation(Some((0.1, 0, 4)));
         let mut buf_anim = RatatuiBuffer::empty(area);
         with_anim.render(area, &mut buf_anim);
         let line0_anim_fg = buf_anim[(x_offset, 0)].fg;
 
         // During blend, line 0 should be less dimmed than without animation
-        // (distance 2 vs distance 4 → closer to foreground color)
+        // (distance 0 vs distance 1 → closer to foreground color)
         assert_ne!(
             line0_anim_fg, line0_no_anim_fg,
             "Animation should change line 0's dimming level"

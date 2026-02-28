@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
+use crate::scroll_mode::ScrollMode;
 
 /// Persisted user preferences, loaded from and saved to config.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,6 +22,9 @@ pub struct Config {
     /// Editing mode (vim or standard).
     #[serde(default)]
     pub editing_mode: EditingMode,
+    /// Scroll mode (edge or typewriter).
+    #[serde(default, with = "scroll_mode_serde")]
+    pub scroll_mode: ScrollMode,
 }
 
 fn default_palette_name() -> String {
@@ -38,6 +42,7 @@ impl Default for Config {
             focus_mode: FocusMode::Off,
             column_width: default_column_width(),
             editing_mode: EditingMode::default(),
+            scroll_mode: ScrollMode::Edge,
         }
     }
 }
@@ -91,7 +96,6 @@ mod focus_mode_serde {
             FocusMode::Off => "off",
             FocusMode::Sentence => "sentence",
             FocusMode::Paragraph => "paragraph",
-            FocusMode::Typewriter => "typewriter",
         };
         serializer.serialize_str(s)
     }
@@ -105,8 +109,37 @@ mod focus_mode_serde {
             "off" => Ok(FocusMode::Off),
             "sentence" => Ok(FocusMode::Sentence),
             "paragraph" => Ok(FocusMode::Paragraph),
-            "typewriter" => Ok(FocusMode::Typewriter),
+            "typewriter" => Ok(FocusMode::Off),
             _ => Ok(FocusMode::Off),
+        }
+    }
+}
+
+/// Serde support for ScrollMode as a lowercase string.
+mod scroll_mode_serde {
+    use super::ScrollMode;
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(mode: &ScrollMode, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = match mode {
+            ScrollMode::Edge => "edge",
+            ScrollMode::Typewriter => "typewriter",
+        };
+        serializer.serialize_str(s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ScrollMode, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "edge" => Ok(ScrollMode::Edge),
+            "typewriter" => Ok(ScrollMode::Typewriter),
+            _ => Ok(ScrollMode::Edge),
         }
     }
 }
@@ -129,9 +162,10 @@ mod tests {
     fn round_trip_serialization() {
         let config = Config {
             palette: "Inkwell".to_string(),
-            focus_mode: FocusMode::Typewriter,
+            focus_mode: FocusMode::Paragraph,
             column_width: 72,
             editing_mode: EditingMode::Standard,
+            scroll_mode: ScrollMode::Typewriter,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&toml_str).unwrap();

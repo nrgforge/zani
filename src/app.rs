@@ -10,6 +10,7 @@ use crate::editing_mode::EditingMode;
 use crate::find::FindState;
 use crate::focus_mode::{self, FocusMode};
 use crate::palette::Palette;
+use crate::scroll_mode::ScrollMode;
 use crate::smart_typography;
 use crate::undo::UndoHistory;
 use crate::vim_bindings::{self, Action, CursorShape, Mode};
@@ -25,6 +26,8 @@ pub enum SettingsItem {
     Palette(usize),
     /// A focus mode choice.
     FocusMode(FocusMode),
+    /// A scroll mode choice.
+    ScrollMode(ScrollMode),
     /// Column width (adjusted via Left/Right, not Enter).
     ColumnWidth,
     /// File row (opens inline rename on Enter).
@@ -43,7 +46,8 @@ impl SettingsItem {
         items.push(SettingsItem::FocusMode(FocusMode::Off));
         items.push(SettingsItem::FocusMode(FocusMode::Sentence));
         items.push(SettingsItem::FocusMode(FocusMode::Paragraph));
-        items.push(SettingsItem::FocusMode(FocusMode::Typewriter));
+        items.push(SettingsItem::ScrollMode(ScrollMode::Edge));
+        items.push(SettingsItem::ScrollMode(ScrollMode::Typewriter));
         items.push(SettingsItem::ColumnWidth);
         items.push(SettingsItem::File);
         items
@@ -60,6 +64,7 @@ pub struct App {
     pub buffer: Buffer,
     pub palette: Palette,
     pub focus_mode: FocusMode,
+    pub scroll_mode: ScrollMode,
     pub editing_mode: EditingMode,
     pub color_profile: ColorProfile,
     pub vim_mode: Mode,
@@ -103,6 +108,7 @@ impl App {
             buffer: Buffer::new(),
             palette: Palette::default_palette(),
             focus_mode: FocusMode::Off,
+            scroll_mode: ScrollMode::Edge,
             editing_mode: EditingMode::default(),
             color_profile: ColorProfile::TrueColor,
             vim_mode: Mode::Normal,
@@ -242,6 +248,7 @@ impl App {
                 }
             }
             SettingsItem::FocusMode(mode) => self.focus_mode = mode,
+            SettingsItem::ScrollMode(mode) => self.scroll_mode = mode,
             SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
             SettingsItem::File => self.rename_open(),
         }
@@ -1010,7 +1017,7 @@ impl App {
         // If not found in any range, use the last match from end-of-line check
         let _ = found;
 
-        if self.focus_mode == FocusMode::Typewriter {
+        if self.scroll_mode == ScrollMode::Typewriter {
             // Typewriter mode: keep cursor centered vertically
             let center = height / 2;
             if cursor_vl >= center {
@@ -1125,8 +1132,8 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 2 editing modes + 3 palettes + 4 focus modes + 1 column width + 1 file = 11
-        assert_eq!(SettingsItem::all().len(), 11);
+        // 2 editing modes + 3 palettes + 3 focus modes + 2 scroll modes + 1 column width + 1 file = 12
+        assert_eq!(SettingsItem::all().len(), 12);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
@@ -1362,7 +1369,7 @@ mod tests {
         // Create a buffer with 20 lines
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.buffer = Buffer::from_text(&text);
-        app.focus_mode = FocusMode::Typewriter;
+        app.scroll_mode = ScrollMode::Typewriter;
         app.cursor_line = 10;
         app.cursor_col = 0;
 
@@ -1379,7 +1386,7 @@ mod tests {
         let mut app = App::new();
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.buffer = Buffer::from_text(&text);
-        app.focus_mode = FocusMode::Typewriter;
+        app.scroll_mode = ScrollMode::Typewriter;
         app.cursor_line = 1;
         app.cursor_col = 0;
 
@@ -1465,7 +1472,7 @@ mod tests {
     #[test]
     fn settings_nav_down_wraps() {
         let mut app = App::new();
-        app.settings_cursor = 10;
+        app.settings_cursor = 11;
         app.settings_nav_down();
         assert_eq!(app.settings_cursor, 0);
     }
@@ -1475,7 +1482,7 @@ mod tests {
         let mut app = App::new();
         app.settings_cursor = 0;
         app.settings_nav_up();
-        assert_eq!(app.settings_cursor, 10);
+        assert_eq!(app.settings_cursor, 11);
     }
 
     #[test]
@@ -1509,15 +1516,27 @@ mod tests {
         app.settings_apply();
         assert_eq!(app.focus_mode, FocusMode::Sentence);
 
-        app.settings_cursor = 8; // Typewriter
+        app.settings_cursor = 7; // Paragraph
         app.settings_apply();
-        assert_eq!(app.focus_mode, FocusMode::Typewriter);
+        assert_eq!(app.focus_mode, FocusMode::Paragraph);
+    }
+
+    #[test]
+    fn settings_apply_scroll_mode() {
+        let mut app = App::new();
+        app.settings_cursor = 9; // ScrollMode::Typewriter
+        app.settings_apply();
+        assert_eq!(app.scroll_mode, ScrollMode::Typewriter);
+
+        app.settings_cursor = 8; // ScrollMode::Edge
+        app.settings_apply();
+        assert_eq!(app.scroll_mode, ScrollMode::Edge);
     }
 
     #[test]
     fn settings_apply_column_is_noop() {
         let mut app = App::new();
-        app.settings_cursor = 9;
+        app.settings_cursor = 10; // ColumnWidth
         let before = app.column_width;
         app.settings_apply();
         assert_eq!(app.column_width, before);
@@ -1730,7 +1749,7 @@ mod tests {
     fn settings_apply_file_opens_rename() {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.settings_cursor = 10;
+        app.settings_cursor = 11; // File
         app.settings_apply();
         assert!(app.rename_active);
         assert_eq!(app.rename_buf, "draft.md");
