@@ -10,6 +10,7 @@ pub mod find;
 pub mod focus_mode;
 pub mod markdown_styling;
 pub mod palette;
+pub mod scroll_mode;
 pub mod smart_typography;
 pub mod ui;
 pub mod undo;
