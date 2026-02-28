@@ -224,4 +224,22 @@ mod tests {
         let palette = config.resolve_palette();
         assert_eq!(palette.name, Palette::default_palette().name);
     }
+
+    #[test]
+    fn legacy_typewriter_focus_mode_maps_to_off() {
+        let toml_str = r#"focus_mode = "typewriter""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.focus_mode, FocusMode::Off);
+    }
+
+    #[test]
+    fn scroll_mode_round_trip() {
+        let config = Config {
+            scroll_mode: ScrollMode::Typewriter,
+            ..Config::default()
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let loaded: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.scroll_mode, ScrollMode::Typewriter);
+    }
 }
