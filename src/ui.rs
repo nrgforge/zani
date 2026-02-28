@@ -32,6 +32,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
     };
 
     // Build Writing Surface
+    let line_opacities = app.line_opacities();
     let surface = WritingSurface::new(&app.buffer, &effective)
         .column_width(app.column_width)
         .scroll_offset(app.scroll_display.round() as usize)
@@ -42,7 +43,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .vertical_offset(app.typewriter_vertical_offset)
         .selection(app.selection_range())
         .find_matches(find_ranges, find_current)
-        .line_opacities(&[]);
+        .line_opacities(&line_opacities);
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();

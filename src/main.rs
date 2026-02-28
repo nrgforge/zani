@@ -138,7 +138,7 @@ fn run(
         crossterm::execute!(terminal.backend_mut(), cursor_style)?;
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
-        let poll_timeout = if app.animations.is_active() {
+        let poll_timeout = if app.animations.is_active() || app.dim_animating() {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(250)
@@ -151,6 +151,9 @@ fn run(
                 _ => {}
             }
         }
+
+        // Update dimming layer targets based on current cursor position
+        app.update_dim_layers();
 
         // Autosave on idle
         if app.should_autosave() {

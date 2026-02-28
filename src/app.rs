@@ -8,7 +8,7 @@ use crate::color_profile::ColorProfile;
 use crate::draft_name;
 use crate::editing_mode::EditingMode;
 use crate::find::FindState;
-use crate::focus_mode::{self, FocusMode};
+use crate::focus_mode::{self, DimLayer, FadeConfig, FocusMode, paragraph_target_opacities};
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 use crate::smart_typography;
@@ -100,6 +100,8 @@ pub struct App {
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
+    pub paragraph_dim: DimLayer,
+    pub sentence_dim: DimLayer,
 }
 
 impl App {
@@ -136,6 +138,14 @@ impl App {
             undo_history: UndoHistory::new(),
             find_state: None,
             animations: AnimationManager::new(),
+            paragraph_dim: DimLayer::new(
+                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
+                FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
+            ),
+            sentence_dim: DimLayer::new(
+                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
+                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
+            ),
         }
     }
 
@@ -979,6 +989,49 @@ impl App {
         let text = self.buffer.rope().to_string();
         let cursor_idx = self.cursor_char_index();
         focus_mode::sentence_bounds_at(&text, cursor_idx)
+    }
+
+    /// Recompute dimming layer targets based on current focus mode and cursor position.
+    pub fn update_dim_layers(&mut self) {
+        let line_count = self.buffer.len_lines();
+        match self.focus_mode {
+            FocusMode::Off => {
+                let targets = vec![1.0; line_count];
+                self.paragraph_dim.update_targets(&targets);
+                self.sentence_dim.update_targets(&targets);
+            }
+            FocusMode::Paragraph => {
+                let targets = paragraph_target_opacities(
+                    line_count,
+                    self.paragraph_bounds(),
+                );
+                self.paragraph_dim.update_targets(&targets);
+                self.sentence_dim.update_targets(&vec![1.0; line_count]);
+            }
+            FocusMode::Sentence => {
+                let targets = paragraph_target_opacities(
+                    line_count,
+                    self.paragraph_bounds(),
+                );
+                self.paragraph_dim.update_targets(&targets);
+                // Sentence layer is handled per-character in the renderer via sentence_bounds.
+                // At the line level, all lines get 1.0 from the sentence layer.
+                self.sentence_dim.update_targets(&vec![1.0; line_count]);
+            }
+        }
+    }
+
+    /// Compute final per-line opacities for the renderer (product of all layers).
+    pub fn line_opacities(&self) -> Vec<f64> {
+        let line_count = self.buffer.len_lines();
+        (0..line_count)
+            .map(|i| self.paragraph_dim.opacity(i) * self.sentence_dim.opacity(i))
+            .collect()
+    }
+
+    /// Whether any dimming layer is still animating.
+    pub fn dim_animating(&self) -> bool {
+        self.paragraph_dim.is_animating() || self.sentence_dim.is_animating()
     }
 
     /// Compute visual lines for the current buffer and column width.
@@ -2453,5 +2506,32 @@ mod tests {
         app.dismiss_settings();
         // No overlay animation started on dismiss
         assert!(app.animations.overlay_progress().is_none());
+    }
+
+    // === Task 7: DimLayer wired into App ===
+
+    #[test]
+    fn dim_layers_produce_opacities() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("Line 1\n\nLine 3\nLine 4");
+        app.focus_mode = FocusMode::Paragraph;
+        app.cursor_line = 0;
+        app.update_dim_layers();
+        let opacities = app.line_opacities();
+        assert_eq!(opacities.len(), 4);
+        assert!((opacities[0] - 1.0).abs() < f64::EPSILON, "Cursor line should be bright");
+        assert!(opacities[2] < 1.0, "Other paragraph should be dimmed");
+    }
+
+    #[test]
+    fn focus_off_all_bright() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("Line 1\nLine 2\nLine 3");
+        app.focus_mode = FocusMode::Off;
+        app.update_dim_layers();
+        let opacities = app.line_opacities();
+        for (i, &o) in opacities.iter().enumerate() {
+            assert!((o - 1.0).abs() < f64::EPSILON, "Line {} should be bright in Off mode", i);
+        }
     }
 }
