@@ -146,7 +146,6 @@ fn is_sentence_end(ch: char) -> bool {
 ///
 /// For Sentence mode, `active_line` is the line containing the active sentence.
 /// For Paragraph mode, `active_line` is the line within the active paragraph.
-/// For Typewriter mode, distance is measured in visual lines from center.
 ///
 /// Returns 0 for the active region, > 0 for surrounding text.
 pub fn line_distance(
