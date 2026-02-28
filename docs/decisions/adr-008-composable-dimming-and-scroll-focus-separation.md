@@ -1,6 +1,6 @@
 # ADR-008: Composable Dimming with Scroll/Focus Separation
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
