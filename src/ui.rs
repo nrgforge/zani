@@ -300,7 +300,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             // Rename-active file row: multi-span with visible cursor
             let is_file_row = row.cursor_index
                 .and_then(SettingsItem::at)
-                .map_or(false, |item| item == SettingsItem::File);
+                .is_some_and(|item| item == SettingsItem::File);
             if app.rename_active && is_file_row {
                 let prefix = "  File        ";
                 let buf = &app.rename_buf;

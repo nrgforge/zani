@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .skip(1) // skip binary name
         .filter(|a| !a.starts_with('-'))
-        .last()
+        .next_back()
         .map(PathBuf::from);
 
     // Writing Window: only spawn a dedicated window when explicitly requested

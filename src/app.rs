@@ -104,6 +104,12 @@ pub struct App {
     pub sentence_dim: DimLayer,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -339,11 +345,11 @@ impl App {
             let new_path = old_path.with_file_name(&self.rename_buf);
 
             // Only attempt fs::rename if old file exists on disk
-            if old_path.exists() {
-                if std::fs::rename(old_path, &new_path).is_err() {
-                    // Stay in rename mode so user can retry or Esc
-                    return;
-                }
+            if old_path.exists()
+                && std::fs::rename(old_path, &new_path).is_err()
+            {
+                // Stay in rename mode so user can retry or Esc
+                return;
             }
 
             self.file_path = Some(new_path);

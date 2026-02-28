@@ -1,7 +1,7 @@
 use zani::buffer::Buffer;
 use zani::focus_mode;
 use zani::markdown_styling;
-use zani::palette::{self, Palette};
+use zani::palette::Palette;
 
 /// Integration test: Writing Surface applies both Focus Dimming
 /// and Markdown Styling in one render pass.
@@ -65,11 +65,8 @@ fn focus_dimming_and_markdown_styling_compose() {
                 // background, so the composed result stays within range.
                 let base_fg = md_resolved.fg.unwrap();
                 let composed = focus_mode::apply_dimming_with_opacity(&base_fg, &palette, opacity);
-                // Verify it's a valid RGB color (always true for interpolation,
-                // but this documents the composition)
-                if let ratatui::style::Color::Rgb(r, g, b) = composed {
-                    assert!(r <= 255 && g <= 255 && b <= 255);
-                }
+                // Verify composition produces an RGB color
+                assert!(matches!(composed, ratatui::style::Color::Rgb(_, _, _)));
             }
         }
     }

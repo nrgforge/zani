@@ -41,10 +41,10 @@ impl ColorProfile {
                 // Heuristic: most modern terminals support 256 colors.
                 // Basic ANSI is the conservative fallback if we can't tell.
                 // In practice, terminals that set TERM to *-256color support 256.
-                if let Ok(term) = std::env::var("TERM") {
-                    if term.contains("256color") {
-                        return Self::Color256;
-                    }
+                if let Ok(term) = std::env::var("TERM")
+                    && term.contains("256color")
+                {
+                    return Self::Color256;
                 }
                 Self::Basic
             }

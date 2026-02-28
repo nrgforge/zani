@@ -93,15 +93,15 @@ pub fn style_line_with_context(line: &str, in_code_block: bool) -> Vec<CharStyle
     if let Some(heading_level) = detect_heading(&chars) {
         // Mark the # and space as syntax
         let prefix_len = heading_level + 1; // # chars + space
-        for i in 0..prefix_len.min(len) {
-            styles[i].is_syntax = true;
-            styles[i].is_heading = true;
-            styles[i].modifier = Modifier::BOLD;
+        for style in styles.iter_mut().take(prefix_len.min(len)) {
+            style.is_syntax = true;
+            style.is_heading = true;
+            style.modifier = Modifier::BOLD;
         }
         // Mark the rest as heading text
-        for i in prefix_len..len {
-            styles[i].is_heading = true;
-            styles[i].modifier = Modifier::BOLD;
+        for style in styles.iter_mut().take(len).skip(prefix_len) {
+            style.is_heading = true;
+            style.modifier = Modifier::BOLD;
         }
         return styles;
     }
@@ -110,79 +110,79 @@ pub fn style_line_with_context(line: &str, in_code_block: bool) -> Vec<CharStyle
     let mut i = 0;
     while i < len {
         // Bold: **text**
-        if i + 1 < len && chars[i] == '*' && chars[i + 1] == '*' {
-            if let Some(end) = find_closing(&chars, i + 2, &['*', '*']) {
-                // Opening **
-                styles[i].is_syntax = true;
-                styles[i].modifier = Modifier::BOLD;
-                styles[i + 1].is_syntax = true;
-                styles[i + 1].modifier = Modifier::BOLD;
-                // Content
-                for j in (i + 2)..end {
-                    styles[j].modifier = Modifier::BOLD;
-                }
-                // Closing **
-                styles[end].is_syntax = true;
-                styles[end].modifier = Modifier::BOLD;
-                styles[end + 1].is_syntax = true;
-                styles[end + 1].modifier = Modifier::BOLD;
-                i = end + 2;
-                continue;
+        if i + 1 < len && chars[i] == '*' && chars[i + 1] == '*'
+            && let Some(end) = find_closing(&chars, i + 2, &['*', '*'])
+        {
+            // Opening **
+            styles[i].is_syntax = true;
+            styles[i].modifier = Modifier::BOLD;
+            styles[i + 1].is_syntax = true;
+            styles[i + 1].modifier = Modifier::BOLD;
+            // Content
+            for style in styles.iter_mut().take(end).skip(i + 2) {
+                style.modifier = Modifier::BOLD;
             }
+            // Closing **
+            styles[end].is_syntax = true;
+            styles[end].modifier = Modifier::BOLD;
+            styles[end + 1].is_syntax = true;
+            styles[end + 1].modifier = Modifier::BOLD;
+            i = end + 2;
+            continue;
         }
 
         // Italic: *text* (but not **)
-        if chars[i] == '*' && (i + 1 >= len || chars[i + 1] != '*') {
-            if let Some(end) = find_closing_single(&chars, i + 1, '*') {
-                styles[i].is_syntax = true;
-                styles[i].modifier = Modifier::ITALIC;
-                for j in (i + 1)..end {
-                    styles[j].modifier = Modifier::ITALIC;
-                }
-                styles[end].is_syntax = true;
-                styles[end].modifier = Modifier::ITALIC;
-                i = end + 1;
-                continue;
+        if chars[i] == '*' && (i + 1 >= len || chars[i + 1] != '*')
+            && let Some(end) = find_closing_single(&chars, i + 1, '*')
+        {
+            styles[i].is_syntax = true;
+            styles[i].modifier = Modifier::ITALIC;
+            for style in styles.iter_mut().take(end).skip(i + 1) {
+                style.modifier = Modifier::ITALIC;
             }
+            styles[end].is_syntax = true;
+            styles[end].modifier = Modifier::ITALIC;
+            i = end + 1;
+            continue;
         }
 
         // Inline code: `text`
-        if chars[i] == '`' {
-            if let Some(end) = find_closing_single(&chars, i + 1, '`') {
-                styles[i].is_syntax = true;
-                styles[i].is_code = true;
-                for j in (i + 1)..end {
-                    styles[j].is_code = true;
-                }
-                styles[end].is_syntax = true;
-                styles[end].is_code = true;
-                i = end + 1;
-                continue;
+        if chars[i] == '`'
+            && let Some(end) = find_closing_single(&chars, i + 1, '`')
+        {
+            styles[i].is_syntax = true;
+            styles[i].is_code = true;
+            for style in styles.iter_mut().take(end).skip(i + 1) {
+                style.is_code = true;
             }
+            styles[end].is_syntax = true;
+            styles[end].is_code = true;
+            i = end + 1;
+            continue;
         }
 
         // Markdown link: [text](url)
-        if chars[i] == '[' {
-            if let Some((text_end, url_start, url_end)) = find_link(&chars, i) {
-                // '[' is syntax
-                styles[i].is_syntax = true;
-                // Link text
-                for j in (i + 1)..text_end {
-                    styles[j].is_link_text = true;
-                }
-                // ']' is syntax
-                styles[text_end].is_syntax = true;
-                // '(' is syntax
-                styles[url_start - 1].is_syntax = true;
-                // URL chars are syntax
-                for j in url_start..url_end {
-                    styles[j].is_syntax = true;
-                }
-                // ')' is syntax
-                styles[url_end].is_syntax = true;
-                i = url_end + 1;
-                continue;
+        if chars[i] == '['
+            && let Some((text_end, url_start, url_end)) = find_link(&chars, i)
+        {
+            // '[' is syntax
+            styles[i].is_syntax = true;
+            // Link text
+            for style in styles.iter_mut().take(text_end).skip(i + 1) {
+                style.is_link_text = true;
             }
+            // ']' is syntax
+            styles[text_end].is_syntax = true;
+            // '(' is syntax
+            styles[url_start - 1].is_syntax = true;
+            // URL chars are syntax
+            for style in styles.iter_mut().take(url_end).skip(url_start) {
+                style.is_syntax = true;
+            }
+            // ')' is syntax
+            styles[url_end].is_syntax = true;
+            i = url_end + 1;
+            continue;
         }
 
         i += 1;
@@ -243,12 +243,7 @@ fn find_link(chars: &[char], start: usize) -> Option<(usize, usize, usize)> {
 
 /// Find closing single-char delimiter starting from `start`.
 fn find_closing_single(chars: &[char], start: usize, delim: char) -> Option<usize> {
-    for i in start..chars.len() {
-        if chars[i] == delim {
-            return Some(i);
-        }
-    }
-    None
+    (start..chars.len()).find(|&i| chars[i] == delim)
 }
 
 #[cfg(test)]

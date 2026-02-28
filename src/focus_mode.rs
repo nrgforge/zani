@@ -63,7 +63,7 @@ pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize
         let prev = start - 1;
         // Hard boundary: double newline (empty line)
         if chars[prev] == '\n' && start < len && chars[start] == '\n' {
-            start = start + 1; // start after the empty line
+            start += 1; // start after the empty line
             break;
         }
         // Sentence boundary: [.!?] followed by whitespace
@@ -482,7 +482,7 @@ mod tests {
         use ratatui::style::Color;
         let palette = Palette::default_palette();
         let color = apply_dimming_with_opacity(&palette.foreground, &palette, 0.5);
-        if let (Color::Rgb(fr, fg, fb), Color::Rgb(br, bg, bb), Color::Rgb(mr, mg, mb)) =
+        if let (Color::Rgb(fr, _fg, _fb), Color::Rgb(br, _bg, _bb), Color::Rgb(mr, _mg, _mb)) =
             (palette.foreground, palette.background, color)
         {
             let expected_r = ((fr as f64 + br as f64) / 2.0).round() as u8;

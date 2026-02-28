@@ -12,20 +12,11 @@ pub enum Operation {
 /// Operations are accumulated into a "current group" and sealed into the undo
 /// stack at natural boundaries (whitespace insertion, newlines, mode switches).
 /// Each undo step reverses an entire group.
+#[derive(Default)]
 pub struct UndoHistory {
     undo_stack: Vec<Vec<Operation>>,
     redo_stack: Vec<Vec<Operation>>,
     current_group: Vec<Operation>,
-}
-
-impl Default for UndoHistory {
-    fn default() -> Self {
-        Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            current_group: Vec::new(),
-        }
-    }
 }
 
 impl UndoHistory {
