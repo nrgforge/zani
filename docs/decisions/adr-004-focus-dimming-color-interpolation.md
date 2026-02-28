@@ -1,6 +1,6 @@
 # ADR-004: Focus Dimming via Per-Character Color Interpolation
 
-**Status:** Proposed
+**Status:** Accepted (clarified 2026-02-27: see ADR-008 for animation and composition model)
 
 ## Context
 

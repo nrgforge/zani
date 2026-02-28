@@ -8,10 +8,12 @@
 | **Buffer** | The in-memory representation of a Document's text, managed as a rope data structure (Ropey). Supports efficient insertion, deletion, and cloning. | Document |
 | **Writing Surface** | The custom text viewport where prose is rendered. Handles soft-wrapping, scroll positioning, and per-character styling. Built on ratatui's cell buffer, bypassing the Paragraph widget. | App Shell, Focus Mode |
 | **App Shell** | The ratatui application frame that manages layout, input routing, and the event loop. Contains the Writing Surface but does not render prose directly. | Writing Surface |
-| **Focus Mode** | A visual mode that dims text outside the active region to keep the writer in generative mode. Three variants: Sentence, Paragraph, Typewriter. | Dimming, Active Region |
-| **Active Region** | The sentence, paragraph, or line currently at full brightness during a Focus Mode. Everything outside it is dimmed. | Focus Mode, Dimming |
-| **Dimming** | Per-character color interpolation from full foreground brightness toward the background color, creating a visual fade. The mechanism behind Focus Mode and Markdown Styling. | Focus Mode, Palette, Color Profile |
-| **Typewriter Mode** | A Focus Mode variant where the cursor stays vertically centered and text scrolls around it, eliminating manual scrolling. | Focus Mode |
+| **Focus Mode** | A visual mode that dims text outside the active region to keep the writer in generative mode. Two variants: Sentence, Paragraph. Orthogonal to Scroll Mode. | Dimming, Active Region, Scroll Mode |
+| **Active Region** | The sentence or paragraph currently at full brightness during a Focus Mode. Everything outside it is dimmed. | Focus Mode, Dimming |
+| **Dimming** | Per-character color interpolation from full foreground brightness toward the background color, creating a visual fade. Internally expressed as an opacity factor (0.0–1.0) per character, which governs the interpolation amount. The mechanism behind Focus Mode and Markdown Styling. | Focus Mode, Palette, Color Profile |
+| **Scroll Mode** | How the viewport follows the cursor. Two variants: Edge (scroll when cursor nears edges) and Typewriter (cursor stays vertically centered). Orthogonal to Focus Mode. | Focus Mode, Writing Surface |
+| **Typewriter Mode** | A Scroll Mode variant where the cursor stays vertically centered and text scrolls around it, eliminating manual scrolling. Does not contribute dimming. | Scroll Mode |
+| **Fade Config** | A pairing of duration and easing curve that governs how a dimming transition animates. Each dimming source specifies separate configs for fade-in (brightening) and fade-out (dimming). | Dimming, Active Region |
 | **Palette** | A named, curated color system defining foreground, background, dimming endpoints, and accent colors. Each palette has a mood and character (e.g., Campfire, Manila, Legal Pad). All palettes satisfy Invariant 3. The writer selects from the collection. | Color Profile |
 | **Color Profile** | The terminal's color capability: True Color (24-bit), 256-color, or basic ANSI. Detected at startup; rendering degrades gracefully. | Palette |
 | **Chrome** | Any visible UI element that is not the writer's text: status bars, line numbers, file names, word counts. Hidden by default; summoned on demand. | Settings Layer |
@@ -33,19 +35,19 @@
 | Editor | Writing Surface or Zani | "Editor" implies code editing. Zani is a writing app. |
 | Theme | Palette | "Theme" implies swappable skins. Palette is the specific color set. |
 | Plugin | (n/a) | Zani does not have a plugin system. Features are built in. |
-| Opacity / Transparency | Dimming | Terminals don't support true opacity. Dimming is the actual mechanism (color interpolation). |
+| Opacity / Transparency (terminal) | Dimming | Terminals don't support true per-character transparency. Dimming uses color interpolation. Note: the internal opacity factor (0.0–1.0) is a rendering calculation, not terminal transparency. |
 
 ## Actions (Verbs)
 
 | Action | Actor | Subject | Description |
 |--------|-------|---------|-------------|
 | **Write** | Writer | Document | The primary act: producing prose. Everything else serves this. |
-| **Focus** | Writer | Focus Mode | Toggle or switch between Focus Mode variants (Sentence, Paragraph, Typewriter, Off). |
+| **Focus** | Writer | Focus Mode | Toggle or switch between Focus Mode variants (Sentence, Paragraph, Off). |
 | **Dim** | Writing Surface | Text | Apply color interpolation to text outside the Active Region, fading it toward the background. |
 | **Launch** | Zani | Writing Window | Detect the terminal emulator and spawn a dedicated Writing Window with writing-optimized settings. |
 | **Render** | Writing Surface | Buffer | Transform the Buffer's text into styled, wrapped, positioned characters on the terminal screen. |
 | **Wrap** | Writing Surface | Text | Soft-wrap prose to fit the centered column (~60 characters). Custom implementation, not ratatui's Paragraph. |
-| **Scroll** | Writing Surface | Text | Move text relative to the viewport. In Typewriter Mode, text moves around a fixed cursor position. |
+| **Scroll** | Writing Surface | Text | Move text relative to the viewport. In Edge mode, the viewport adjusts when the cursor nears the edges. In Typewriter mode, text moves around a fixed cursor position. Governed by Scroll Mode, independent of Focus Mode. |
 | **Autosave** | Zani | Document | Persist the Buffer to disk automatically on a cadence or pause. |
 | **Summon** | Writer | Settings Layer / Chrome | Bring up hidden UI elements via hotkey. The inverse of the default hidden state. |
 | **Dismiss** | Writer | Settings Layer / Chrome | Hide summoned UI elements, returning to the bare writing state. |
@@ -61,6 +63,8 @@
 - The **App Shell** contains exactly one **Writing Surface**
 - A **Focus Mode** defines an **Active Region** within the visible text
 - **Dimming** applies to all text outside the **Active Region**
+- **Scroll Mode** and **Focus Mode** are orthogonal — neither influences the other
+- **Typewriter Mode** is a **Scroll Mode** variant; it contributes zero dimming
 - A **Palette** is constrained by the detected **Color Profile**
 - The **Writing Window** is spawned by **Launch**; **Inline Mode** skips it
 - **Autosave** persists the **Document** to disk; independent of **Git Integration**
@@ -79,7 +83,7 @@
 
 3. **No pure black or white. WCAG AA minimum.** The Palette never uses `#000000` or `#FFFFFF`. All foreground/background color pairs maintain at least a 4.5:1 contrast ratio (WCAG AA). Within these constraints, palettes are free to be warm, cool, vivid, subdued, or anything else.
 
-4. **Focus dimming is color interpolation, not opacity.** Dimmed text uses per-character RGB interpolation toward the background color. This requires only True Color support, not terminal transparency.
+4. **Focus dimming is color interpolation, not terminal opacity.** Dimmed text uses per-character RGB interpolation toward the background color. Internally, each character's dimming is expressed as an opacity factor (0.0–1.0) which governs the interpolation amount. This is a rendering calculation, not a terminal transparency feature.
 
 5. **The column is prose-width.** Text wraps at approximately 60 characters, centered in the terminal. Not configurable below 45 or above 80.
 
@@ -95,8 +99,18 @@
 
 11. **Graceful degradation, not feature gating.** If the terminal lacks True Color, Zani approximates with 256-color. If the terminal is unknown, Zani runs inline. If the recommended font isn't installed, Zani works with whatever font is present. Reduced capability, never failure.
 
+12. **Scroll Mode and Focus Mode are orthogonal.** Scroll Mode (Edge, Typewriter) controls how the viewport follows the cursor. Focus Mode (Off, Sentence, Paragraph) controls which text is dimmed. Neither influences the other.
+
+13. **Typewriter is a scroll behavior, not a dimming behavior.** Typewriter mode centers the cursor vertically. It contributes zero dimming. All dimming comes from Focus Mode.
+
+14. **Dimming animations chase the current visual state.** When the target opacity changes (cursor moves to a new sentence/paragraph), the animation starts from whatever the character's current rendered opacity is. There is no "from" state to recompute. This guarantees interruption-safe transitions with no visual discontinuity.
+
+15. **Dimming effects compose by multiplication.** If multiple dimming sources exist, each produces an opacity factor in [0.0, 1.0]. The final opacity is their product. This ensures independent sources can never brighten text — they can only dim further.
+
 ## Amendment Log
 
 | # | Date | Invariant | Change | Propagation |
 |---|------|-----------|--------|-------------|
 | 1 | 2026-02-26 | Invariant 9 | Changed from "Writing Window is the default" to "Writing Window is opt-in (`--window` flag)". Inline is now the default. | ADR-003 superseded by ADR-007. Writing Window scenarios updated. |
+| 2 | 2026-02-27 | Invariant 4 | Clarified: internal opacity factor (0.0–1.0) is a rendering calculation, not terminal transparency. | ADR-004 unchanged; ADR-008 added. |
+| 3 | 2026-02-27 | Invariants 12–15 | Added: Scroll/Focus orthogonality, Typewriter is scroll-only, chase-based animation, multiplicative dimming composition. | ADR-008 covers the full redesign. Focus Mode concept updated (Typewriter removed). Scroll Mode concept added. Fade Config concept added. |
