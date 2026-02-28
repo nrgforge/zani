@@ -64,6 +64,19 @@ pub fn dim_color(palette: &Palette, distance: usize) -> Color {
     apply_dimming(&palette.foreground, palette, distance)
 }
 
+/// Apply dimming to a foreground color using an opacity factor (0.0–1.0).
+/// opacity=1.0 returns base_fg unchanged. opacity=0.0 returns background.
+/// Intermediate values interpolate linearly toward the background.
+pub fn apply_dimming_with_opacity(base_fg: &Color, palette: &Palette, opacity: f64) -> Color {
+    if opacity >= 1.0 {
+        return *base_fg;
+    }
+    if opacity <= 0.0 {
+        return palette.background;
+    }
+    palette::interpolate(base_fg, &palette.background, 1.0 - opacity)
+}
+
 /// Find the sentence boundaries containing the cursor position.
 ///
 /// A sentence ends at [.!?] followed by whitespace, newline, or EOF.
@@ -625,5 +638,43 @@ mod tests {
     fn dim_layer_out_of_bounds_returns_one() {
         let layer = DimLayer::new(FadeConfig::default(), FadeConfig::default());
         assert!((layer.opacity(999) - 1.0).abs() < f64::EPSILON);
+    }
+
+    // === Task 4: apply_dimming_with_opacity tests ===
+
+    #[test]
+    fn apply_dimming_opacity_one_returns_base_color() {
+        let palette = Palette::default_palette();
+        let color = apply_dimming_with_opacity(&palette.foreground, &palette, 1.0);
+        assert_eq!(color, palette.foreground);
+    }
+
+    #[test]
+    fn apply_dimming_opacity_zero_returns_background() {
+        let palette = Palette::default_palette();
+        let color = apply_dimming_with_opacity(&palette.foreground, &palette, 0.0);
+        assert_eq!(color, palette.background);
+    }
+
+    #[test]
+    fn apply_dimming_opacity_half_is_midpoint() {
+        use ratatui::style::Color;
+        let palette = Palette::default_palette();
+        let color = apply_dimming_with_opacity(&palette.foreground, &palette, 0.5);
+        if let (Color::Rgb(fr, fg, fb), Color::Rgb(br, bg, bb), Color::Rgb(mr, mg, mb)) =
+            (palette.foreground, palette.background, color)
+        {
+            let expected_r = ((fr as f64 + br as f64) / 2.0).round() as u8;
+            assert!((mr as i16 - expected_r as i16).unsigned_abs() <= 1,
+                "Red channel: expected ~{expected_r}, got {mr}");
+        }
+    }
+
+    #[test]
+    fn apply_dimming_opacity_respects_accent_colors() {
+        let palette = Palette::default_palette();
+        let dimmed = apply_dimming_with_opacity(&palette.accent_heading, &palette, 0.6);
+        assert_ne!(dimmed, palette.accent_heading, "Should be dimmed");
+        assert_ne!(dimmed, palette.background, "Should not be fully dimmed");
     }
 }
