@@ -34,7 +34,6 @@ impl Easing {
 #[derive(Debug, Clone)]
 pub enum TransitionKind {
     Scroll { from: f64, to: f64 },
-    FocusDimming { from_line: usize, to_line: usize },
     Palette { from: Box<Palette>, to: Box<Palette> },
     OverlayOpacity { appearing: bool },
 }
@@ -118,19 +117,6 @@ impl AnimationManager {
             .find(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
             .and_then(|t| match &t.kind {
                 TransitionKind::Scroll { from, to } => Some((*from, *to)),
-                _ => None,
-            })
-    }
-
-    pub fn focus_progress(&self) -> Option<(f64, usize, usize)> {
-        self.transitions
-            .iter()
-            .find(|t| matches!(t.kind, TransitionKind::FocusDimming { .. }))
-            .and_then(|t| match &t.kind {
-                TransitionKind::FocusDimming {
-                    from_line,
-                    to_line,
-                } => Some((t.progress(), *from_line, *to_line)),
                 _ => None,
             })
     }
@@ -255,9 +241,9 @@ mod tests {
     }
 
     #[test]
-    fn same_kind_does_not_match_scroll_with_focus_dimming() {
+    fn same_kind_does_not_match_scroll_with_overlay() {
         let a = TransitionKind::Scroll { from: 0.0, to: 5.0 };
-        let b = TransitionKind::FocusDimming { from_line: 0, to_line: 3 };
+        let b = TransitionKind::OverlayOpacity { appearing: true };
         assert!(!a.same_kind(&b));
     }
 
@@ -331,18 +317,12 @@ mod tests {
             Easing::EaseOut,
         );
         m.start(
-            TransitionKind::FocusDimming { from_line: 0, to_line: 5 },
-            Duration::from_millis(150),
-            Easing::EaseOut,
-        );
-        m.start(
             TransitionKind::OverlayOpacity { appearing: true },
             Duration::from_millis(150),
             Easing::EaseOut,
         );
-        assert_eq!(m.transitions.len(), 3);
+        assert_eq!(m.transitions.len(), 2);
         assert!(m.scroll_progress().is_some());
-        assert!(m.focus_progress().is_some());
         assert!(m.overlay_progress().is_some());
     }
 }

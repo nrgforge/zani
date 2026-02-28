@@ -37,14 +37,12 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .scroll_offset(app.scroll_display.round() as usize)
         .cursor(app.cursor_line, app.cursor_col)
         .focus_mode(app.focus_mode)
-        .active_line(app.cursor_line)
-        .paragraph_bounds(app.paragraph_bounds())
         .sentence_bounds(app.sentence_bounds())
         .color_profile(app.color_profile)
         .vertical_offset(app.typewriter_vertical_offset)
         .selection(app.selection_range())
         .find_matches(find_ranges, find_current)
-        .focus_animation(app.animations.focus_progress());
+        .line_opacities(&[]);
 
     // Compute cursor position before render consumes the surface
     let visual_lines = surface.visual_lines();

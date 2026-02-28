@@ -24,10 +24,6 @@ pub struct WritingSurface<'a> {
     cursor: (usize, usize),
     /// Current Focus Mode variant.
     focus_mode: FocusMode,
-    /// The logical line containing the cursor (active region center).
-    active_line: usize,
-    /// Paragraph bounds (start, end) for paragraph focus mode.
-    paragraph_bounds: Option<(usize, usize)>,
     /// Sentence bounds (start, end) as absolute char indices for sentence focus mode.
     sentence_bounds: Option<(usize, usize)>,
     /// Terminal color capability for rendering.
@@ -42,8 +38,8 @@ pub struct WritingSurface<'a> {
     find_matches: Vec<(usize, usize, usize)>,
     /// The current (active) find match index, if any.
     find_current: Option<usize>,
-    /// Focus dimming animation: (progress, from_line, to_line).
-    focus_anim: Option<(f64, usize, usize)>,
+    /// Pre-computed opacity for each logical line (from DimLayer).
+    line_opacities: &'a [f64],
 }
 
 impl<'a> WritingSurface<'a> {
@@ -55,15 +51,13 @@ impl<'a> WritingSurface<'a> {
             scroll_offset: 0,
             cursor: (0, 0),
             focus_mode: FocusMode::Off,
-            active_line: 0,
-            paragraph_bounds: None,
             sentence_bounds: None,
             color_profile: ColorProfile::TrueColor,
             vertical_offset: 0,
             selection: None,
             find_matches: Vec::new(),
             find_current: None,
-            focus_anim: None,
+            line_opacities: &[],
         }
     }
 
@@ -84,16 +78,6 @@ impl<'a> WritingSurface<'a> {
 
     pub fn focus_mode(mut self, mode: FocusMode) -> Self {
         self.focus_mode = mode;
-        self
-    }
-
-    pub fn active_line(mut self, line: usize) -> Self {
-        self.active_line = line;
-        self
-    }
-
-    pub fn paragraph_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
-        self.paragraph_bounds = bounds;
         self
     }
 
@@ -123,8 +107,8 @@ impl<'a> WritingSurface<'a> {
         self
     }
 
-    pub fn focus_animation(mut self, anim: Option<(f64, usize, usize)>) -> Self {
-        self.focus_anim = anim;
+    pub fn line_opacities(mut self, opacities: &'a [f64]) -> Self {
+        self.line_opacities = opacities;
         self
     }
 
@@ -248,26 +232,11 @@ impl Widget for WritingSurface<'_> {
                 .unwrap_or(false);
             let md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
 
-            // Focus distance for this logical line (used for non-Sentence modes)
-            let line_distance = if use_sentence_dimming {
-                0 // unused; per-char distance computed below
-            } else if let Some((progress, from_line, to_line)) = self.focus_anim {
-                let old_dist = focus_mode::line_distance(
-                    self.focus_mode, vl.logical_line, from_line, self.paragraph_bounds,
-                );
-                let new_dist = focus_mode::line_distance(
-                    self.focus_mode, vl.logical_line, to_line, self.paragraph_bounds,
-                );
-                let blended = old_dist as f64 * (1.0 - progress) + new_dist as f64 * progress;
-                blended.round() as usize
-            } else {
-                focus_mode::line_distance(
-                    self.focus_mode,
-                    vl.logical_line,
-                    self.active_line,
-                    self.paragraph_bounds,
-                )
-            };
+            // Get the pre-computed line opacity for this logical line
+            let line_opacity = self.line_opacities
+                .get(vl.logical_line)
+                .copied()
+                .unwrap_or(1.0);
 
             // Absolute char offset for this logical line
             let abs_line_start = line_char_offsets
@@ -279,35 +248,31 @@ impl Widget for WritingSurface<'_> {
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
                 if x < area.right() && char_idx < chars.len() {
-                    // Compute per-character distance for Sentence mode
-                    let distance = if use_sentence_dimming {
+                    // Per-character opacity (sentence mask multiplied with line opacity)
+                    let char_opacity = if use_sentence_dimming {
                         let abs_idx = abs_line_start + char_idx;
                         let (s_start, s_end) = self.sentence_bounds.unwrap();
-                        if abs_idx >= s_start && abs_idx < s_end { 0 } else { 1 }
+                        let sentence_mask = if abs_idx >= s_start && abs_idx < s_end { 1.0 } else { 0.6 };
+                        line_opacity * sentence_mask
                     } else {
-                        line_distance
+                        line_opacity
                     };
 
                     // Resolve markdown style for this character
                     let style = if char_idx < md_styles.len() {
                         let resolved = md_styles[char_idx].resolve(self.palette);
-                        // Compose with focus dimming, respecting color profile
-                        if distance > 0 {
+                        if char_opacity < 1.0 {
                             match self.color_profile {
                                 ColorProfile::Basic => {
-                                    // Basic: use DIM modifier instead of color interpolation
                                     resolved.add_modifier(ratatui::style::Modifier::DIM)
                                 }
                                 _ => {
-                                    // TrueColor/Color256: interpolate, then map color
                                     let base_fg = resolved.fg.unwrap_or(self.palette.foreground);
-                                    let dimmed =
-                                        focus_mode::apply_dimming(&base_fg, self.palette, distance);
+                                    let dimmed = focus_mode::apply_dimming_with_opacity(&base_fg, self.palette, char_opacity);
                                     resolved.fg(self.color_profile.map_color(dimmed))
                                 }
                             }
                         } else {
-                            // Map foreground color for non-TrueColor profiles
                             let fg = resolved.fg.unwrap_or(self.palette.foreground);
                             resolved.fg(self.color_profile.map_color(fg))
                         }
@@ -388,7 +353,7 @@ mod tests {
         let surface = WritingSurface::new(&buffer, &palette)
             .column_width(60)
             .focus_mode(FocusMode::Sentence)
-            .active_line(0)
+            .line_opacities(&[1.0])
             .sentence_bounds(Some((7, 14)));
 
         let mut buf = RatatuiBuffer::empty(area);
@@ -542,11 +507,10 @@ mod tests {
         let palette = Palette::default_palette();
         let area = Rect::new(0, 0, 80, 5);
 
-        // Typewriter mode with active_line=5 means line 0 is dimmed
+        // Line opacity < 1.0 means line 0 is dimmed
         let surface = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Paragraph)
-            .active_line(5)
+            .line_opacities(&[0.6])
             .color_profile(ColorProfile::Basic);
 
         let mut buf = RatatuiBuffer::empty(area);
@@ -575,8 +539,7 @@ mod tests {
         for profile in [ColorProfile::TrueColor, ColorProfile::Color256, ColorProfile::Basic] {
             let surface = WritingSurface::new(&buffer, &palette)
                 .column_width(60)
-                .focus_mode(FocusMode::Paragraph)
-                .active_line(0)
+                .line_opacities(&[0.6])
                 .color_profile(profile);
             let mut buf = RatatuiBuffer::empty(area);
             surface.render(area, &mut buf);
@@ -584,54 +547,47 @@ mod tests {
         }
     }
 
-    // === Acceptance test: Focus animation blends distances without panic ===
+    // === Acceptance test: Different opacities produce different dimming levels ===
 
     #[test]
-    fn focus_animation_blends_distances() {
+    fn opacity_based_dimming_produces_different_colors() {
         let text = "Line 0\nLine 1\nLine 2\nLine 3\nLine 4";
         let buffer = Buffer::from_text(text);
         let palette = Palette::default_palette();
         let area = Rect::new(0, 0, 80, 5);
-        let x_offset = 10; // column_width 60 → left margin = (80-60)/2 = 10
+        let x_offset = 10; // column_width 60 -> left margin = (80-60)/2 = 10
 
-        // Without animation: active_line=4, so line 0 is distance 1 (dimmed)
-        let no_anim = WritingSurface::new(&buffer, &palette)
+        // Render with moderate dimming (opacity 0.5)
+        let moderate = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Sentence)
-            .active_line(4);
-        let mut buf_no_anim = RatatuiBuffer::empty(area);
-        no_anim.render(area, &mut buf_no_anim);
-        let line0_no_anim_fg = buf_no_anim[(x_offset, 0)].fg;
+            .line_opacities(&[0.5, 0.5, 0.5, 0.5, 0.5]);
+        let mut buf_moderate = RatatuiBuffer::empty(area);
+        moderate.render(area, &mut buf_moderate);
+        let line0_moderate_fg = buf_moderate[(x_offset, 0)].fg;
 
-        // With animation at progress=0.1 from line 0→4:
-        // Line 0: old_dist=0 (was active), new_dist=1 (not active)
-        // blended = 0*0.9 + 1*0.1 = 0.1, rounds to 0 (brighter than static distance 1)
-        let with_anim = WritingSurface::new(&buffer, &palette)
+        // Render with heavy dimming (opacity 0.2)
+        let heavy = WritingSurface::new(&buffer, &palette)
             .column_width(60)
-            .focus_mode(FocusMode::Sentence)
-            .active_line(4)
-            .focus_animation(Some((0.1, 0, 4)));
-        let mut buf_anim = RatatuiBuffer::empty(area);
-        with_anim.render(area, &mut buf_anim);
-        let line0_anim_fg = buf_anim[(x_offset, 0)].fg;
+            .line_opacities(&[0.2, 0.2, 0.2, 0.2, 0.2]);
+        let mut buf_heavy = RatatuiBuffer::empty(area);
+        heavy.render(area, &mut buf_heavy);
+        let line0_heavy_fg = buf_heavy[(x_offset, 0)].fg;
 
-        // During blend, line 0 should be less dimmed than without animation
-        // (distance 0 vs distance 1 → closer to foreground color)
+        // Different opacities should produce different colors
         assert_ne!(
-            line0_anim_fg, line0_no_anim_fg,
-            "Animation should change line 0's dimming level"
+            line0_moderate_fg, line0_heavy_fg,
+            "Different opacities should produce different dimming levels"
         );
 
-        // Verify the blended color is brighter (closer to foreground) than the static one.
-        // With TrueColor, foreground is brighter than background, so higher RGB values = less dimmed.
-        if let (Color::Rgb(ar, ag, ab), Color::Rgb(nr, ng, nb)) =
-            (line0_anim_fg, line0_no_anim_fg)
+        // Verify opacity 0.5 is brighter than opacity 0.2
+        if let (Color::Rgb(mr, mg, mb), Color::Rgb(hr, hg, hb)) =
+            (line0_moderate_fg, line0_heavy_fg)
         {
-            let anim_brightness = ar as u32 + ag as u32 + ab as u32;
-            let static_brightness = nr as u32 + ng as u32 + nb as u32;
+            let moderate_brightness = mr as u32 + mg as u32 + mb as u32;
+            let heavy_brightness = hr as u32 + hg as u32 + hb as u32;
             assert!(
-                anim_brightness > static_brightness,
-                "Blended line should be brighter (less dimmed): anim={anim_brightness} vs static={static_brightness}"
+                moderate_brightness > heavy_brightness,
+                "Opacity 0.5 should be brighter than 0.2: moderate={moderate_brightness} vs heavy={heavy_brightness}"
             );
         }
     }
