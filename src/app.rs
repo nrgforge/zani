@@ -475,8 +475,7 @@ impl App {
             }
             Action::AppendEndOfLine => {
                 // Move to end of line content, then enter Insert
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                self.cursor_col = if line_len > 0 { line_len - 1 } else { 0 };
+                self.cursor_col = self.line_content_len(self.cursor_line);
                 self.vim_mode = Mode::Insert;
             }
             Action::InsertChar(ch) => {
@@ -529,8 +528,12 @@ impl App {
                 self.cursor_col = 0;
             }
             Action::LineEnd => {
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                self.cursor_col = if line_len > 1 { line_len - 2 } else { 0 };
+                let content_len = self.line_content_len(self.cursor_line);
+                self.cursor_col = if self.vim_mode == Mode::Normal {
+                    content_len.saturating_sub(1)
+                } else {
+                    content_len
+                };
             }
             Action::GotoLastLine => {
                 self.cursor_line = self.buffer.len_lines().saturating_sub(1);
@@ -745,6 +748,33 @@ impl App {
         rope.line_to_char(self.cursor_line)
     }
 
+    /// Number of visible characters on the given line (excludes trailing newline).
+    fn line_content_len(&self, line: usize) -> usize {
+        let slice = self.buffer.line(line);
+        let len = slice.len_chars();
+        if len > 0 && slice.char(len - 1) == '\n' {
+            len - 1
+        } else {
+            len
+        }
+    }
+
+    /// Find the visual line index containing (cursor_line, cursor_col).
+    fn find_cursor_visual_index(&self, visual_lines: &[VisualLine]) -> Option<usize> {
+        for (i, vl) in visual_lines.iter().enumerate() {
+            if vl.logical_line == self.cursor_line
+                && self.cursor_col >= vl.char_start
+                && self.cursor_col < vl.char_end
+            {
+                return Some(i);
+            }
+        }
+        // Fallback: cursor at end of line or on empty line
+        visual_lines
+            .iter()
+            .rposition(|vl| vl.logical_line == self.cursor_line)
+    }
+
     fn move_cursor(&mut self, dir: vim_bindings::Direction) {
         match dir {
             vim_bindings::Direction::Left => {
@@ -753,24 +783,36 @@ impl App {
                 }
             }
             vim_bindings::Direction::Right => {
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                // Don't count the newline
-                let max_col = if line_len > 0 { line_len - 1 } else { 0 };
+                let max_col = self.line_content_len(self.cursor_line);
                 if self.cursor_col < max_col {
                     self.cursor_col += 1;
                 }
             }
-            vim_bindings::Direction::Up => {
-                if self.cursor_line > 0 {
-                    self.cursor_line -= 1;
-                    self.clamp_cursor_col();
-                }
-            }
-            vim_bindings::Direction::Down => {
-                if self.cursor_line + 1 < self.buffer.len_lines() {
-                    self.cursor_line += 1;
-                    self.clamp_cursor_col();
-                }
+            vim_bindings::Direction::Up | vim_bindings::Direction::Down => {
+                let visual_lines = self.visual_lines();
+                let Some(cur_idx) = self.find_cursor_visual_index(&visual_lines) else {
+                    return;
+                };
+
+                let target_idx = if dir == vim_bindings::Direction::Up {
+                    if cur_idx == 0 {
+                        return;
+                    }
+                    cur_idx - 1
+                } else {
+                    if cur_idx + 1 >= visual_lines.len() {
+                        return;
+                    }
+                    cur_idx + 1
+                };
+
+                let cur_vl = &visual_lines[cur_idx];
+                let target_vl = &visual_lines[target_idx];
+                let visual_col = self.cursor_col - cur_vl.char_start;
+                let target_len = target_vl.char_end - target_vl.char_start;
+
+                self.cursor_line = target_vl.logical_line;
+                self.cursor_col = target_vl.char_start + visual_col.min(target_len);
             }
         }
     }
@@ -901,8 +943,7 @@ impl App {
             KeyCode::Down => self.move_cursor(vim_bindings::Direction::Down),
             KeyCode::Home => self.cursor_col = 0,
             KeyCode::End => {
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                self.cursor_col = if line_len > 1 { line_len - 2 } else { 0 };
+                self.cursor_col = self.line_content_len(self.cursor_line);
             }
             _ => {}
         }
@@ -932,8 +973,7 @@ impl App {
     }
 
     fn clamp_cursor_col(&mut self) {
-        let line_len = self.buffer.line(self.cursor_line).len_chars();
-        let max_col = if line_len > 0 { line_len - 1 } else { 0 };
+        let max_col = self.line_content_len(self.cursor_line);
         if self.cursor_col > max_col {
             self.cursor_col = max_col;
         }
@@ -2257,7 +2297,7 @@ mod tests {
         app.cursor_col = 0;
         app.extend_selection(KeyCode::End);
         assert_eq!(app.selection_anchor, Some((0, 0)));
-        assert_eq!(app.cursor_col, 4); // 'o' position
+        assert_eq!(app.cursor_col, 5); // past 'o', end of visible content
     }
 
     #[test]
@@ -2737,6 +2777,59 @@ mod tests {
         assert!(app.sentence_fades.is_empty(), "Completed fade should be pruned");
     }
 
+    // === Cursor navigation tests ===
+
+    #[test]
+    fn cursor_right_reaches_end_of_last_line_without_newline() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        // Press right 5 times to reach past the last character
+        for _ in 0..5 {
+            app.move_cursor(vim_bindings::Direction::Right);
+        }
+
+        // In standard/insert mode, cursor should be at position 5 (after 'o')
+        assert_eq!(app.cursor_col, 5, "Cursor should be past the last character");
+    }
+
+    #[test]
+    fn line_end_reaches_end_of_line() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello\nworld");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        // LineEnd should go to position after last visible char
+        app.apply_action(Action::LineEnd);
+        assert_eq!(app.cursor_col, 5, "End should place cursor after 'o' on line with newline");
+
+        // Same for last line (no newline)
+        app.cursor_line = 1;
+        app.cursor_col = 0;
+        app.apply_action(Action::LineEnd);
+        assert_eq!(app.cursor_col, 5, "End should place cursor after 'd' on last line");
+    }
+
+    #[test]
+    fn clamp_cursor_col_allows_end_of_line() {
+        let mut app = App::new();
+        app.editing_mode = EditingMode::Standard;
+        app.vim_mode = Mode::Insert;
+        app.buffer = Buffer::from_text("hello");
+        app.cursor_line = 0;
+        app.cursor_col = 5; // past last char
+
+        app.clamp_cursor_col();
+        assert_eq!(app.cursor_col, 5, "Clamp should allow cursor past last char in insert mode");
+    }
+
     #[test]
     fn mode_switch_clears_fade_queue() {
         let mut app = App::new();
@@ -2756,5 +2849,136 @@ mod tests {
         app.focus_mode = FocusMode::Off;
         app.update_dim_layers();
         assert!(app.sentence_fades.is_empty(), "Off mode should clear all fades");
+    }
+
+    // === Visual-line cursor navigation tests ===
+
+    /// Helper: create an App with given text and column_width, cursor at (0, 0).
+    fn app_with_wrap(text: &str, width: u16) -> App {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text(text);
+        app.column_width = width;
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app
+    }
+
+    #[test]
+    fn visual_nav_down_within_wrapped_line() {
+        // "abcde fghij" at width 6 wraps to:
+        //   vl0: logical 0, chars 0..6  ("abcde ")  — actually let's use a clearer example
+        // "hello world foo" at width 6:
+        //   vl0: logical 0, 0..6 "hello "
+        //   vl1: logical 0, 6..12 "world "
+        //   vl2: logical 0, 12..15 "foo"
+        let mut app = app_with_wrap("hello world foo", 6);
+        app.cursor_col = 0; // on vl0
+
+        app.move_cursor(vim_bindings::Direction::Down);
+        // Should move to vl1, same logical line
+        assert_eq!(app.cursor_line, 0, "stays on same logical line");
+        assert_eq!(app.cursor_col, 6, "moved to start of next visual line");
+    }
+
+    #[test]
+    fn visual_nav_up_within_wrapped_line() {
+        let mut app = app_with_wrap("hello world foo", 6);
+        // Start on second visual line
+        app.cursor_col = 6; // vl1 start
+
+        app.move_cursor(vim_bindings::Direction::Up);
+        assert_eq!(app.cursor_line, 0, "stays on same logical line");
+        assert_eq!(app.cursor_col, 0, "moved to start of first visual line");
+    }
+
+    #[test]
+    fn visual_nav_down_crosses_logical_line() {
+        let mut app = app_with_wrap("short\nother", 60);
+        // Width 60 means no wrapping; two visual lines, one per logical line
+        app.cursor_col = 2;
+
+        app.move_cursor(vim_bindings::Direction::Down);
+        assert_eq!(app.cursor_line, 1, "moved to next logical line");
+        assert_eq!(app.cursor_col, 2, "preserved visual column");
+    }
+
+    #[test]
+    fn visual_nav_clamps_col_on_shorter_target() {
+        let mut app = app_with_wrap("longline\nhi", 60);
+        app.cursor_col = 7; // near end of "longline"
+
+        app.move_cursor(vim_bindings::Direction::Down);
+        assert_eq!(app.cursor_line, 1);
+        // "hi" has length 2, so col should clamp to 2
+        assert_eq!(app.cursor_col, 2, "clamped to end of shorter line");
+    }
+
+    #[test]
+    fn visual_nav_up_on_first_line_is_noop() {
+        let mut app = app_with_wrap("hello\nworld", 60);
+        app.cursor_col = 3;
+
+        app.move_cursor(vim_bindings::Direction::Up);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 3, "cursor unchanged");
+    }
+
+    #[test]
+    fn visual_nav_down_on_last_line_is_noop() {
+        let mut app = app_with_wrap("hello\nworld", 60);
+        app.cursor_line = 1;
+        app.cursor_col = 3;
+
+        app.move_cursor(vim_bindings::Direction::Down);
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 3, "cursor unchanged");
+    }
+
+    #[test]
+    fn visual_nav_through_empty_line() {
+        let mut app = app_with_wrap("above\n\nbelow", 60);
+        app.cursor_col = 3;
+
+        // Down from "above" -> empty line
+        app.move_cursor(vim_bindings::Direction::Down);
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0, "empty line clamps to 0");
+
+        // Down from empty line -> "below"
+        app.move_cursor(vim_bindings::Direction::Down);
+        assert_eq!(app.cursor_line, 2);
+        assert_eq!(app.cursor_col, 0, "visual col was 0 from empty line");
+    }
+
+    #[test]
+    fn visual_nav_traverses_all_visual_lines_of_wrapped_paragraph() {
+        // "hello world foo" at width 6 produces 3 visual lines, all logical line 0
+        let mut app = app_with_wrap("hello world foo", 6);
+
+        // Collect cursor positions going down
+        let mut positions = vec![(app.cursor_line, app.cursor_col)];
+        for _ in 0..5 {
+            let prev = (app.cursor_line, app.cursor_col);
+            app.move_cursor(vim_bindings::Direction::Down);
+            let curr = (app.cursor_line, app.cursor_col);
+            if curr == prev {
+                break; // hit bottom
+            }
+            positions.push(curr);
+        }
+
+        // Should have visited 3 visual lines
+        assert_eq!(positions.len(), 3, "should visit all 3 visual lines");
+        // All on same logical line
+        assert!(positions.iter().all(|(l, _)| *l == 0), "all on logical line 0");
+        // Columns should be ascending
+        assert!(positions[0].1 < positions[1].1);
+        assert!(positions[1].1 < positions[2].1);
+
+        // Now go back up through all of them
+        for _ in 0..2 {
+            app.move_cursor(vim_bindings::Direction::Up);
+        }
+        assert_eq!(app.cursor_col, 0, "back at start");
     }
 }
