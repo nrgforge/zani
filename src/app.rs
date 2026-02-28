@@ -8,7 +8,7 @@ use crate::color_profile::ColorProfile;
 use crate::draft_name;
 use crate::editing_mode::EditingMode;
 use crate::find::FindState;
-use crate::focus_mode::{self, DimLayer, FadeConfig, FocusMode, paragraph_target_opacities};
+use crate::focus_mode::{self, DimLayer, FadeConfig, FocusMode, LineOpacity, paragraph_target_opacities};
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 use crate::smart_typography;
@@ -102,6 +102,11 @@ pub struct App {
     pub animations: AnimationManager,
     pub paragraph_dim: DimLayer,
     pub sentence_dim: DimLayer,
+    /// Full bounds of the last known sentence (to detect genuine changes).
+    last_sentence_bounds: Option<(usize, usize)>,
+    /// Queue of sentences fading out, each with its own animation.
+    /// (char_start, char_end, animated opacity).
+    sentence_fades: Vec<(usize, usize, LineOpacity)>,
 }
 
 impl Default for App {
@@ -150,8 +155,10 @@ impl App {
             ),
             sentence_dim: DimLayer::new(
                 FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
-                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
+                FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
             ),
+            last_sentence_bounds: None,
+            sentence_fades: Vec::new(),
         }
     }
 
@@ -1005,6 +1012,8 @@ impl App {
                 let targets = vec![1.0; line_count];
                 self.paragraph_dim.update_targets(&targets);
                 self.sentence_dim.update_targets(&targets);
+                self.last_sentence_bounds = None;
+                self.sentence_fades.clear();
             }
             FocusMode::Paragraph => {
                 let targets = paragraph_target_opacities(
@@ -1013,6 +1022,8 @@ impl App {
                 );
                 self.paragraph_dim.update_targets(&targets);
                 self.sentence_dim.update_targets(&vec![1.0; line_count]);
+                self.last_sentence_bounds = None;
+                self.sentence_fades.clear();
             }
             FocusMode::Sentence => {
                 let targets = paragraph_target_opacities(
@@ -1020,11 +1031,58 @@ impl App {
                     self.paragraph_bounds(),
                 );
                 self.paragraph_dim.update_targets(&targets);
-                // Sentence layer is handled per-character in the renderer via sentence_bounds.
-                // At the line level, all lines get 1.0 from the sentence layer.
+
+                let current_bounds = self.sentence_bounds();
+                let current_start = current_bounds.map(|(s, _)| s);
+                let last_start = self.last_sentence_bounds.map(|(s, _)| s);
+
+                // Detect genuine sentence change (start index changed).
+                if current_start != last_start {
+                    // Check if we're returning to any currently-fading sentence
+                    let returning_idx = current_bounds.and_then(|(cs, _)| {
+                        self.sentence_fades.iter().position(|(fs, _, _)| *fs == cs)
+                    });
+
+                    if let Some(idx) = returning_idx {
+                        // Reverse that entry: fade back in (current → 1.0, 150ms)
+                        self.sentence_fades[idx].2.set_target(
+                            1.0,
+                            FadeConfig {
+                                duration: Duration::from_millis(150),
+                                easing: crate::animation::Easing::EaseOut,
+                            },
+                        );
+                    } else if let Some((old_start, old_end)) = self.last_sentence_bounds {
+                        // Push a new fade for the sentence we just left
+                        let mut opacity = LineOpacity::new(1.0);
+                        opacity.set_target(
+                            0.6,
+                            FadeConfig {
+                                duration: Duration::from_millis(1800),
+                                easing: crate::animation::Easing::EaseOut,
+                            },
+                        );
+                        self.sentence_fades.push((old_start, old_end, opacity));
+                    }
+                }
+                self.last_sentence_bounds = current_bounds;
+
+                // Prune completed fades
+                self.sentence_fades.retain(|(_, _, o)| o.is_animating());
+
+                // Sentence dimming is handled per-character by the renderer.
+                // Keep sentence_dim at 1.0 so it doesn't double-dim.
                 self.sentence_dim.update_targets(&vec![1.0; line_count]);
             }
         }
+    }
+
+    /// Snapshot of all in-flight sentence fades: (char_start, char_end, current_opacity).
+    pub fn sentence_fade_snapshot(&self) -> Vec<(usize, usize, f64)> {
+        self.sentence_fades
+            .iter()
+            .map(|(s, e, o)| (*s, *e, o.current_opacity()))
+            .collect()
     }
 
     /// Compute final per-line opacities for the renderer (product of all layers).
@@ -1037,7 +1095,9 @@ impl App {
 
     /// Whether any dimming layer is still animating.
     pub fn dim_animating(&self) -> bool {
-        self.paragraph_dim.is_animating() || self.sentence_dim.is_animating()
+        self.paragraph_dim.is_animating()
+            || self.sentence_dim.is_animating()
+            || self.sentence_fades.iter().any(|(_, _, o)| o.is_animating())
     }
 
     /// Compute visual lines for the current buffer and column width.
@@ -2527,6 +2587,32 @@ mod tests {
         assert_eq!(opacities.len(), 4);
         assert!((opacities[0] - 1.0).abs() < f64::EPSILON, "Cursor line should be bright");
         assert!(opacities[2] < 1.0, "Other paragraph should be dimmed");
+    }
+
+    #[test]
+    fn sentence_fade_animates_on_sentence_change() {
+        let mut app = App::new();
+        // Two sentences on separate lines
+        app.buffer = Buffer::from_text("First sentence.\nSecond sentence.");
+        app.focus_mode = FocusMode::Sentence;
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        app.update_dim_layers();
+
+        // No fades in progress initially
+        assert!(app.sentence_fades.is_empty());
+
+        // Move cursor to line 1 (second sentence)
+        app.cursor_line = 1;
+        app.cursor_col = 0;
+        app.update_dim_layers();
+
+        // One fade should be queued for the old sentence
+        assert_eq!(app.sentence_fades.len(), 1, "should have one fading sentence");
+        let snap = app.sentence_fade_snapshot();
+        assert!(snap[0].2 > 0.9, "Opacity should be near 1.0 right after change");
+        assert!(app.dim_animating(), "should be animating");
     }
 
     #[test]

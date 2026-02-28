@@ -26,6 +26,8 @@ pub struct WritingSurface<'a> {
     focus_mode: FocusMode,
     /// Sentence bounds (start, end) as absolute char indices for sentence focus mode.
     sentence_bounds: Option<(usize, usize)>,
+    /// Sentences currently fading out: (char_start, char_end, current_opacity).
+    sentence_fades: &'a [(usize, usize, f64)],
     /// Terminal color capability for rendering.
     color_profile: ColorProfile,
     /// Vertical offset (rows from top) to start rendering content.
@@ -52,6 +54,7 @@ impl<'a> WritingSurface<'a> {
             cursor: (0, 0),
             focus_mode: FocusMode::Off,
             sentence_bounds: None,
+            sentence_fades: &[],
             color_profile: ColorProfile::TrueColor,
             vertical_offset: 0,
             selection: None,
@@ -83,6 +86,11 @@ impl<'a> WritingSurface<'a> {
 
     pub fn sentence_bounds(mut self, bounds: Option<(usize, usize)>) -> Self {
         self.sentence_bounds = bounds;
+        self
+    }
+
+    pub fn sentence_fades(mut self, fades: &'a [(usize, usize, f64)]) -> Self {
+        self.sentence_fades = fades;
         self
     }
 
@@ -248,12 +256,26 @@ impl Widget for WritingSurface<'_> {
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
                 if x < area.right() && char_idx < chars.len() {
-                    // Per-character opacity (sentence mask multiplied with line opacity)
+                    // Per-character opacity with animated sentence transitions.
+                    // Check fading sentences FIRST so fade-in animations are
+                    // visible even when the chars are in the current sentence.
                     let char_opacity = if use_sentence_dimming {
                         let abs_idx = abs_line_start + char_idx;
-                        let (s_start, s_end) = self.sentence_bounds.unwrap();
-                        let sentence_mask = if abs_idx >= s_start && abs_idx < s_end { 1.0 } else { 0.6 };
-                        line_opacity * sentence_mask
+                        let fade_hit = self.sentence_fades.iter()
+                            .find(|(fs, fe, _)| abs_idx >= *fs && abs_idx < *fe)
+                            .map(|(_, _, opacity)| *opacity);
+
+                        if let Some(opacity) = fade_hit {
+                            line_opacity * opacity
+                        } else {
+                            let (s_start, s_end) = self.sentence_bounds.unwrap();
+                            let in_current = abs_idx >= s_start && abs_idx < s_end;
+                            if in_current {
+                                line_opacity
+                            } else {
+                                line_opacity * 0.6
+                            }
+                        }
                     } else {
                         line_opacity
                     };

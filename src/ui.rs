@@ -33,12 +33,14 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
 
     // Build Writing Surface
     let line_opacities = app.line_opacities();
+    let sentence_fades = app.sentence_fade_snapshot();
     let surface = WritingSurface::new(&app.buffer, &effective)
         .column_width(app.column_width)
         .scroll_offset(app.scroll_display.round() as usize)
         .cursor(app.cursor_line, app.cursor_col)
         .focus_mode(app.focus_mode)
         .sentence_bounds(app.sentence_bounds())
+        .sentence_fades(&sentence_fades)
         .color_profile(app.color_profile)
         .vertical_offset(app.typewriter_vertical_offset)
         .selection(app.selection_range())

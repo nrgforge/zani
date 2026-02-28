@@ -275,6 +275,7 @@ impl DimLayer {
     pub fn is_animating(&self) -> bool {
         self.lines.iter().any(|lo| lo.is_animating())
     }
+
 }
 
 #[cfg(test)]
