@@ -266,6 +266,93 @@ impl LineOpacity {
     }
 }
 
+/// Compute target opacities for the paragraph dimming layer.
+/// `line_count` is the total number of logical lines.
+/// `paragraph_bounds` is (start_line, end_line) inclusive.
+pub fn paragraph_target_opacities(
+    line_count: usize,
+    paragraph_bounds: Option<(usize, usize)>,
+) -> Vec<f64> {
+    if line_count == 0 {
+        return Vec::new();
+    }
+    let Some((para_start, para_end)) = paragraph_bounds else {
+        return vec![1.0; line_count];
+    };
+    let mut targets = Vec::with_capacity(line_count);
+    for i in 0..line_count {
+        if i >= para_start && i <= para_end {
+            targets.push(1.0);
+        } else {
+            let dist = if i < para_start {
+                para_start - i
+            } else {
+                i - para_end
+            };
+            targets.push(match dist {
+                1..=3 => 0.6,
+                4..=6 => 0.35,
+                _ => 0.2,
+            });
+        }
+    }
+    targets
+}
+
+/// Manages a vector of `LineOpacity` values. Each layer independently
+/// tracks and animates per-line opacities.
+#[derive(Debug, Clone)]
+pub struct DimLayer {
+    lines: Vec<LineOpacity>,
+    fade_in: FadeConfig,
+    fade_out: FadeConfig,
+}
+
+impl DimLayer {
+    /// Create a DimLayer with empty lines and the given fade configurations.
+    pub fn new(fade_in: FadeConfig, fade_out: FadeConfig) -> Self {
+        Self {
+            lines: Vec::new(),
+            fade_in,
+            fade_out,
+        }
+    }
+
+    /// Resize the internal vec to match targets length.
+    /// For new lines, create LineOpacity already at the target value (no animation).
+    /// For existing lines where the target changed, start a chase animation using
+    /// fade_in if brightening, fade_out if dimming.
+    pub fn update_targets(&mut self, targets: &[f64]) {
+        // Grow if needed
+        while self.lines.len() < targets.len() {
+            let idx = self.lines.len();
+            self.lines.push(LineOpacity::new(targets[idx]));
+        }
+        // Shrink if needed
+        self.lines.truncate(targets.len());
+        // Update existing lines
+        for (i, &target) in targets.iter().enumerate() {
+            let current = self.lines[i].current_opacity();
+            let config = if target > current {
+                self.fade_in.clone()
+            } else {
+                self.fade_out.clone()
+            };
+            self.lines[i].set_target(target, config);
+        }
+    }
+
+    /// Return the current animated opacity for a line, or 1.0 if out of bounds.
+    pub fn opacity(&self, line: usize) -> f64 {
+        self.lines.get(line).map_or(1.0, |lo| lo.current_opacity())
+    }
+
+    /// True if any line is still animating.
+    pub fn is_animating(&self) -> bool {
+        self.lines.iter().any(|lo| lo.is_animating())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +558,72 @@ mod tests {
             "start_value should be the mid-animation opacity (between 0 and 1), got {}",
             lo.start_value
         );
+    }
+
+    // === Task 3: paragraph_target_opacities and DimLayer tests ===
+
+    #[test]
+    fn paragraph_target_opacities_active_paragraph_is_bright() {
+        let targets = paragraph_target_opacities(5, Some((1, 3)));
+        assert!((targets[1] - 1.0).abs() < f64::EPSILON);
+        assert!((targets[2] - 1.0).abs() < f64::EPSILON);
+        assert!((targets[3] - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn paragraph_target_opacities_outside_is_dimmed() {
+        let targets = paragraph_target_opacities(5, Some((1, 3)));
+        assert!((targets[0] - 0.6).abs() < 0.01);
+        assert!((targets[4] - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn paragraph_target_opacities_no_bounds_all_bright() {
+        let targets = paragraph_target_opacities(5, None);
+        for t in &targets {
+            assert!((t - 1.0).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn paragraph_target_opacities_far_lines_more_dimmed() {
+        // 20 lines, paragraph at 10-12
+        let targets = paragraph_target_opacities(20, Some((10, 12)));
+        // Line 0 is 10 lines away — should be 0.2
+        assert!((targets[0] - 0.2).abs() < 0.01);
+        // Line 8 is 2 lines away — should be 0.6
+        assert!((targets[8] - 0.6).abs() < 0.01);
+        // Line 5 is 5 lines away — should be 0.35
+        assert!((targets[5] - 0.35).abs() < 0.01);
+    }
+
+    #[test]
+    fn dim_layer_computes_paragraph_opacities() {
+        let mut layer = DimLayer::new(FadeConfig::default(), FadeConfig::default());
+        let targets = paragraph_target_opacities(5, Some((1, 3)));
+        layer.update_targets(&targets);
+        assert!((layer.opacity(0) - 0.6).abs() < 0.01);
+        assert!((layer.opacity(1) - 1.0).abs() < f64::EPSILON);
+        assert!((layer.opacity(2) - 1.0).abs() < f64::EPSILON);
+        assert!((layer.opacity(3) - 1.0).abs() < f64::EPSILON);
+        assert!((layer.opacity(4) - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn dim_layer_is_animating_after_target_change() {
+        let mut layer = DimLayer::new(FadeConfig::default(), FadeConfig::default());
+        let targets_a = vec![1.0, 1.0, 0.6];
+        layer.update_targets(&targets_a);
+        assert!(!layer.is_animating(), "Should not animate when first initialized");
+
+        let targets_b = vec![0.6, 1.0, 1.0];
+        layer.update_targets(&targets_b);
+        assert!(layer.is_animating(), "Should animate after target changes");
+    }
+
+    #[test]
+    fn dim_layer_out_of_bounds_returns_one() {
+        let layer = DimLayer::new(FadeConfig::default(), FadeConfig::default());
+        assert!((layer.opacity(999) - 1.0).abs() < f64::EPSILON);
     }
 }
