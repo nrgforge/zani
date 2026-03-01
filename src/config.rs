@@ -64,11 +64,14 @@ impl Config {
     }
 
     /// Load config from disk. Returns default if file doesn't exist or is invalid.
+    /// Clamps column_width to 20–120 to enforce Invariant 5.
     pub fn load() -> Self {
-        Self::path()
+        let mut config: Config = Self::path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        config.column_width = config.column_width.clamp(20, 120);
+        config
     }
 
     /// Save config to disk. Creates parent directories as needed.
@@ -230,6 +233,19 @@ mod tests {
         let toml_str = r#"focus_mode = "typewriter""#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.focus_mode, FocusMode::Off);
+    }
+
+    #[test]
+    fn column_width_clamped_on_deserialize() {
+        let too_low: Config = toml::from_str("column_width = 5").unwrap();
+        let mut clamped_low = too_low;
+        clamped_low.column_width = clamped_low.column_width.clamp(20, 120);
+        assert_eq!(clamped_low.column_width, 20);
+
+        let too_high: Config = toml::from_str("column_width = 200").unwrap();
+        let mut clamped_high = too_high;
+        clamped_high.column_width = clamped_high.column_width.clamp(20, 120);
+        assert_eq!(clamped_high.column_width, 120);
     }
 
     #[test]

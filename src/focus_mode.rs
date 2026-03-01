@@ -17,17 +17,6 @@ pub enum FocusMode {
     Paragraph,
 }
 
-impl FocusMode {
-    /// Cycle to the next variant: Off → Sentence → Paragraph → Off.
-    pub fn next(self) -> Self {
-        match self {
-            Self::Off => Self::Sentence,
-            Self::Sentence => Self::Paragraph,
-            Self::Paragraph => Self::Off,
-        }
-    }
-}
-
 /// Apply dimming to a foreground color using an opacity factor (0.0–1.0).
 /// opacity=1.0 returns base_fg unchanged. opacity=0.0 returns background.
 /// Intermediate values interpolate linearly toward the background.
@@ -96,6 +85,61 @@ pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize
         }
         // Hard boundary: double newline
         if chars[end] == '\n' && end + 1 < len && chars[end + 1] == '\n' {
+            break;
+        }
+        end += 1;
+    }
+
+    Some((start, end))
+}
+
+/// Find sentence boundaries using Buffer's O(log n) char access instead of
+/// allocating a full String + Vec<char>.
+pub fn sentence_bounds_in_buffer(buffer: &crate::buffer::Buffer, cursor_idx: usize) -> Option<(usize, usize)> {
+    let len = buffer.len_chars();
+    if len == 0 {
+        return None;
+    }
+
+    let cursor_idx = cursor_idx.min(len.saturating_sub(1));
+
+    // Find sentence start: scan backward from cursor
+    let mut start = cursor_idx;
+    while start > 0 {
+        let prev = start - 1;
+        let prev_ch = buffer.char_at(prev);
+        let start_ch = buffer.char_at(start);
+        // Hard boundary: double newline (empty line)
+        if prev_ch == '\n' && start < len && start_ch == '\n' {
+            start += 1;
+            break;
+        }
+        // Sentence boundary: [.!?] followed by whitespace
+        if prev > 0 && is_sentence_end(buffer.char_at(prev - 1)) && prev_ch.is_whitespace() {
+            start = prev;
+            while start < cursor_idx && buffer.char_at(start).is_whitespace() && buffer.char_at(start) != '\n' {
+                start += 1;
+            }
+            break;
+        }
+        if is_sentence_end(prev_ch) && start_ch.is_whitespace() {
+            while start < cursor_idx && buffer.char_at(start).is_whitespace() && buffer.char_at(start) != '\n' {
+                start += 1;
+            }
+            break;
+        }
+        start = prev;
+    }
+
+    // Find sentence end: scan forward from cursor
+    let mut end = cursor_idx;
+    while end < len {
+        let end_ch = buffer.char_at(end);
+        if is_sentence_end(end_ch) {
+            end += 1;
+            break;
+        }
+        if end_ch == '\n' && end + 1 < len && buffer.char_at(end + 1) == '\n' {
             break;
         }
         end += 1;
@@ -332,17 +376,6 @@ mod tests {
     }
 
     // === Acceptance test: Focus Mode toggle ===
-
-    #[test]
-    fn focus_mode_cycles() {
-        let mode = FocusMode::Off;
-        let mode = mode.next();
-        assert_eq!(mode, FocusMode::Sentence);
-        let mode = mode.next();
-        assert_eq!(mode, FocusMode::Paragraph);
-        let mode = mode.next();
-        assert_eq!(mode, FocusMode::Off);
-    }
 
     // === Task 2: FadeConfig and LineOpacity tests ===
 

@@ -9,10 +9,11 @@ use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 use crate::vim_bindings::Mode;
+use crate::wrap::VisualLine;
 use crate::writing_surface::WritingSurface;
 
 /// Render the application state to a frame.
-pub fn draw(frame: &mut ratatui::Frame, app: &App) {
+pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) {
     let area = frame.area();
     if area.height < 1 {
         return; // terminal too small
@@ -45,18 +46,18 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App) {
         .vertical_offset(app.typewriter_vertical_offset)
         .selection(app.selection_range())
         .find_matches(find_ranges, find_current)
-        .line_opacities(&line_opacities);
+        .line_opacities(&line_opacities)
+        .precomputed_visual_lines(visual_lines);
 
     // Compute cursor position before render consumes the surface
-    let visual_lines = surface.visual_lines();
-    let cursor_pos = surface.cursor_visual_position(&visual_lines);
+    let cursor_pos = surface.cursor_visual_position(visual_lines);
     let x_offset = surface.center_offset(surface_area.width);
 
     // Render surface
     frame.render_widget(surface, surface_area);
 
     // Settings Layer overlay (Invariant 1: only visible when summoned)
-    if app.settings_visible {
+    if app.settings.visible {
         draw_settings_layer(frame, app, area);
     }
 
@@ -255,15 +256,20 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         }
     };
     let dirty_str = if app.dirty { " [+]" } else { "" };
+    let error_str = if let Some(ref err) = app.save_error {
+        format!("  Save failed: {}", err)
+    } else {
+        String::new()
+    };
     rows.push(SettingsRow {
-        text: format!("  {}{}", mode_str, dirty_str),
+        text: format!("  {}{}{}", mode_str, dirty_str, error_str),
         cursor_index: None,
         swatches: vec![],
         is_heading: false,
     });
 
     // Determine preview palette: if cursor is on a palette row, preview those colors
-    let preview_palette = match SettingsItem::at(app.settings_cursor) {
+    let preview_palette = match SettingsItem::at(app.settings.cursor) {
         Some(SettingsItem::Palette(idx)) => {
             all_palettes.get(idx).cloned().unwrap_or_else(|| app.palette.clone())
         }
@@ -303,10 +309,10 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             let is_file_row = row.cursor_index
                 .and_then(SettingsItem::at)
                 .is_some_and(|item| item == SettingsItem::File);
-            if app.rename_active && is_file_row {
+            if app.rename.active && is_file_row {
                 let prefix = "  File        ";
-                let buf = &app.rename_buf;
-                let cursor_pos = app.rename_cursor;
+                let buf = &app.rename.buf;
+                let cursor_pos = app.rename.cursor;
                 let chars: Vec<char> = buf.chars().collect();
 
                 // Available width for filename inside overlay (border + prefix)
@@ -363,7 +369,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                 return Line::from(spans);
             }
 
-            let style = if row.cursor_index == Some(app.settings_cursor) {
+            let style = if row.cursor_index == Some(app.settings.cursor) {
                 cursor_style
             } else if row.is_heading {
                 Style::default()
@@ -421,9 +427,10 @@ mod tests {
     fn render_app(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
+        let visual_lines = app.visual_lines();
         terminal
             .draw(|frame| {
-                draw(frame, app);
+                draw(frame, &app, &visual_lines);
             })
             .unwrap();
         terminal.backend().buffer().clone()
@@ -584,6 +591,20 @@ mod tests {
         assert!(
             text.contains("[+]"),
             "Settings Layer should show dirty indicator '[+]'"
+        );
+    }
+
+    #[test]
+    fn settings_layer_shows_save_error() {
+        let mut app = App::new();
+        app.save_error = Some("Permission denied".to_string());
+        app.toggle_settings();
+        let buf = render_app(&app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("Save failed"),
+            "Settings Layer should show save error"
         );
     }
 
@@ -844,7 +865,7 @@ mod tests {
 
         // Move cursor to Inkwell (next palette after Ember)
         app.settings_nav_down();
-        assert_eq!(app.settings_cursor, 3); // Inkwell at index 3
+        assert_eq!(app.settings.cursor, 3); // Inkwell at index 3
 
         let inkwell = Palette::inkwell();
         let buf = render_app(&app, 80, 24);
@@ -878,7 +899,7 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        app.settings_cursor = 11; // File
+        app.settings.cursor = 11; // File
         app.rename_open();
 
         let buf = render_app(&app, 80, 30);
@@ -901,11 +922,11 @@ mod tests {
         app.toggle_settings();
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
-        app.settings_cursor = 11; // File
+        app.settings.cursor = 11; // File
         app.rename_open();
         // Cursor at end (position 6), so cursor char is a space
         // Move cursor to start to test on 'a'
-        app.rename_cursor = 0;
+        app.rename.cursor = 0;
 
         let buf = render_app(&app, 80, 24);
 

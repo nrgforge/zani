@@ -48,8 +48,12 @@ pub enum Action {
     LineStart,
     /// Move to end of line.
     LineEnd,
+    /// Move to first line of file.
+    GotoFirstLine,
     /// Move to last line of file.
     GotoLastLine,
+    /// Delete the entire current line.
+    DeleteLine,
     /// Word forward (next word start).
     WordForward,
     /// Word backward (previous word start).

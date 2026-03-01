@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crossterm::event::{KeyCode, KeyModifiers};
+
 use crate::animation::AnimationManager;
 use crate::buffer::Buffer;
 use crate::clipboard;
+use crate::config::Config;
 use crate::color_profile::ColorProfile;
 use crate::draft_name;
 use crate::editing_mode::EditingMode;
@@ -13,7 +16,7 @@ use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 use crate::smart_typography;
 use crate::undo::UndoHistory;
-use crate::vim_bindings::{self, Action, CursorShape, Mode};
+use crate::vim_bindings::{self, Action, CursorShape, Direction, Mode};
 use crate::wrap::{self, VisualLine};
 
 /// A selectable item in the Settings Layer.
@@ -59,7 +62,40 @@ impl SettingsItem {
     }
 }
 
+/// State for the inline rename overlay.
+pub struct RenameState {
+    pub active: bool,
+    pub buf: String,
+    pub cursor: usize,
+}
+
+impl RenameState {
+    /// Move rename cursor left.
+    pub fn cursor_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    /// Move rename cursor right.
+    pub fn cursor_right(&mut self) {
+        if self.cursor < self.buf.chars().count() {
+            self.cursor += 1;
+        }
+    }
+}
+
+/// State for the Settings Layer overlay.
+pub struct SettingsState {
+    pub visible: bool,
+    pub cursor: usize,
+}
+
 /// Application state.
+///
+/// Cursor, scroll, and selection fields live here rather than in a separate
+/// struct because 15+ methods read and write them together with buffer state.
+/// Extracting them would add indirection without reducing coupling.
 pub struct App {
     pub buffer: Buffer,
     pub palette: Palette,
@@ -73,18 +109,16 @@ pub struct App {
     pub scroll_offset: usize,
     pub scroll_display: f64,
     pub column_width: u16,
-    pub chrome_visible: bool,
-    pub settings_visible: bool,
-    pub settings_cursor: usize,
+    pub settings: SettingsState,
     pub should_quit: bool,
     pub file_path: Option<PathBuf>,
     pub is_scratch: bool,
     pub dirty: bool,
     pub last_save: Option<Instant>,
     pub autosave_interval: Duration,
-    pub rename_active: bool,
-    pub rename_buf: String,
-    pub rename_cursor: usize,
+    /// Last save error message, surfaced in the settings layer.
+    pub save_error: Option<String>,
+    pub rename: RenameState,
     /// Pending first key of a multi-key Normal mode sequence (e.g., 'g' for gg, 'd' for dd).
     pub pending_normal_key: Option<char>,
     /// Vertical offset for Typewriter mode rendering. When the cursor is near
@@ -101,7 +135,6 @@ pub struct App {
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
     pub paragraph_dim: DimLayer,
-    pub sentence_dim: DimLayer,
     /// Full bounds of the last known sentence (to detect genuine changes).
     last_sentence_bounds: Option<(usize, usize)>,
     /// Queue of sentences fading out, each with its own animation.
@@ -130,18 +163,15 @@ impl App {
             scroll_offset: 0,
             scroll_display: 0.0,
             column_width: 60,
-            chrome_visible: false,
-            settings_visible: false,
-            settings_cursor: 0,
+            settings: SettingsState { visible: false, cursor: 0 },
             should_quit: false,
             file_path: None,
             is_scratch: false,
             dirty: false,
             last_save: None,
             autosave_interval: Duration::from_secs(3),
-            rename_active: false,
-            rename_buf: String::new(),
-            rename_cursor: 0,
+            save_error: None,
+            rename: RenameState { active: false, buf: String::new(), cursor: 0 },
             pending_normal_key: None,
             typewriter_vertical_offset: 0,
             selection_anchor: None,
@@ -150,10 +180,6 @@ impl App {
             find_state: None,
             animations: AnimationManager::new(),
             paragraph_dim: DimLayer::new(
-                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
-                FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
-            ),
-            sentence_dim: DimLayer::new(
                 FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
                 FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
             ),
@@ -184,9 +210,8 @@ impl App {
 
     /// Toggle the Settings Layer visibility.
     pub fn toggle_settings(&mut self) {
-        self.settings_visible = !self.settings_visible;
-        self.chrome_visible = self.settings_visible;
-        if self.settings_visible {
+        self.settings.visible = !self.settings.visible;
+        if self.settings.visible {
             use crate::animation::{Easing, TransitionKind};
             self.animations.start(
                 TransitionKind::OverlayOpacity { appearing: true },
@@ -196,7 +221,7 @@ impl App {
             // Find the index of the active palette in the full settings item list
             let items = SettingsItem::all();
             let target = SettingsItem::Palette(self.active_palette_index());
-            self.settings_cursor = items.iter().position(|i| *i == target).unwrap_or(0);
+            self.settings.cursor = items.iter().position(|i| *i == target).unwrap_or(0);
         }
     }
 
@@ -207,8 +232,7 @@ impl App {
 
     /// Dismiss the Settings Layer.
     pub fn dismiss_settings(&mut self) {
-        self.settings_visible = false;
-        self.chrome_visible = false;
+        self.settings.visible = false;
     }
 
     /// Find the current palette's position in Palette::all().
@@ -222,22 +246,22 @@ impl App {
     /// Move the settings cursor up (wrapping).
     pub fn settings_nav_up(&mut self) {
         let count = SettingsItem::all().len();
-        if self.settings_cursor == 0 {
-            self.settings_cursor = count - 1;
+        if self.settings.cursor == 0 {
+            self.settings.cursor = count - 1;
         } else {
-            self.settings_cursor -= 1;
+            self.settings.cursor -= 1;
         }
     }
 
     /// Move the settings cursor down (wrapping).
     pub fn settings_nav_down(&mut self) {
         let count = SettingsItem::all().len();
-        self.settings_cursor = (self.settings_cursor + 1) % count;
+        self.settings.cursor = (self.settings.cursor + 1) % count;
     }
 
     /// Apply the currently selected settings item.
     pub fn settings_apply(&mut self) {
-        let Some(item) = SettingsItem::at(self.settings_cursor) else {
+        let Some(item) = SettingsItem::at(self.settings.cursor) else {
             return;
         };
         match item {
@@ -292,9 +316,9 @@ impl App {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        self.rename_buf = name;
-        self.rename_cursor = self.rename_buf.chars().count();
-        self.rename_active = true;
+        self.rename.buf = name;
+        self.rename.cursor = self.rename.buf.chars().count();
+        self.rename.active = true;
     }
 
     /// Insert a character at cursor position (filters out `/`).
@@ -302,54 +326,40 @@ impl App {
         if ch == '/' {
             return;
         }
-        let byte_idx = char_to_byte_index(&self.rename_buf, self.rename_cursor);
-        self.rename_buf.insert(byte_idx, ch);
-        self.rename_cursor += 1;
+        let byte_idx = char_to_byte_index(&self.rename.buf, self.rename.cursor);
+        self.rename.buf.insert(byte_idx, ch);
+        self.rename.cursor += 1;
     }
 
     /// Delete the character before the cursor.
     pub fn rename_backspace(&mut self) {
-        if self.rename_cursor == 0 {
+        if self.rename.cursor == 0 {
             return;
         }
-        self.rename_cursor -= 1;
-        let byte_idx = char_to_byte_index(&self.rename_buf, self.rename_cursor);
+        self.rename.cursor -= 1;
+        let byte_idx = char_to_byte_index(&self.rename.buf, self.rename.cursor);
         // Find the byte length of the char at this position
-        let ch = self.rename_buf[byte_idx..].chars().next().unwrap();
-        self.rename_buf.replace_range(byte_idx..byte_idx + ch.len_utf8(), "");
-    }
-
-    /// Move rename cursor left.
-    pub fn rename_cursor_left(&mut self) {
-        if self.rename_cursor > 0 {
-            self.rename_cursor -= 1;
-        }
-    }
-
-    /// Move rename cursor right.
-    pub fn rename_cursor_right(&mut self) {
-        if self.rename_cursor < self.rename_buf.chars().count() {
-            self.rename_cursor += 1;
-        }
+        let ch = self.rename.buf[byte_idx..].chars().next().unwrap();
+        self.rename.buf.replace_range(byte_idx..byte_idx + ch.len_utf8(), "");
     }
 
     /// Cancel rename, clearing state.
     pub fn rename_cancel(&mut self) {
-        self.rename_active = false;
-        self.rename_buf.clear();
-        self.rename_cursor = 0;
+        self.rename.active = false;
+        self.rename.buf.clear();
+        self.rename.cursor = 0;
     }
 
     /// Confirm rename: rename on disk, update file_path, clear scratch flag.
     /// Empty name is treated as cancel.
     pub fn rename_confirm(&mut self) {
-        if self.rename_buf.trim().is_empty() {
+        if self.rename.buf.trim().is_empty() {
             self.rename_cancel();
             return;
         }
 
         if let Some(old_path) = &self.file_path {
-            let new_path = old_path.with_file_name(&self.rename_buf);
+            let new_path = old_path.with_file_name(&self.rename.buf);
 
             // Only attempt fs::rename if old file exists on disk
             if old_path.exists()
@@ -365,9 +375,290 @@ impl App {
             }
         }
 
-        self.rename_active = false;
-        self.rename_buf.clear();
-        self.rename_cursor = 0;
+        self.rename.active = false;
+        self.rename.buf.clear();
+        self.rename.cursor = 0;
+    }
+
+    /// Persist current settings to config file (best-effort, errors silently ignored).
+    fn save_config(&self) {
+        let config = Config {
+            palette: self.palette.name.to_string(),
+            focus_mode: self.focus_mode,
+            column_width: self.column_width,
+            editing_mode: self.editing_mode,
+            scroll_mode: self.scroll_mode,
+        };
+        let _ = config.save();
+    }
+
+    /// Handle a key press event. This is the main input dispatch entry point.
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        // Ctrl combinations — checked first, independent of vim mode
+        if modifiers.contains(KeyModifiers::CONTROL) {
+            match code {
+                KeyCode::Char('c') => {
+                    // Copy selection if any, otherwise no-op
+                    if let Some(text) = self.selected_text() {
+                        clipboard::write_osc52(&text);
+                        self.yank_register = Some(text);
+                        self.selection_anchor = None;
+                        if self.vim_mode == Mode::Visual {
+                            self.vim_mode = Mode::Normal;
+                        }
+                    }
+                }
+                KeyCode::Char('x') => {
+                    // Cut: copy selection then delete it
+                    if let Some(text) = self.selected_text() {
+                        clipboard::write_osc52(&text);
+                        self.yank_register = Some(text);
+                        self.delete_selection_silent();
+                        self.selection_anchor = None;
+                        if self.vim_mode == Mode::Visual {
+                            self.vim_mode = Mode::Normal;
+                        }
+                    }
+                }
+                KeyCode::Char('v') => {
+                    // Paste from yank register at cursor
+                    if let Some(text) = self.yank_register.clone() {
+                        // In Standard mode with selection, replace selection first
+                        if self.editing_mode == EditingMode::Standard
+                            && self.selection_anchor.is_some()
+                        {
+                            self.delete_selection_silent();
+                            self.selection_anchor = None;
+                        }
+                        let idx = self.cursor_char_index();
+                        self.undo_history.commit_group();
+                        self.undo_history.record_insert(idx, &text);
+                        self.buffer.insert(idx, &text);
+                        self.undo_history.commit_group();
+                        // Advance cursor past inserted text
+                        let char_count = text.chars().count();
+                        self.set_cursor_from_char_index(idx + char_count);
+                        self.dirty = true;
+                    }
+                }
+                KeyCode::Char('a') => {
+                    // Select all
+                    let total_chars = self.buffer.len_chars();
+                    self.selection_anchor = Some((0, 0));
+                    if total_chars > 0 {
+                        self.set_cursor_from_char_index(total_chars.saturating_sub(1));
+                    }
+                    if self.editing_mode == EditingMode::Vim {
+                        self.vim_mode = Mode::Visual;
+                    }
+                }
+                KeyCode::Char('q') => {
+                    self.should_quit = true;
+                }
+                KeyCode::Char('p') => {
+                    self.toggle_settings();
+                }
+                KeyCode::Char('s') => {
+                    self.autosave();
+                }
+                KeyCode::Char('f') => {
+                    if self.find_state.is_none() {
+                        self.find_state = Some(FindState::new(
+                            self.cursor_line,
+                            self.cursor_col,
+                        ));
+                        self.animations.start(
+                            crate::animation::TransitionKind::OverlayOpacity { appearing: true },
+                            Duration::from_millis(150),
+                            crate::animation::Easing::EaseOut,
+                        );
+                    }
+                }
+                KeyCode::Char('z') => {
+                    self.apply_action(Action::Undo);
+                }
+                KeyCode::Char('y') => {
+                    self.apply_action(Action::Redo);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Find overlay — swallow all keys when active
+        if let Some(ref mut find) = self.find_state {
+            match code {
+                KeyCode::Esc => {
+                    // Cancel: restore cursor to pre-search position
+                    let (line, col) = find.saved_cursor;
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                    self.find_state = None;
+                }
+                KeyCode::Enter => {
+                    // Jump to current match and close find
+                    if let Some((line, col)) = find.current_match_pos() {
+                        self.cursor_line = line;
+                        self.cursor_col = col;
+                    }
+                    self.find_state = None;
+                }
+                KeyCode::Backspace => {
+                    find.backspace();
+                    find.search(&self.buffer);
+                    // Jump cursor to first match for live preview
+                    if let Some((line, col)) = find.current_match_pos() {
+                        self.cursor_line = line;
+                        self.cursor_col = col;
+                    }
+                }
+                KeyCode::Up => {
+                    find.prev_match();
+                    if let Some((line, col)) = find.current_match_pos() {
+                        self.cursor_line = line;
+                        self.cursor_col = col;
+                    }
+                }
+                KeyCode::Down => {
+                    find.next_match();
+                    if let Some((line, col)) = find.current_match_pos() {
+                        self.cursor_line = line;
+                        self.cursor_col = col;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    find.insert_char(c);
+                    find.search(&self.buffer);
+                    // Jump cursor to first match for live preview
+                    if let Some((line, col)) = find.current_match_pos() {
+                        self.cursor_line = line;
+                        self.cursor_col = col;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Inline rename — swallow all keys when active
+        if self.rename.active {
+            match code {
+                KeyCode::Esc => self.rename_cancel(),
+                KeyCode::Enter => self.rename_confirm(),
+                KeyCode::Backspace => self.rename_backspace(),
+                KeyCode::Left => self.rename.cursor_left(),
+                KeyCode::Right => self.rename.cursor_right(),
+                KeyCode::Char(c) => self.rename_insert(c),
+                _ => {}
+            }
+            return;
+        }
+
+        // Settings Layer navigation — swallow all keys when open
+        if self.settings.visible {
+            match code {
+                KeyCode::Esc => self.dismiss_settings(),
+                KeyCode::Up | KeyCode::Char('k') => self.settings_nav_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.settings_nav_down(),
+                KeyCode::Enter => {
+                    self.settings_apply();
+                    self.save_config();
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
+                        self.settings_adjust_column(-1);
+                        self.save_config();
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
+                        self.settings_adjust_column(1);
+                        self.save_config();
+                    }
+                }
+                _ => {} // swallow all other keys
+            }
+            return;
+        }
+
+        let is_standard = self.editing_mode == EditingMode::Standard;
+
+        // Shift+Arrow/Home/End extends selection
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            match code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+                | KeyCode::Home | KeyCode::End => {
+                    self.extend_selection(code);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        match code {
+            KeyCode::Esc => self.handle_escape(),
+            KeyCode::Char(c) => self.handle_char(c),
+            KeyCode::Backspace => {
+                if is_standard || self.vim_mode == Mode::Insert {
+                    // In Standard mode with selection, delete selection instead
+                    if is_standard && self.selection_anchor.is_some() {
+                        self.delete_selection_silent();
+                        self.selection_anchor = None;
+                    } else {
+                        self.apply_action(Action::DeleteBack);
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if is_standard || self.vim_mode == Mode::Insert {
+                    if is_standard && self.selection_anchor.is_some() {
+                        self.delete_selection_silent();
+                        self.selection_anchor = None;
+                    }
+                    self.apply_action(Action::InsertNewline);
+                }
+            }
+            KeyCode::Delete => {
+                self.apply_action(Action::DeleteChar);
+            }
+            KeyCode::Home => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::LineStart);
+            }
+            KeyCode::End => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::LineEnd);
+            }
+            KeyCode::Left => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::MoveCursor(Direction::Left));
+            }
+            KeyCode::Right => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::MoveCursor(Direction::Right));
+            }
+            KeyCode::Up => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::MoveCursor(Direction::Up));
+            }
+            KeyCode::Down => {
+                if is_standard {
+                    self.selection_anchor = None;
+                }
+                self.apply_action(Action::MoveCursor(Direction::Down));
+            }
+            _ => {}
+        }
     }
 
     /// Process a character key input.
@@ -392,12 +683,11 @@ impl App {
                 if let Some(pending) = self.pending_normal_key.take() {
                     match (pending, ch) {
                         ('g', 'g') => {
-                            self.cursor_line = 0;
-                            self.cursor_col = 0;
+                            self.apply_action(Action::GotoFirstLine);
                             return;
                         }
                         ('d', 'd') => {
-                            self.delete_current_line();
+                            self.apply_action(Action::DeleteLine);
                             return;
                         }
                         _ => return,
@@ -420,8 +710,7 @@ impl App {
                 if let Some(pending) = self.pending_normal_key.take() {
                     match (pending, ch) {
                         ('g', 'g') => {
-                            self.cursor_line = 0;
-                            self.cursor_col = 0;
+                            self.apply_action(Action::GotoFirstLine);
                             return;
                         }
                         _ => return,
@@ -443,7 +732,7 @@ impl App {
 
     /// Process Escape key.
     pub fn handle_escape(&mut self) {
-        if self.settings_visible {
+        if self.settings.visible {
             self.dismiss_settings();
         } else if self.editing_mode == EditingMode::Standard {
             // In Standard mode, Escape just clears selection
@@ -494,7 +783,7 @@ impl App {
             Action::DeleteBack => {
                 let idx = self.cursor_char_index();
                 if idx > 0 {
-                    let deleted: String = self.buffer.rope().slice(idx - 1..idx).to_string();
+                    let deleted = self.buffer.slice_to_string(idx - 1, idx);
                     self.undo_history.record_delete(idx - 1, &deleted);
                     self.buffer.remove(idx - 1, idx);
                     if self.cursor_col > 0 {
@@ -514,7 +803,7 @@ impl App {
                 // Don't delete the trailing newline
                 let content_len = if line_len > 0 { line_len - 1 } else { 0 };
                 if self.cursor_col < content_len {
-                    let deleted: String = self.buffer.rope().slice(idx..idx + 1).to_string();
+                    let deleted = self.buffer.slice_to_string(idx, idx + 1);
                     self.undo_history.record_delete(idx, &deleted);
                     self.buffer.remove(idx, idx + 1);
                     self.dirty = true;
@@ -535,9 +824,16 @@ impl App {
                     content_len
                 };
             }
+            Action::GotoFirstLine => {
+                self.cursor_line = 0;
+                self.cursor_col = 0;
+            }
             Action::GotoLastLine => {
                 self.cursor_line = self.buffer.len_lines().saturating_sub(1);
                 self.clamp_cursor_col();
+            }
+            Action::DeleteLine => {
+                self.delete_current_line();
             }
             Action::WordForward => {
                 self.word_forward();
@@ -587,9 +883,8 @@ impl App {
                         self.yank_register = Some(text);
                     }
                     // Delete the selection
-                    let rope = self.buffer.rope();
-                    let start_idx = rope.line_to_char(sl) + sc;
-                    let end_idx = (rope.line_to_char(el) + ec + 1).min(rope.len_chars());
+                    let start_idx = self.buffer.line_to_char(sl) + sc;
+                    let end_idx = (self.buffer.line_to_char(el) + ec + 1).min(self.buffer.len_chars());
                     self.buffer.remove(start_idx, end_idx);
                     self.dirty = true;
                     // Move cursor to selection start
@@ -612,7 +907,7 @@ impl App {
                     } else {
                         // Char-wise paste: insert after cursor
                         let idx = self.cursor_char_index() + 1;
-                        let idx = idx.min(self.buffer.rope().len_chars());
+                        let idx = idx.min(self.buffer.len_chars());
                         self.buffer.insert(idx, &text);
                         self.cursor_col += text.chars().count();
                     }
@@ -703,7 +998,7 @@ impl App {
             // Delete preceding characters
             if edit.delete_before > 0 {
                 let start = idx.saturating_sub(edit.delete_before);
-                let deleted: String = self.buffer.rope().slice(start..idx).to_string();
+                let deleted = self.buffer.slice_to_string(start, idx);
                 self.undo_history.record_delete(start, &deleted);
                 self.buffer.remove(start, idx);
                 self.cursor_col -= edit.delete_before;
@@ -733,8 +1028,7 @@ impl App {
         if char_idx <= line_start {
             return String::new();
         }
-        let rope = self.buffer.rope();
-        rope.slice(line_start..char_idx).to_string()
+        self.buffer.slice_to_string(line_start, char_idx)
     }
 
     /// Calculate the character index in the buffer for the current cursor position.
@@ -744,8 +1038,7 @@ impl App {
 
     /// Character index of the start of the current line.
     fn line_start_char_index(&self) -> usize {
-        let rope = self.buffer.rope();
-        rope.line_to_char(self.cursor_line)
+        self.buffer.line_to_char(self.cursor_line)
     }
 
     /// Number of visible characters on the given line (excludes trailing newline).
@@ -819,28 +1112,23 @@ impl App {
 
     /// Move cursor forward to the start of the next word (whitespace-delimited).
     fn word_forward(&mut self) {
-        let text = self.buffer.rope().to_string();
-        let chars: Vec<char> = text.chars().collect();
         let mut idx = self.cursor_char_index();
-        let len = chars.len();
+        let len = self.buffer.len_chars();
 
         // Skip current non-whitespace
-        while idx < len && !chars[idx].is_whitespace() {
+        while idx < len && !self.buffer.char_at(idx).is_whitespace() {
             idx += 1;
         }
         // Skip whitespace
-        while idx < len && chars[idx].is_whitespace() {
+        while idx < len && self.buffer.char_at(idx).is_whitespace() {
             idx += 1;
         }
 
-        // Convert absolute index back to line/col
         self.set_cursor_from_char_index(idx.min(len.saturating_sub(1)));
     }
 
     /// Move cursor backward to the start of the previous word.
     fn word_backward(&mut self) {
-        let text = self.buffer.rope().to_string();
-        let chars: Vec<char> = text.chars().collect();
         let mut idx = self.cursor_char_index();
 
         if idx == 0 {
@@ -849,11 +1137,11 @@ impl App {
         idx -= 1;
 
         // Skip whitespace backward
-        while idx > 0 && chars[idx].is_whitespace() {
+        while idx > 0 && self.buffer.char_at(idx).is_whitespace() {
             idx -= 1;
         }
         // Skip non-whitespace backward to find word start
-        while idx > 0 && !chars[idx - 1].is_whitespace() {
+        while idx > 0 && !self.buffer.char_at(idx - 1).is_whitespace() {
             idx -= 1;
         }
 
@@ -862,10 +1150,8 @@ impl App {
 
     /// Move cursor forward to the end of the current/next word.
     fn word_end(&mut self) {
-        let text = self.buffer.rope().to_string();
-        let chars: Vec<char> = text.chars().collect();
         let mut idx = self.cursor_char_index();
-        let len = chars.len();
+        let len = self.buffer.len_chars();
 
         if idx + 1 >= len {
             return;
@@ -873,11 +1159,11 @@ impl App {
         idx += 1;
 
         // Skip whitespace
-        while idx < len && chars[idx].is_whitespace() {
+        while idx < len && self.buffer.char_at(idx).is_whitespace() {
             idx += 1;
         }
         // Move to end of word
-        while idx + 1 < len && !chars[idx + 1].is_whitespace() {
+        while idx + 1 < len && !self.buffer.char_at(idx + 1).is_whitespace() {
             idx += 1;
         }
 
@@ -886,11 +1172,10 @@ impl App {
 
     /// Set cursor position from an absolute char index in the buffer.
     pub fn set_cursor_from_char_index(&mut self, char_idx: usize) {
-        let rope = self.buffer.rope();
-        let total_chars = rope.len_chars();
+        let total_chars = self.buffer.len_chars();
         let idx = char_idx.min(total_chars.saturating_sub(1));
-        self.cursor_line = rope.char_to_line(idx);
-        let line_start = rope.line_to_char(self.cursor_line);
+        self.cursor_line = self.buffer.char_to_line(idx);
+        let line_start = self.buffer.line_to_char(self.cursor_line);
         self.cursor_col = idx - line_start;
     }
 
@@ -907,7 +1192,7 @@ impl App {
         }
 
         // Yank deleted line to register and clipboard
-        let deleted = self.buffer.rope().slice(line_start..line_start + line_len).to_string();
+        let deleted = self.buffer.slice_to_string(line_start, line_start + line_len);
         self.yank_register = Some(deleted.clone());
         clipboard::write_osc52(&deleted);
 
@@ -957,10 +1242,9 @@ impl App {
     /// Delete the current selection without yanking (for Standard mode replace-on-type).
     pub fn delete_selection_silent(&mut self) {
         if let Some((sl, sc, el, ec)) = self.selection_range() {
-            let rope = self.buffer.rope();
-            let start_idx = rope.line_to_char(sl) + sc;
-            let end_idx = (rope.line_to_char(el) + ec + 1).min(rope.len_chars());
-            let deleted = rope.slice(start_idx..end_idx).to_string();
+            let start_idx = self.buffer.line_to_char(sl) + sc;
+            let end_idx = (self.buffer.line_to_char(el) + ec + 1).min(self.buffer.len_chars());
+            let deleted = self.buffer.slice_to_string(start_idx, end_idx);
             self.undo_history.commit_group();
             self.undo_history.record_delete(start_idx, &deleted);
             self.undo_history.commit_group();
@@ -1025,23 +1309,20 @@ impl App {
     /// Extract the selected text from the buffer using the current selection range.
     pub fn selected_text(&self) -> Option<String> {
         let (sl, sc, el, ec) = self.selection_range()?;
-        let rope = self.buffer.rope();
-        let start_idx = rope.line_to_char(sl) + sc;
+        let start_idx = self.buffer.line_to_char(sl) + sc;
         // Include the character at end_col
-        let end_idx = rope.line_to_char(el) + ec + 1;
-        let end_idx = end_idx.min(rope.len_chars());
+        let end_idx = self.buffer.line_to_char(el) + ec + 1;
+        let end_idx = end_idx.min(self.buffer.len_chars());
         if start_idx >= end_idx {
             return None;
         }
-        Some(rope.slice(start_idx..end_idx).to_string())
+        Some(self.buffer.slice_to_string(start_idx, end_idx))
     }
 
     /// Find the sentence boundaries containing the cursor.
     /// Returns (start, end) as absolute char indices into the buffer.
     pub fn sentence_bounds(&self) -> Option<(usize, usize)> {
-        let text = self.buffer.rope().to_string();
-        let cursor_idx = self.cursor_char_index();
-        focus_mode::sentence_bounds_at(&text, cursor_idx)
+        focus_mode::sentence_bounds_in_buffer(&self.buffer, self.cursor_char_index())
     }
 
     /// Recompute dimming layer targets based on current focus mode and cursor position.
@@ -1051,7 +1332,6 @@ impl App {
             FocusMode::Off => {
                 let targets = vec![1.0; line_count];
                 self.paragraph_dim.update_targets(&targets);
-                self.sentence_dim.update_targets(&targets);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
             }
@@ -1061,7 +1341,6 @@ impl App {
                     self.paragraph_bounds(),
                 );
                 self.paragraph_dim.update_targets(&targets);
-                self.sentence_dim.update_targets(&vec![1.0; line_count]);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
             }
@@ -1110,9 +1389,8 @@ impl App {
                 // Prune completed fades
                 self.sentence_fades.retain(|(_, _, o)| o.is_animating());
 
-                // Sentence dimming is handled per-character by the renderer.
-                // Keep sentence_dim at 1.0 so it doesn't double-dim.
-                self.sentence_dim.update_targets(&vec![1.0; line_count]);
+                // Sentence dimming is handled per-character by the renderer
+                // via sentence_fades, not by a line-level DimLayer.
             }
         }
     }
@@ -1125,18 +1403,17 @@ impl App {
             .collect()
     }
 
-    /// Compute final per-line opacities for the renderer (product of all layers).
+    /// Compute final per-line opacities for the renderer.
     pub fn line_opacities(&self) -> Vec<f64> {
         let line_count = self.buffer.len_lines();
         (0..line_count)
-            .map(|i| self.paragraph_dim.opacity(i) * self.sentence_dim.opacity(i))
+            .map(|i| self.paragraph_dim.opacity(i))
             .collect()
     }
 
     /// Whether any dimming layer is still animating.
     pub fn dim_animating(&self) -> bool {
         self.paragraph_dim.is_animating()
-            || self.sentence_dim.is_animating()
             || self.sentence_fades.iter().any(|(_, _, o)| o.is_animating())
     }
 
@@ -1230,11 +1507,17 @@ impl App {
         }
 
         if let Some(path) = &self.file_path {
-            let content = self.buffer.rope().to_string();
-            if std::fs::write(path, &content).is_ok() {
-                self.dirty = false;
-                self.last_save = Some(Instant::now());
-                return true;
+            let content = self.buffer.to_string();
+            match std::fs::write(path, &content) {
+                Ok(()) => {
+                    self.dirty = false;
+                    self.last_save = Some(Instant::now());
+                    self.save_error = None;
+                    return true;
+                }
+                Err(e) => {
+                    self.save_error = Some(e.to_string());
+                }
             }
         }
         false
@@ -1300,8 +1583,7 @@ mod tests {
     #[test]
     fn default_state_has_no_chrome() {
         let app = App::new();
-        assert!(!app.chrome_visible);
-        assert!(!app.settings_visible);
+        assert!(!app.settings.visible);
     }
 
     // === Acceptance test: Settings Layer is summoned by hotkey ===
@@ -1310,8 +1592,7 @@ mod tests {
     fn toggle_settings_makes_chrome_visible() {
         let mut app = App::new();
         app.toggle_settings();
-        assert!(app.settings_visible);
-        assert!(app.chrome_visible);
+        assert!(app.settings.visible);
     }
 
     // === Acceptance test: Settings Layer is dismissed ===
@@ -1320,10 +1601,9 @@ mod tests {
     fn dismiss_settings_hides_chrome() {
         let mut app = App::new();
         app.toggle_settings();
-        assert!(app.settings_visible);
+        assert!(app.settings.visible);
         app.dismiss_settings();
-        assert!(!app.settings_visible);
-        assert!(!app.chrome_visible);
+        assert!(!app.settings.visible);
     }
 
     #[test]
@@ -1331,7 +1611,7 @@ mod tests {
         let mut app = App::new();
         app.toggle_settings();
         app.handle_escape();
-        assert!(!app.settings_visible);
+        assert!(!app.settings.visible);
     }
 
     // === Acceptance test: Document is saved automatically ===
@@ -1443,7 +1723,7 @@ mod tests {
         app.buffer = Buffer::from_text("abc\n");
         app.cursor_col = 1;
         app.handle_char('x');
-        assert_eq!(app.buffer.rope().to_string(), "ac\n");
+        assert_eq!(app.buffer.to_string(), "ac\n");
         assert!(app.dirty);
     }
 
@@ -1453,10 +1733,10 @@ mod tests {
         app.buffer = Buffer::from_text("first\nsecond\n");
         app.cursor_line = 0;
         app.handle_char('o');
-        assert_eq!(app.vim_mode, Mode::Insert);
-        assert_eq!(app.cursor_line, 1);
-        assert_eq!(app.cursor_col, 0);
-        assert_eq!(app.buffer.len_lines(), 4); // first, new blank, second, trailing
+        assert_eq!(app.vim_mode, Mode::Insert, "o should enter insert mode");
+        assert_eq!(app.cursor_line, 1, "o should move cursor to new line below");
+        assert_eq!(app.cursor_col, 0, "o should place cursor at column 0");
+        assert_eq!(app.buffer.len_lines(), 4, "o should insert a new blank line");
     }
 
     #[test]
@@ -1465,9 +1745,9 @@ mod tests {
         app.buffer = Buffer::from_text("first\nsecond\n");
         app.cursor_line = 1;
         app.handle_char('O');
-        assert_eq!(app.vim_mode, Mode::Insert);
-        assert_eq!(app.cursor_line, 1); // stays on what is now the blank line
-        assert_eq!(app.cursor_col, 0);
+        assert_eq!(app.vim_mode, Mode::Insert, "O should enter insert mode");
+        assert_eq!(app.cursor_line, 1, "O should keep cursor on inserted blank line");
+        assert_eq!(app.cursor_col, 0, "O should place cursor at column 0");
         assert_eq!(app.buffer.len_lines(), 4);
     }
 
@@ -1503,7 +1783,7 @@ mod tests {
         app.cursor_line = 1;
         app.handle_char('d');
         app.handle_char('d');
-        let text = app.buffer.rope().to_string();
+        let text = app.buffer.to_string();
         assert!(!text.contains("second"), "Line should be deleted, got: {}", text);
         assert!(app.dirty);
     }
@@ -1513,10 +1793,10 @@ mod tests {
         let mut app = App::new();
         app.buffer = Buffer::from_text("hello\n");
         app.cursor_col = 2;
-        let before = app.buffer.rope().to_string();
+        let before = app.buffer.to_string();
         app.handle_char('g');
         app.handle_char('z'); // unknown
-        assert_eq!(app.buffer.rope().to_string(), before);
+        assert_eq!(app.buffer.to_string(), before);
         assert_eq!(app.cursor_col, 2); // unchanged
     }
 
@@ -1595,7 +1875,7 @@ mod tests {
         app.vim_mode = Mode::Insert;
 
         app.handle_char('"');
-        let text = app.buffer.rope().to_string();
+        let text = app.buffer.to_string();
         assert!(text.contains('\u{201C}'), "Should have opening curly quote, got: {}", text);
     }
 
@@ -1609,13 +1889,13 @@ mod tests {
         app.cursor_col = 3;
 
         app.handle_char('h');
-        assert_eq!(app.cursor_col, 2);
+        assert_eq!(app.cursor_col, 2, "h should move cursor left");
         app.handle_char('l');
-        assert_eq!(app.cursor_col, 3);
+        assert_eq!(app.cursor_col, 3, "l should move cursor right");
         app.handle_char('k');
-        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_line, 0, "k should move cursor up");
         app.handle_char('j');
-        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_line, 1, "j should move cursor down");
     }
 
     // === Settings Layer navigation ===
@@ -1625,45 +1905,45 @@ mod tests {
         let mut app = App::new();
         app.palette = Palette::inkwell();
         app.toggle_settings();
-        assert_eq!(app.settings_cursor, 3); // Inkwell is at position 3 (2 editing modes + Ember + Inkwell)
+        assert_eq!(app.settings.cursor, 3); // Inkwell is at position 3 (2 editing modes + Ember + Inkwell)
     }
 
     #[test]
     fn settings_nav_down_wraps() {
         let mut app = App::new();
-        app.settings_cursor = 11;
+        app.settings.cursor = 11;
         app.settings_nav_down();
-        assert_eq!(app.settings_cursor, 0);
+        assert_eq!(app.settings.cursor, 0, "nav down from last item should wrap to 0");
     }
 
     #[test]
     fn settings_nav_up_wraps() {
         let mut app = App::new();
-        app.settings_cursor = 0;
+        app.settings.cursor = 0;
         app.settings_nav_up();
-        assert_eq!(app.settings_cursor, 11);
+        assert_eq!(app.settings.cursor, 11, "nav up from 0 should wrap to last item");
     }
 
     #[test]
     fn settings_nav_down_increments() {
         let mut app = App::new();
-        app.settings_cursor = 2;
+        app.settings.cursor = 2;
         app.settings_nav_down();
-        assert_eq!(app.settings_cursor, 3);
+        assert_eq!(app.settings.cursor, 3);
     }
 
     #[test]
     fn settings_nav_up_decrements() {
         let mut app = App::new();
-        app.settings_cursor = 5;
+        app.settings.cursor = 5;
         app.settings_nav_up();
-        assert_eq!(app.settings_cursor, 4);
+        assert_eq!(app.settings.cursor, 4);
     }
 
     #[test]
     fn settings_apply_palette() {
         let mut app = App::new();
-        app.settings_cursor = 3; // Inkwell (2 editing modes + Ember=2, Inkwell=3)
+        app.settings.cursor = 3; // Inkwell (2 editing modes + Ember=2, Inkwell=3)
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
     }
@@ -1671,42 +1951,42 @@ mod tests {
     #[test]
     fn settings_apply_focus_mode() {
         let mut app = App::new();
-        app.settings_cursor = 6; // Sentence
+        app.settings.cursor = 6; // Sentence
         app.settings_apply();
-        assert_eq!(app.focus_mode, FocusMode::Sentence);
+        assert_eq!(app.focus_mode, FocusMode::Sentence, "cursor 6 should select Sentence focus");
 
-        app.settings_cursor = 7; // Paragraph
+        app.settings.cursor = 7; // Paragraph
         app.settings_apply();
-        assert_eq!(app.focus_mode, FocusMode::Paragraph);
+        assert_eq!(app.focus_mode, FocusMode::Paragraph, "cursor 7 should select Paragraph focus");
     }
 
     #[test]
     fn settings_apply_scroll_mode() {
         let mut app = App::new();
-        app.settings_cursor = 9; // ScrollMode::Typewriter
+        app.settings.cursor = 9; // ScrollMode::Typewriter
         app.settings_apply();
-        assert_eq!(app.scroll_mode, ScrollMode::Typewriter);
+        assert_eq!(app.scroll_mode, ScrollMode::Typewriter, "cursor 9 should select Typewriter scroll");
 
-        app.settings_cursor = 8; // ScrollMode::Edge
+        app.settings.cursor = 8; // ScrollMode::Edge
         app.settings_apply();
-        assert_eq!(app.scroll_mode, ScrollMode::Edge);
+        assert_eq!(app.scroll_mode, ScrollMode::Edge, "cursor 8 should select Edge scroll");
     }
 
     #[test]
     fn settings_apply_column_is_noop() {
         let mut app = App::new();
-        app.settings_cursor = 10; // ColumnWidth
+        app.settings.cursor = 10; // ColumnWidth
         let before = app.column_width;
         app.settings_apply();
-        assert_eq!(app.column_width, before);
+        assert_eq!(app.column_width, before, "ColumnWidth row should not change width on Enter");
     }
 
     #[test]
     fn settings_adjust_column_increases() {
         let mut app = App::new();
-        assert_eq!(app.column_width, 60);
+        assert_eq!(app.column_width, 60, "default column width should be 60");
         app.settings_adjust_column(5);
-        assert_eq!(app.column_width, 65);
+        assert_eq!(app.column_width, 65, "adjusting +5 should increase to 65");
     }
 
     #[test]
@@ -1714,7 +1994,7 @@ mod tests {
         let mut app = App::new();
         app.column_width = 22;
         app.settings_adjust_column(-5);
-        assert_eq!(app.column_width, 20);
+        assert_eq!(app.column_width, 20, "column width should clamp at 20");
     }
 
     #[test]
@@ -1722,7 +2002,7 @@ mod tests {
         let mut app = App::new();
         app.column_width = 118;
         app.settings_adjust_column(5);
-        assert_eq!(app.column_width, 120);
+        assert_eq!(app.column_width, 120, "column width should clamp at 120");
     }
 
     #[test]
@@ -1769,74 +2049,74 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
-        assert!(app.rename_active);
-        assert_eq!(app.rename_buf, "draft.md");
-        assert_eq!(app.rename_cursor, 8); // "draft.md".len()
+        assert!(app.rename.active);
+        assert_eq!(app.rename.buf, "draft.md");
+        assert_eq!(app.rename.cursor, 8); // "draft.md".len()
     }
 
     #[test]
     fn rename_insert_adds_char_at_cursor() {
         let mut app = App::new();
-        app.rename_active = true;
-        app.rename_buf = "ab".to_string();
-        app.rename_cursor = 1;
+        app.rename.active = true;
+        app.rename.buf = "ab".to_string();
+        app.rename.cursor = 1;
         app.rename_insert('X');
-        assert_eq!(app.rename_buf, "aXb");
-        assert_eq!(app.rename_cursor, 2);
+        assert_eq!(app.rename.buf, "aXb");
+        assert_eq!(app.rename.cursor, 2);
     }
 
     #[test]
     fn rename_insert_filters_slash() {
         let mut app = App::new();
-        app.rename_active = true;
-        app.rename_buf = "ab".to_string();
-        app.rename_cursor = 1;
+        app.rename.active = true;
+        app.rename.buf = "ab".to_string();
+        app.rename.cursor = 1;
         app.rename_insert('/');
-        assert_eq!(app.rename_buf, "ab");
-        assert_eq!(app.rename_cursor, 1);
+        assert_eq!(app.rename.buf, "ab");
+        assert_eq!(app.rename.cursor, 1);
     }
 
     #[test]
     fn rename_backspace_deletes_before_cursor() {
         let mut app = App::new();
-        app.rename_active = true;
-        app.rename_buf = "abc".to_string();
-        app.rename_cursor = 2;
+        app.rename.active = true;
+        app.rename.buf = "abc".to_string();
+        app.rename.cursor = 2;
         app.rename_backspace();
-        assert_eq!(app.rename_buf, "ac");
-        assert_eq!(app.rename_cursor, 1);
+        assert_eq!(app.rename.buf, "ac");
+        assert_eq!(app.rename.cursor, 1);
     }
 
     #[test]
     fn rename_backspace_at_start_is_noop() {
         let mut app = App::new();
-        app.rename_active = true;
-        app.rename_buf = "abc".to_string();
-        app.rename_cursor = 0;
+        app.rename.active = true;
+        app.rename.buf = "abc".to_string();
+        app.rename.cursor = 0;
         app.rename_backspace();
-        assert_eq!(app.rename_buf, "abc");
-        assert_eq!(app.rename_cursor, 0);
+        assert_eq!(app.rename.buf, "abc");
+        assert_eq!(app.rename.cursor, 0);
     }
 
     #[test]
     fn rename_cursor_left_right() {
         let mut app = App::new();
-        app.rename_active = true;
-        app.rename_buf = "abc".to_string();
-        app.rename_cursor = 1;
+        app.rename.active = true;
+        app.rename.buf = "abc".to_string();
+        app.rename.cursor = 1;
 
-        app.rename_cursor_left();
-        assert_eq!(app.rename_cursor, 0);
+        app.rename.cursor_left();
+        assert_eq!(app.rename.cursor, 0);
 
-        app.rename_cursor_left(); // at start, stays 0
-        assert_eq!(app.rename_cursor, 0);
+        app.rename.cursor_left(); // at start, stays 0
+        assert_eq!(app.rename.cursor, 0);
 
-        app.rename_cursor_right();
-        assert_eq!(app.rename_cursor, 1);
+        app.rename.cursor_right();
+        assert_eq!(app.rename.cursor, 1);
 
-        app.rename_cursor = 3; // at end
-        app.rename_cursor_right(); // stays at end
-        assert_eq!(app.rename_cursor, 3);
+        app.rename.cursor = 3; // at end
+        app.rename.cursor_right(); // stays at end
+        assert_eq!(app.rename.cursor, 3);
     }
 
     #[test]
@@ -1844,12 +2124,12 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
-        assert!(app.rename_active);
+        assert!(app.rename.active);
 
         app.rename_cancel();
-        assert!(!app.rename_active);
-        assert!(app.rename_buf.is_empty());
-        assert_eq!(app.rename_cursor, 0);
+        assert!(!app.rename.active);
+        assert!(app.rename.buf.is_empty());
+        assert_eq!(app.rename.cursor, 0);
     }
 
     #[test]
@@ -1862,11 +2142,11 @@ mod tests {
         app.file_path = Some(old_path.clone());
         app.rename_open();
         // Clear buffer and type new name
-        app.rename_buf = "new.md".to_string();
-        app.rename_cursor = 6;
+        app.rename.buf = "new.md".to_string();
+        app.rename.cursor = 6;
         app.rename_confirm();
 
-        assert!(!app.rename_active);
+        assert!(!app.rename.active);
         let new_path = dir.path().join("new.md");
         assert_eq!(app.file_path, Some(new_path.clone()));
         assert!(new_path.exists());
@@ -1878,11 +2158,11 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
-        app.rename_buf = "".to_string();
-        app.rename_cursor = 0;
+        app.rename.buf = "".to_string();
+        app.rename.cursor = 0;
         app.rename_confirm();
 
-        assert!(!app.rename_active);
+        assert!(!app.rename.active);
         // file_path unchanged
         assert_eq!(app.file_path, Some(PathBuf::from("/tmp/draft.md")));
     }
@@ -1897,8 +2177,8 @@ mod tests {
         app.file_path = Some(old_path);
         app.is_scratch = true;
         app.rename_open();
-        app.rename_buf = "real.md".to_string();
-        app.rename_cursor = 7;
+        app.rename.buf = "real.md".to_string();
+        app.rename.cursor = 7;
         app.rename_confirm();
 
         assert!(!app.is_scratch);
@@ -1908,10 +2188,10 @@ mod tests {
     fn settings_apply_file_opens_rename() {
         let mut app = App::new();
         app.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.settings_cursor = 11; // File
+        app.settings.cursor = 11; // File
         app.settings_apply();
-        assert!(app.rename_active);
-        assert_eq!(app.rename_buf, "draft.md");
+        assert!(app.rename.active);
+        assert_eq!(app.rename.buf, "draft.md");
     }
 
     #[test]
@@ -1921,11 +2201,11 @@ mod tests {
         app.file_path = Some(PathBuf::from("/nonexistent/dir/scratch.md"));
         app.is_scratch = true;
         app.rename_open();
-        app.rename_buf = "real.md".to_string();
-        app.rename_cursor = 7;
+        app.rename.buf = "real.md".to_string();
+        app.rename.cursor = 7;
         app.rename_confirm();
 
-        assert!(!app.rename_active);
+        assert!(!app.rename.active);
         assert_eq!(
             app.file_path,
             Some(PathBuf::from("/nonexistent/dir/real.md"))
@@ -1938,7 +2218,7 @@ mod tests {
     #[test]
     fn settings_apply_switches_to_standard_mode() {
         let mut app = App::new();
-        app.settings_cursor = 1; // Standard
+        app.settings.cursor = 1; // Standard
         app.settings_apply();
         assert_eq!(app.editing_mode, EditingMode::Standard);
         assert_eq!(app.vim_mode, Mode::Insert);
@@ -1949,7 +2229,7 @@ mod tests {
         let mut app = App::new();
         app.editing_mode = EditingMode::Standard;
         app.vim_mode = Mode::Insert;
-        app.settings_cursor = 0; // Vim
+        app.settings.cursor = 0; // Vim
         app.settings_apply();
         assert_eq!(app.editing_mode, EditingMode::Vim);
         assert_eq!(app.vim_mode, Mode::Normal);
@@ -1959,7 +2239,7 @@ mod tests {
     fn switching_to_standard_clears_pending_normal_key() {
         let mut app = App::new();
         app.pending_normal_key = Some('g');
-        app.settings_cursor = 1; // Standard
+        app.settings.cursor = 1; // Standard
         app.settings_apply();
         assert_eq!(app.pending_normal_key, None);
     }
@@ -1974,7 +2254,7 @@ mod tests {
         app.buffer = Buffer::from_text("hello\n");
         app.cursor_col = 5;
         app.handle_char('!');
-        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+        assert_eq!(app.buffer.to_string(), "hello!\n");
     }
 
     #[test]
@@ -2006,7 +2286,7 @@ mod tests {
         app.selection_anchor = Some((0, 0));
         app.cursor_col = 4;
         app.handle_char('X');
-        assert_eq!(app.buffer.rope().to_string(), "X world\n");
+        assert_eq!(app.buffer.to_string(), "X world\n");
         assert_eq!(app.selection_anchor, None);
     }
 
@@ -2019,7 +2299,7 @@ mod tests {
         app.cursor_col = 0;
         app.handle_char('q');
         assert!(!app.should_quit);
-        assert!(app.buffer.rope().to_string().contains('q'));
+        assert!(app.buffer.to_string().contains('q'));
     }
 
     // === Mode leakage prevention tests ===
@@ -2052,7 +2332,7 @@ mod tests {
         app.cursor_col = 0;
         // 'i' should insert 'i', not switch to Insert mode
         app.handle_char('i');
-        assert!(app.buffer.rope().to_string().contains('i'));
+        assert!(app.buffer.to_string().contains('i'));
         assert_eq!(app.vim_mode, Mode::Insert);
     }
 
@@ -2062,7 +2342,7 @@ mod tests {
     fn standard_mode_full_round_trip() {
         let mut app = App::new();
         // Switch to Standard mode
-        app.settings_cursor = 1;
+        app.settings.cursor = 1;
         app.settings_apply();
         assert_eq!(app.editing_mode, EditingMode::Standard);
         assert_eq!(app.vim_mode, Mode::Insert);
@@ -2072,7 +2352,7 @@ mod tests {
         app.cursor_col = 0;
         app.handle_char('h');
         app.handle_char('i');
-        assert_eq!(app.buffer.rope().to_string(), "hi\n");
+        assert_eq!(app.buffer.to_string(), "hi\n");
 
         // Select with shift+arrow (via extend_selection)
         use crossterm::event::KeyCode;
@@ -2098,10 +2378,10 @@ mod tests {
             app.set_cursor_from_char_index(idx + text.chars().count());
             app.dirty = true;
         }
-        assert_eq!(app.buffer.rope().to_string(), "hihi\n");
+        assert_eq!(app.buffer.to_string(), "hihi\n");
 
         // Switch back to Vim mode
-        app.settings_cursor = 0;
+        app.settings.cursor = 0;
         app.settings_apply();
         assert_eq!(app.editing_mode, EditingMode::Vim);
         assert_eq!(app.vim_mode, Mode::Normal);
@@ -2148,9 +2428,9 @@ mod tests {
         app.cursor_col = 5;
         app.handle_char('!');
         app.undo_history.commit_group();
-        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+        assert_eq!(app.buffer.to_string(), "hello!\n");
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), "hello\n");
+        assert_eq!(app.buffer.to_string(), "hello\n");
     }
 
     #[test]
@@ -2162,9 +2442,9 @@ mod tests {
         app.handle_char('!');
         app.undo_history.commit_group();
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), "hello\n");
+        assert_eq!(app.buffer.to_string(), "hello\n");
         app.apply_action(Action::Redo);
-        assert_eq!(app.buffer.rope().to_string(), "hello!\n");
+        assert_eq!(app.buffer.to_string(), "hello!\n");
     }
 
     #[test]
@@ -2180,13 +2460,13 @@ mod tests {
         app.handle_char('b');
         app.handle_char(' ');
         app.undo_history.commit_group();
-        assert_eq!(app.buffer.rope().to_string(), "a b \n");
+        assert_eq!(app.buffer.to_string(), "a b \n");
         // Undo "b "
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), "a \n");
+        assert_eq!(app.buffer.to_string(), "a \n");
         // Undo "a "
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), "\n");
+        assert_eq!(app.buffer.to_string(), "\n");
     }
 
     #[test]
@@ -2205,7 +2485,7 @@ mod tests {
         // Redo should not bring back 'a'
         app.apply_action(Action::Redo);
         // Buffer should still be "b\n" — redo is no-op
-        assert_eq!(app.buffer.rope().to_string(), "b\n");
+        assert_eq!(app.buffer.to_string(), "b\n");
     }
 
     #[test]
@@ -2216,20 +2496,20 @@ mod tests {
         app.cursor_col = 3;
         app.apply_action(Action::DeleteBack);
         app.undo_history.commit_group();
-        assert_eq!(app.buffer.rope().to_string(), "ab\n");
+        assert_eq!(app.buffer.to_string(), "ab\n");
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), "abc\n");
+        assert_eq!(app.buffer.to_string(), "abc\n");
     }
 
     #[test]
     fn empty_undo_redo_are_noops() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("hello\n");
-        let before = app.buffer.rope().to_string();
+        let before = app.buffer.to_string();
         app.apply_action(Action::Undo);
-        assert_eq!(app.buffer.rope().to_string(), before);
+        assert_eq!(app.buffer.to_string(), before);
         app.apply_action(Action::Redo);
-        assert_eq!(app.buffer.rope().to_string(), before);
+        assert_eq!(app.buffer.to_string(), before);
     }
 
     // === Shift+Arrow selection tests ===
@@ -2393,7 +2673,7 @@ mod tests {
         app.handle_char('d');
         assert_eq!(app.vim_mode, Mode::Normal);
         assert_eq!(app.yank_register, Some("hello".to_string()));
-        assert_eq!(app.buffer.rope().to_string(), " world\n");
+        assert_eq!(app.buffer.to_string(), " world\n");
         assert!(app.dirty);
     }
 
@@ -2453,7 +2733,7 @@ mod tests {
         app.cursor_col = 0;
         app.yank_register = Some("XY".to_string());
         app.handle_char('p');
-        assert_eq!(app.buffer.rope().to_string(), "aXYb\n");
+        assert_eq!(app.buffer.to_string(), "aXYb\n");
         assert!(app.dirty);
     }
 
@@ -2464,7 +2744,7 @@ mod tests {
         app.cursor_col = 1;
         app.yank_register = Some("XY".to_string());
         app.handle_char('P');
-        assert_eq!(app.buffer.rope().to_string(), "aXYb\n");
+        assert_eq!(app.buffer.to_string(), "aXYb\n");
     }
 
     #[test]
@@ -2474,7 +2754,7 @@ mod tests {
         app.cursor_line = 0;
         app.yank_register = Some("new\n".to_string());
         app.handle_char('p');
-        let text = app.buffer.rope().to_string();
+        let text = app.buffer.to_string();
         assert_eq!(text, "first\nnew\nsecond\n");
         assert_eq!(app.cursor_line, 1);
     }
@@ -2486,7 +2766,7 @@ mod tests {
         app.cursor_line = 1;
         app.yank_register = Some("new\n".to_string());
         app.handle_char('P');
-        let text = app.buffer.rope().to_string();
+        let text = app.buffer.to_string();
         assert_eq!(text, "first\nnew\nsecond\n");
     }
 
@@ -2495,9 +2775,9 @@ mod tests {
         let mut app = App::new();
         app.buffer = Buffer::from_text("hello\n");
         app.yank_register = None;
-        let before = app.buffer.rope().to_string();
+        let before = app.buffer.to_string();
         app.handle_char('p');
-        assert_eq!(app.buffer.rope().to_string(), before);
+        assert_eq!(app.buffer.to_string(), before);
         assert!(!app.dirty);
     }
 
@@ -2509,7 +2789,7 @@ mod tests {
         app.handle_char('d');
         app.handle_char('d');
         assert_eq!(app.yank_register, Some("second\n".to_string()));
-        assert!(!app.buffer.rope().to_string().contains("second"));
+        assert!(!app.buffer.to_string().contains("second"));
     }
 
     // === Ctrl key operation tests ===
@@ -2522,7 +2802,7 @@ mod tests {
         app.cursor_col = 4;
         app.yank_register = None;
         app.delete_selection_silent();
-        assert_eq!(app.buffer.rope().to_string(), " world\n");
+        assert_eq!(app.buffer.to_string(), " world\n");
         assert_eq!(app.yank_register, None);
         assert!(app.dirty);
     }
@@ -2532,7 +2812,7 @@ mod tests {
         let mut app = App::new();
         app.buffer = Buffer::from_text("hello\nworld\n");
         // Simulate Ctrl+A behavior
-        let total_chars = app.buffer.rope().len_chars();
+        let total_chars = app.buffer.len_chars();
         app.selection_anchor = Some((0, 0));
         app.set_cursor_from_char_index(total_chars.saturating_sub(1));
         assert_eq!(app.selection_anchor, Some((0, 0)));
@@ -2570,7 +2850,7 @@ mod tests {
         app.handle_char('$');
         // Paste after
         app.handle_char('p');
-        let text = app.buffer.rope().to_string();
+        let text = app.buffer.to_string();
         assert!(text.contains("hello"), "Yanked text should be pasted");
     }
 
@@ -2588,7 +2868,7 @@ mod tests {
     fn palette_animation_starts_on_switch() {
         let mut app = App::new();
         app.toggle_settings();
-        app.settings_cursor = 3; // Inkwell palette index
+        app.settings.cursor = 3; // Inkwell palette index
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
         assert!(app.animations.is_active());

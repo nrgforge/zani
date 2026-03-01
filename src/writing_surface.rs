@@ -42,6 +42,8 @@ pub struct WritingSurface<'a> {
     find_current: Option<usize>,
     /// Pre-computed opacity for each logical line (from DimLayer).
     line_opacities: &'a [f64],
+    /// Pre-computed visual lines (soft-wrapped).
+    precomputed_visual_lines: Option<&'a [VisualLine]>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -61,6 +63,7 @@ impl<'a> WritingSurface<'a> {
             find_matches: Vec::new(),
             find_current: None,
             line_opacities: &[],
+            precomputed_visual_lines: None,
         }
     }
 
@@ -120,6 +123,11 @@ impl<'a> WritingSurface<'a> {
         self
     }
 
+    pub fn precomputed_visual_lines(mut self, lines: &'a [VisualLine]) -> Self {
+        self.precomputed_visual_lines = Some(lines);
+        self
+    }
+
     /// Check whether a character at (logical_line, char_col) is within the selection.
     fn is_char_selected(&self, logical_line: usize, char_col: usize) -> bool {
         let Some((sl, sc, el, ec)) = self.selection else {
@@ -154,7 +162,7 @@ impl<'a> WritingSurface<'a> {
     }
 
     /// Compute all visual lines from the buffer.
-    pub fn visual_lines(&self) -> Vec<VisualLine> {
+    fn compute_visual_lines(&self) -> Vec<VisualLine> {
         wrap::visual_lines_for_buffer(self.buffer, self.column_width)
     }
 
@@ -188,7 +196,14 @@ impl<'a> WritingSurface<'a> {
 
 impl Widget for WritingSurface<'_> {
     fn render(self, area: Rect, buf: &mut RatatuiBuffer) {
-        let visual_lines = self.visual_lines();
+        let computed;
+        let visual_lines: &[VisualLine] = match self.precomputed_visual_lines {
+            Some(vl) => vl,
+            None => {
+                computed = self.compute_visual_lines();
+                &computed
+            }
+        };
         let x_offset = self.center_offset(area.width);
 
         // Fill background
@@ -452,7 +467,7 @@ mod tests {
             .column_width(20)
             .cursor(0, 25); // char 25 is in "the lazy dog" part
 
-        let visual_lines = surface.visual_lines();
+        let visual_lines = surface.compute_visual_lines();
         let pos = surface.cursor_visual_position(&visual_lines);
         assert!(pos.is_some());
         let (vl_idx, col) = pos.unwrap();
@@ -476,7 +491,7 @@ mod tests {
         let surface0 = WritingSurface::new(&buffer, &palette)
             .column_width(20)
             .scroll_offset(0);
-        let visual_lines = surface0.visual_lines();
+        let visual_lines = surface0.compute_visual_lines();
         assert!(visual_lines.len() > 3, "Should have more visual lines than screen height");
 
         let mut buf0 = RatatuiBuffer::empty(area);

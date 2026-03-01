@@ -117,14 +117,14 @@ fn palette_switch_updates_all_styling() {
     assert_ne!(dim_a, dim_b, "Palette switch should change dimming colors");
 }
 
-/// Integration test: Autosave writes the Buffer, not the styled output.
+/// Integration test: Styling metadata does not alter the raw buffer content.
 #[test]
-fn autosave_writes_buffer_content() {
+fn styling_preserves_raw_buffer_content() {
     let text = "Some **bold** and *italic* with -- dashes";
     let buffer = Buffer::from_text(text);
 
     // The buffer content should be exactly what was typed
-    let content = buffer.rope().to_string();
+    let content = buffer.to_string();
     assert_eq!(content, text);
 
     // Markdown styling does NOT modify the buffer
@@ -133,7 +133,7 @@ fn autosave_writes_buffer_content() {
     // styles is per-character metadata, not a modified string
     assert_eq!(styles.len(), line.chars().count());
 
-    // If we were to write this to disk, we'd write buffer.rope().to_string()
+    // If we were to write this to disk, we'd write buffer.to_string()
     // which is the original text — no styling information included
     assert!(!content.contains('\u{1b}')); // No ANSI escape codes
     assert!(content.contains("**bold**")); // Markdown syntax preserved

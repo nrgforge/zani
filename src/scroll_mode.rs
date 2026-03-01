@@ -8,16 +8,6 @@ pub enum ScrollMode {
     Typewriter,
 }
 
-impl ScrollMode {
-    /// Cycle to the next variant: Edge → Typewriter → Edge.
-    pub fn next(self) -> Self {
-        match self {
-            Self::Edge => Self::Typewriter,
-            Self::Typewriter => Self::Edge,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25,14 +15,5 @@ mod tests {
     #[test]
     fn default_is_edge() {
         assert_eq!(ScrollMode::default(), ScrollMode::Edge);
-    }
-
-    #[test]
-    fn scroll_mode_cycles() {
-        let mode = ScrollMode::Edge;
-        let mode = mode.next();
-        assert_eq!(mode, ScrollMode::Typewriter);
-        let mode = mode.next();
-        assert_eq!(mode, ScrollMode::Edge);
     }
 }

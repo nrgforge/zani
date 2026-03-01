@@ -14,12 +14,12 @@
 | **Scroll Mode** | How the viewport follows the cursor. Two variants: Edge (scroll when cursor nears edges) and Typewriter (cursor stays vertically centered). Orthogonal to Focus Mode. | Focus Mode, Writing Surface |
 | **Typewriter Mode** | A Scroll Mode variant where the cursor stays vertically centered and text scrolls around it, eliminating manual scrolling. Does not contribute dimming. | Scroll Mode |
 | **Fade Config** | A pairing of duration and easing curve that governs how a dimming transition animates. Each dimming source specifies separate configs for fade-in (brightening) and fade-out (dimming). | Dimming, Active Region |
-| **Palette** | A named, curated color system defining foreground, background, dimming endpoints, and accent colors. Each palette has a mood and character (e.g., Campfire, Manila, Legal Pad). All palettes satisfy Invariant 3. The writer selects from the collection. | Color Profile |
+| **Palette** | A named, curated color system defining foreground, background, dimming endpoints, and accent colors. Each palette has a mood and character (e.g., Ember, Inkwell, Parchment). All palettes satisfy Invariant 3. The writer selects from the collection. | Color Profile |
 | **Color Profile** | The terminal's color capability: True Color (24-bit), 256-color, or basic ANSI. Detected at startup; rendering degrades gracefully. | Palette |
 | **Chrome** | Any visible UI element that is not the writer's text: status bars, line numbers, file names, word counts. Hidden by default; summoned on demand. | Settings Layer |
 | **Settings Layer** | The hidden interface for configuration, brought up by hotkey. Invisible during writing. | Chrome |
 | **Writing Window** | A dedicated terminal window spawned by Zani with writing-optimized settings (font, line height, colors). Separate from the user's development terminal. | Inline Mode |
-| **Inline Mode** | Running Zani inside the current terminal without spawning a Writing Window. Activated via `--inline` flag, used for SSH, tmux, or pre-configured terminals. | Writing Window |
+| **Inline Mode** | Running Zani inside the current terminal without spawning a Writing Window. This is the default behavior. Used for SSH, tmux, or pre-configured terminals. | Writing Window |
 | **Markdown Styling** | Inline rendering of markdown: syntax characters (`#`, `**`, `*`, etc.) are visible but dimmed, while the text they modify receives formatting (bold, italic, color). The writer always sees and edits the raw markdown; styling is a visual layer, not a transformation. | Writing Surface, Dimming |
 | **Smart Typography** | Automatic conversion of ASCII characters to typographic equivalents: straight quotes to curly quotes, `--` to em dash, `...` to ellipsis. | Writing Surface |
 | **Vim Bindings** | Built-in modal editing with normal, insert, and visual modes. Bar cursor in insert mode, block cursor in normal mode. Not a plugin. | |
@@ -85,7 +85,7 @@
 
 4. **Focus dimming is color interpolation, not terminal opacity.** Dimmed text uses per-character RGB interpolation toward the background color. Internally, each character's dimming is expressed as an opacity factor (0.0–1.0) which governs the interpolation amount. This is a rendering calculation, not a terminal transparency feature.
 
-5. **The column is prose-width.** Text wraps at approximately 60 characters, centered in the terminal. Not configurable below 45 or above 80.
+5. **The column is prose-width.** Text wraps at approximately 60 characters, centered in the terminal. Configurable between 20 and 120 characters.
 
 6. **Latency is a UX requirement, not a performance metric.** Every keystroke must produce a visible result within the app layer's control in under 1ms. Architectural choices (Rust, zero-GC, immediate-mode rendering) serve this invariant.
 

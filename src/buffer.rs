@@ -1,3 +1,5 @@
+use std::fmt;
+
 use ropey::Rope;
 
 /// The in-memory representation of a Document's text,
@@ -5,6 +7,15 @@ use ropey::Rope;
 #[derive(Debug, Clone)]
 pub struct Buffer {
     rope: Rope,
+}
+
+impl fmt::Display for Buffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for chunk in self.rope.chunks() {
+            f.write_str(chunk)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Buffer {
@@ -26,12 +37,29 @@ impl Buffer {
         }
     }
 
-    pub fn rope(&self) -> &Rope {
-        &self.rope
+    /// Extract a slice of the buffer as a String.
+    pub fn slice_to_string(&self, start: usize, end: usize) -> String {
+        self.rope.slice(start..end).to_string()
     }
 
-    pub fn rope_mut(&mut self) -> &mut Rope {
-        &mut self.rope
+    /// Character index of the start of the given line (0-indexed).
+    pub fn line_to_char(&self, line_idx: usize) -> usize {
+        self.rope.line_to_char(line_idx)
+    }
+
+    /// Which line a character index falls on.
+    pub fn char_to_line(&self, char_idx: usize) -> usize {
+        self.rope.char_to_line(char_idx)
+    }
+
+    /// Iterate characters starting from a character index.
+    pub fn chars_at(&self, char_idx: usize) -> ropey::iter::Chars<'_> {
+        self.rope.chars_at(char_idx)
+    }
+
+    /// Get the character at a specific index.
+    pub fn char_at(&self, char_idx: usize) -> char {
+        self.rope.char(char_idx)
     }
 
     /// Total number of characters in the buffer.
@@ -83,8 +111,8 @@ mod tests {
     fn insert_and_remove() {
         let mut buf = Buffer::from_text("hello world");
         buf.insert(5, " beautiful");
-        assert_eq!(buf.rope().to_string(), "hello beautiful world");
+        assert_eq!(buf.to_string(), "hello beautiful world");
         buf.remove(5, 15);
-        assert_eq!(buf.rope().to_string(), "hello world");
+        assert_eq!(buf.to_string(), "hello world");
     }
 }
