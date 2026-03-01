@@ -364,7 +364,7 @@ mod tests {
         let text = "Paragraph one.\n\nParagraph two.";
         // Cursor in "two" (char 20)
         let bounds = sentence_bounds_at(text, 20);
-        assert!(bounds.is_some());
+        assert!(bounds.is_some(), "should find sentence bounds in second paragraph");
         let (start, end) = bounds.unwrap();
         assert!(start >= 16, "Should not cross empty line boundary, got start={}", start);
         assert_eq!(end, 30);
@@ -470,11 +470,11 @@ mod tests {
         let mut layer = DimLayer::new(FadeConfig::default(), FadeConfig::default());
         let targets = paragraph_target_opacities(5, Some((1, 3)));
         layer.update_targets(&targets);
-        assert!((layer.opacity(0) - 0.6).abs() < 0.01);
-        assert!((layer.opacity(1) - 1.0).abs() < f64::EPSILON);
-        assert!((layer.opacity(2) - 1.0).abs() < f64::EPSILON);
-        assert!((layer.opacity(3) - 1.0).abs() < f64::EPSILON);
-        assert!((layer.opacity(4) - 0.6).abs() < 0.01);
+        assert!((layer.opacity(0) - 0.6).abs() < 0.01, "line 0 (outside) should be dimmed to 0.6");
+        assert!((layer.opacity(1) - 1.0).abs() < f64::EPSILON, "line 1 (active) should be 1.0");
+        assert!((layer.opacity(2) - 1.0).abs() < f64::EPSILON, "line 2 (active) should be 1.0");
+        assert!((layer.opacity(3) - 1.0).abs() < f64::EPSILON, "line 3 (active) should be 1.0");
+        assert!((layer.opacity(4) - 0.6).abs() < 0.01, "line 4 (outside) should be dimmed to 0.6");
     }
 
     #[test]

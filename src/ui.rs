@@ -424,7 +424,7 @@ mod tests {
     use ratatui::Terminal;
 
     /// Render the app to a test buffer and return it for inspection.
-    fn render_app(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    fn render_app(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let visual_lines = app.visual_lines();
@@ -452,8 +452,8 @@ mod tests {
 
     #[test]
     fn default_state_renders_no_chrome() {
-        let app = App::new();
-        let buf = render_app(&app, 80, 24);
+        let mut app = App::new();
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -476,7 +476,7 @@ mod tests {
     fn settings_layer_shows_palette_focus_mode_and_column_width() {
         let mut app = App::new();
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // Settings Layer overlay should show current Palette name
@@ -502,7 +502,7 @@ mod tests {
     fn settings_layer_lists_palettes_with_active_indicated() {
         let mut app = App::new(); // default palette is Ember
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // All built-in palette names should be listed
@@ -526,7 +526,7 @@ mod tests {
         let mut app = App::new();
         app.buffer = crate::buffer::Buffer::from_text("The quick brown fox");
         app.toggle_settings();
-        let buf = render_app(&app, 80, 30);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -541,7 +541,7 @@ mod tests {
     fn settings_layer_lists_focus_mode_options_with_active_indicated() {
         let mut app = App::new(); // default focus mode is Off
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // All focus mode options should be listed
@@ -567,7 +567,7 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -585,7 +585,7 @@ mod tests {
         let mut app = App::new();
         app.dirty = true;
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -599,7 +599,7 @@ mod tests {
         let mut app = App::new();
         app.save_error = Some("Permission denied".to_string());
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -614,7 +614,7 @@ mod tests {
         app.editing_mode = crate::editing_mode::EditingMode::Standard;
         app.vim_mode = crate::vim_bindings::Mode::Insert;
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -631,7 +631,7 @@ mod tests {
     fn settings_layer_shows_editing_mode_options() {
         let mut app = App::new();
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -662,7 +662,7 @@ mod tests {
         // Switch to Inkwell palette
         app.set_palette(crate::palette::Palette::inkwell());
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // Settings Layer should reflect new active palette
@@ -693,7 +693,7 @@ mod tests {
         app.toggle_settings(); // cursor starts at active palette index (0 = Ember)
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
 
         // Find the row containing "Ember" in the overlay
         let area = buf.area;
@@ -719,7 +719,7 @@ mod tests {
     fn settings_cursor_non_selected_row_has_normal_background() {
         let mut app = App::new();
         app.toggle_settings(); // cursor at 0 (Ember)
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
 
         // Find the row containing "Inkwell" — should NOT be highlighted
         let area = buf.area;
@@ -747,7 +747,7 @@ mod tests {
         let mut app = App::new();
         app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -764,7 +764,7 @@ mod tests {
     fn settings_layer_shows_scratch_name() {
         let mut app = App::new().with_scratch_name();
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -787,14 +787,14 @@ mod tests {
 
         // Open settings — overlay should be visible
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
         assert!(text.contains("NORMAL"), "Settings Layer should show vim mode");
         assert!(text.contains("Settings"), "Settings Layer title should be visible");
 
         // Dismiss via Escape — overlay should disappear
         app.handle_escape();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
         assert!(
             !text.contains("NORMAL"),
@@ -816,7 +816,7 @@ mod tests {
     fn palette_rows_have_color_swatches() {
         let mut app = App::new();
         app.toggle_settings();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
 
         // Find the row containing "Ember" and check for swatch bg colors
         let ember = Palette::default_palette();
@@ -868,7 +868,7 @@ mod tests {
         assert_eq!(app.settings.cursor, 3); // Inkwell at index 3
 
         let inkwell = Palette::inkwell();
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
 
         // The overlay border/background should use Inkwell's colors, not Ember's
         // Find the Settings title row — its border should use Inkwell's dimmed_foreground
@@ -902,7 +902,7 @@ mod tests {
         app.settings.cursor = 11; // File
         app.rename_open();
 
-        let buf = render_app(&app, 80, 30);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -928,7 +928,7 @@ mod tests {
         // Move cursor to start to test on 'a'
         app.rename.cursor = 0;
 
-        let buf = render_app(&app, 80, 24);
+        let buf = render_app(&mut app, 80, 24);
 
         // Find the row containing "File" and the rename text
         let area = buf.area;

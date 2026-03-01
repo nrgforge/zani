@@ -74,6 +74,8 @@ pub enum Action {
     PasteAfter,
     /// Paste register content before cursor.
     PasteBefore,
+    /// Paste register content at cursor (replacing selection in Standard mode).
+    PasteAtCursor,
     /// Undo the last change.
     Undo,
     /// Redo the last undone change.
@@ -133,6 +135,37 @@ pub fn handle_visual(ch: char) -> Action {
         'y' => Action::Yank,
         'd' => Action::DeleteSelection,
         _ => Action::None,
+    }
+}
+
+/// Process a Normal mode key with optional pending multi-key state.
+/// Returns the action to perform and the new pending key (if any).
+pub fn handle_normal_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
+    if let Some(p) = pending {
+        match (p, ch) {
+            ('g', 'g') => (Action::GotoFirstLine, None),
+            ('d', 'd') => (Action::DeleteLine, None),
+            _ => (Action::None, None),
+        }
+    } else if ch == 'g' || ch == 'd' {
+        (Action::None, Some(ch))
+    } else {
+        (handle_normal(ch), None)
+    }
+}
+
+/// Process a Visual mode key with optional pending multi-key state.
+/// Returns the action to perform and the new pending key (if any).
+pub fn handle_visual_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
+    if let Some(p) = pending {
+        match (p, ch) {
+            ('g', 'g') => (Action::GotoFirstLine, None),
+            _ => (Action::None, None),
+        }
+    } else if ch == 'g' {
+        (Action::None, Some(ch))
+    } else {
+        (handle_visual(ch), None)
     }
 }
 
@@ -196,10 +229,10 @@ mod tests {
 
     #[test]
     fn hjkl_movement_in_normal() {
-        assert_eq!(handle_normal('h'), Action::MoveCursor(Direction::Left));
-        assert_eq!(handle_normal('j'), Action::MoveCursor(Direction::Down));
-        assert_eq!(handle_normal('k'), Action::MoveCursor(Direction::Up));
-        assert_eq!(handle_normal('l'), Action::MoveCursor(Direction::Right));
+        assert_eq!(handle_normal('h'), Action::MoveCursor(Direction::Left), "h should move left");
+        assert_eq!(handle_normal('j'), Action::MoveCursor(Direction::Down), "j should move down");
+        assert_eq!(handle_normal('k'), Action::MoveCursor(Direction::Up), "k should move up");
+        assert_eq!(handle_normal('l'), Action::MoveCursor(Direction::Right), "l should move right");
     }
 
     #[test]
@@ -224,16 +257,16 @@ mod tests {
 
     #[test]
     fn visual_mode_movement_keys() {
-        assert_eq!(handle_visual('h'), Action::MoveCursor(Direction::Left));
-        assert_eq!(handle_visual('j'), Action::MoveCursor(Direction::Down));
-        assert_eq!(handle_visual('k'), Action::MoveCursor(Direction::Up));
-        assert_eq!(handle_visual('l'), Action::MoveCursor(Direction::Right));
-        assert_eq!(handle_visual('w'), Action::WordForward);
-        assert_eq!(handle_visual('b'), Action::WordBackward);
-        assert_eq!(handle_visual('e'), Action::WordEnd);
-        assert_eq!(handle_visual('0'), Action::LineStart);
-        assert_eq!(handle_visual('$'), Action::LineEnd);
-        assert_eq!(handle_visual('G'), Action::GotoLastLine);
+        assert_eq!(handle_visual('h'), Action::MoveCursor(Direction::Left), "h should move left");
+        assert_eq!(handle_visual('j'), Action::MoveCursor(Direction::Down), "j should move down");
+        assert_eq!(handle_visual('k'), Action::MoveCursor(Direction::Up), "k should move up");
+        assert_eq!(handle_visual('l'), Action::MoveCursor(Direction::Right), "l should move right");
+        assert_eq!(handle_visual('w'), Action::WordForward, "w should move word forward");
+        assert_eq!(handle_visual('b'), Action::WordBackward, "b should move word backward");
+        assert_eq!(handle_visual('e'), Action::WordEnd, "e should move to word end");
+        assert_eq!(handle_visual('0'), Action::LineStart, "0 should move to line start");
+        assert_eq!(handle_visual('$'), Action::LineEnd, "$ should move to line end");
+        assert_eq!(handle_visual('G'), Action::GotoLastLine, "G should go to last line");
     }
 
     #[test]
@@ -255,5 +288,42 @@ mod tests {
     #[test]
     fn big_p_in_normal_returns_paste_before() {
         assert_eq!(handle_normal('P'), Action::PasteBefore);
+    }
+
+    // === handle_normal_with_pending tests ===
+
+    #[test]
+    fn gg_returns_goto_first_line() {
+        let (action, pending) = handle_normal_with_pending('g', Some('g'));
+        assert_eq!(action, Action::GotoFirstLine, "gg should produce GotoFirstLine");
+        assert_eq!(pending, None, "pending should be cleared after gg");
+    }
+
+    #[test]
+    fn dd_returns_delete_line() {
+        let (action, pending) = handle_normal_with_pending('d', Some('d'));
+        assert_eq!(action, Action::DeleteLine, "dd should produce DeleteLine");
+        assert_eq!(pending, None, "pending should be cleared after dd");
+    }
+
+    #[test]
+    fn g_alone_sets_pending() {
+        let (action, pending) = handle_normal_with_pending('g', None);
+        assert_eq!(action, Action::None, "first g should produce no action");
+        assert_eq!(pending, Some('g'), "first g should set pending");
+    }
+
+    #[test]
+    fn unknown_second_key_clears_pending() {
+        let (action, pending) = handle_normal_with_pending('z', Some('g'));
+        assert_eq!(action, Action::None, "unknown second key should produce no action");
+        assert_eq!(pending, None, "unknown second key should clear pending");
+    }
+
+    #[test]
+    fn visual_gg_returns_goto_first_line() {
+        let (action, pending) = handle_visual_with_pending('g', Some('g'));
+        assert_eq!(action, Action::GotoFirstLine, "visual gg should produce GotoFirstLine");
+        assert_eq!(pending, None, "pending should be cleared after visual gg");
     }
 }

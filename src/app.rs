@@ -140,6 +140,8 @@ pub struct App {
     /// Queue of sentences fading out, each with its own animation.
     /// (char_start, char_end, animated opacity).
     sentence_fades: Vec<(usize, usize, LineOpacity)>,
+    /// Cache for visual_lines: (buffer_version, column_width, result).
+    visual_lines_cache: Option<(u64, u16, Vec<VisualLine>)>,
 }
 
 impl Default for App {
@@ -185,6 +187,7 @@ impl App {
             ),
             last_sentence_bounds: None,
             sentence_fades: Vec::new(),
+            visual_lines_cache: None,
         }
     }
 
@@ -398,48 +401,16 @@ impl App {
         if modifiers.contains(KeyModifiers::CONTROL) {
             match code {
                 KeyCode::Char('c') => {
-                    // Copy selection if any, otherwise no-op
-                    if let Some(text) = self.selected_text() {
-                        clipboard::write_osc52(&text);
-                        self.yank_register = Some(text);
-                        self.selection_anchor = None;
-                        if self.vim_mode == Mode::Visual {
-                            self.vim_mode = Mode::Normal;
-                        }
-                    }
+                    // Copy: route through action pipeline
+                    self.apply_action(Action::Yank);
                 }
                 KeyCode::Char('x') => {
-                    // Cut: copy selection then delete it
-                    if let Some(text) = self.selected_text() {
-                        clipboard::write_osc52(&text);
-                        self.yank_register = Some(text);
-                        self.delete_selection_silent();
-                        self.selection_anchor = None;
-                        if self.vim_mode == Mode::Visual {
-                            self.vim_mode = Mode::Normal;
-                        }
-                    }
+                    // Cut: route through action pipeline
+                    self.apply_action(Action::DeleteSelection);
                 }
                 KeyCode::Char('v') => {
-                    // Paste from yank register at cursor
-                    if let Some(text) = self.yank_register.clone() {
-                        // In Standard mode with selection, replace selection first
-                        if self.editing_mode == EditingMode::Standard
-                            && self.selection_anchor.is_some()
-                        {
-                            self.delete_selection_silent();
-                            self.selection_anchor = None;
-                        }
-                        let idx = self.cursor_char_index();
-                        self.undo_history.commit_group();
-                        self.undo_history.record_insert(idx, &text);
-                        self.buffer.insert(idx, &text);
-                        self.undo_history.commit_group();
-                        // Advance cursor past inserted text
-                        let char_count = text.chars().count();
-                        self.set_cursor_from_char_index(idx + char_count);
-                        self.dirty = true;
-                    }
+                    // Paste: route through action pipeline
+                    self.apply_action(Action::PasteAtCursor);
                 }
                 KeyCode::Char('a') => {
                     // Select all
@@ -679,50 +650,20 @@ impl App {
 
         let action = match self.vim_mode {
             Mode::Normal => {
-                // Handle multi-key sequences
-                if let Some(pending) = self.pending_normal_key.take() {
-                    match (pending, ch) {
-                        ('g', 'g') => {
-                            self.apply_action(Action::GotoFirstLine);
-                            return;
-                        }
-                        ('d', 'd') => {
-                            self.apply_action(Action::DeleteLine);
-                            return;
-                        }
-                        _ => return,
-                    }
-                }
-
-                if ch == 'g' || ch == 'd' {
-                    self.pending_normal_key = Some(ch);
-                    return;
-                }
-
                 if ch == 'q' {
                     self.should_quit = true;
                     return;
                 }
-                vim_bindings::handle_normal(ch)
+                let pending = self.pending_normal_key.take();
+                let (action, new_pending) = vim_bindings::handle_normal_with_pending(ch, pending);
+                self.pending_normal_key = new_pending;
+                action
             }
             Mode::Visual => {
-                // Handle multi-key sequences (gg works in Visual)
-                if let Some(pending) = self.pending_normal_key.take() {
-                    match (pending, ch) {
-                        ('g', 'g') => {
-                            self.apply_action(Action::GotoFirstLine);
-                            return;
-                        }
-                        _ => return,
-                    }
-                }
-
-                if ch == 'g' {
-                    self.pending_normal_key = Some(ch);
-                    return;
-                }
-
-                vim_bindings::handle_visual(ch)
+                let pending = self.pending_normal_key.take();
+                let (action, new_pending) = vim_bindings::handle_visual_with_pending(ch, pending);
+                self.pending_normal_key = new_pending;
+                action
             }
             Mode::Insert => vim_bindings::handle_insert(ch),
         };
@@ -882,9 +823,13 @@ impl App {
                         clipboard::write_osc52(&text);
                         self.yank_register = Some(text);
                     }
-                    // Delete the selection
+                    // Delete the selection with undo recording
                     let start_idx = self.buffer.line_to_char(sl) + sc;
                     let end_idx = (self.buffer.line_to_char(el) + ec + 1).min(self.buffer.len_chars());
+                    let deleted = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(start_idx, &deleted);
+                    self.undo_history.commit_group();
                     self.buffer.remove(start_idx, end_idx);
                     self.dirty = true;
                     // Move cursor to selection start
@@ -897,10 +842,12 @@ impl App {
             }
             Action::PasteAfter => {
                 if let Some(text) = self.yank_register.clone() {
+                    self.undo_history.commit_group();
                     if text.contains('\n') {
                         // Line-wise paste: insert on next line
                         let line_len = self.buffer.line(self.cursor_line).len_chars();
                         let insert_idx = self.line_start_char_index() + line_len;
+                        self.undo_history.record_insert(insert_idx, &text);
                         self.buffer.insert(insert_idx, &text);
                         self.cursor_line += 1;
                         self.cursor_col = 0;
@@ -908,25 +855,51 @@ impl App {
                         // Char-wise paste: insert after cursor
                         let idx = self.cursor_char_index() + 1;
                         let idx = idx.min(self.buffer.len_chars());
+                        self.undo_history.record_insert(idx, &text);
                         self.buffer.insert(idx, &text);
                         self.cursor_col += text.chars().count();
                     }
+                    self.undo_history.commit_group();
                     self.dirty = true;
                 }
             }
             Action::PasteBefore => {
                 if let Some(text) = self.yank_register.clone() {
+                    self.undo_history.commit_group();
                     if text.contains('\n') {
                         // Line-wise paste: insert on current line
                         let insert_idx = self.line_start_char_index();
+                        self.undo_history.record_insert(insert_idx, &text);
                         self.buffer.insert(insert_idx, &text);
                         self.cursor_col = 0;
                     } else {
                         // Char-wise paste: insert before cursor
                         let idx = self.cursor_char_index();
+                        self.undo_history.record_insert(idx, &text);
                         self.buffer.insert(idx, &text);
                         self.cursor_col += text.chars().count().saturating_sub(1);
                     }
+                    self.undo_history.commit_group();
+                    self.dirty = true;
+                }
+            }
+            Action::PasteAtCursor => {
+                if let Some(text) = self.yank_register.clone() {
+                    // In Standard mode with selection, replace selection first
+                    if self.editing_mode == EditingMode::Standard
+                        && self.selection_anchor.is_some()
+                    {
+                        self.delete_selection_silent();
+                        self.selection_anchor = None;
+                    }
+                    let idx = self.cursor_char_index();
+                    self.undo_history.commit_group();
+                    self.undo_history.record_insert(idx, &text);
+                    self.buffer.insert(idx, &text);
+                    self.undo_history.commit_group();
+                    // Advance cursor past inserted text
+                    let char_count = text.chars().count();
+                    self.set_cursor_from_char_index(idx + char_count);
                     self.dirty = true;
                 }
             }
@@ -1418,8 +1391,18 @@ impl App {
     }
 
     /// Compute visual lines for the current buffer and column width.
-    pub fn visual_lines(&self) -> Vec<VisualLine> {
-        wrap::visual_lines_for_buffer(&self.buffer, self.column_width)
+    /// Returns cached result when buffer and column width haven't changed.
+    pub fn visual_lines(&mut self) -> Vec<VisualLine> {
+        let ver = self.buffer.version();
+        let cw = self.column_width;
+        if let Some((cv, ccw, ref cached)) = self.visual_lines_cache
+            && cv == ver && ccw == cw
+        {
+            return cached.clone();
+        }
+        let result = wrap::visual_lines_for_buffer(&self.buffer, self.column_width);
+        self.visual_lines_cache = Some((ver, cw, result.clone()));
+        result
     }
 
     /// Adjust scroll_offset so the cursor stays visible within the given height.
@@ -1653,11 +1636,11 @@ mod tests {
     #[test]
     fn i_enters_insert_and_escape_returns_to_normal() {
         let mut app = App::new();
-        assert_eq!(app.vim_mode, Mode::Normal);
+        assert_eq!(app.vim_mode, Mode::Normal, "should start in Normal mode");
         app.handle_char('i');
-        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.vim_mode, Mode::Insert, "i should switch to Insert mode");
         app.handle_escape();
-        assert_eq!(app.vim_mode, Mode::Normal);
+        assert_eq!(app.vim_mode, Mode::Normal, "Escape should return to Normal mode");
     }
 
     // === Acceptance test: Vim navigation motions ===
@@ -1757,9 +1740,9 @@ mod tests {
         app.buffer = Buffer::from_text("hello\n");
         app.cursor_col = 0;
         app.handle_char('A');
-        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.vim_mode, Mode::Insert, "A should enter Insert mode");
         // line has 6 chars (h,e,l,l,o,\n), max_col = 5
-        assert_eq!(app.cursor_col, 5);
+        assert_eq!(app.cursor_col, 5, "A should move cursor to end of line");
     }
 
     // === Acceptance test: Multi-key sequences ===
@@ -1772,8 +1755,8 @@ mod tests {
         app.cursor_col = 3;
         app.handle_char('g');
         app.handle_char('g');
-        assert_eq!(app.cursor_line, 0);
-        assert_eq!(app.cursor_col, 0);
+        assert_eq!(app.cursor_line, 0, "gg should move cursor to first line");
+        assert_eq!(app.cursor_col, 0, "gg should move cursor to column 0");
     }
 
     #[test]
@@ -1796,8 +1779,8 @@ mod tests {
         let before = app.buffer.to_string();
         app.handle_char('g');
         app.handle_char('z'); // unknown
-        assert_eq!(app.buffer.to_string(), before);
-        assert_eq!(app.cursor_col, 2); // unchanged
+        assert_eq!(app.buffer.to_string(), before, "buffer should be unchanged after unknown sequence");
+        assert_eq!(app.cursor_col, 2, "cursor should be unchanged after unknown sequence");
     }
 
     // === Acceptance test: Typewriter mode centering ===
@@ -1816,8 +1799,8 @@ mod tests {
         app.ensure_cursor_visible(&visual_lines, 10); // height 10
 
         // Cursor at visual line 10, height 10 → scroll_offset = 10 - 5 = 5
-        assert_eq!(app.scroll_offset, 5);
-        assert_eq!(app.typewriter_vertical_offset, 0);
+        assert_eq!(app.scroll_offset, 5, "scroll should center cursor in viewport");
+        assert_eq!(app.typewriter_vertical_offset, 0, "no vertical offset needed when content fills above");
     }
 
     #[test]
@@ -1834,8 +1817,8 @@ mod tests {
 
         // Cursor at visual line 1, center = 5
         // Not enough content above → scroll stays 0, vertical offset pushes down
-        assert_eq!(app.scroll_offset, 0);
-        assert_eq!(app.typewriter_vertical_offset, 4); // center(5) - cursor_vl(1)
+        assert_eq!(app.scroll_offset, 0, "scroll should stay at 0 when near top");
+        assert_eq!(app.typewriter_vertical_offset, 4, "vertical offset should push content down to center cursor");
     }
 
     // === Acceptance test: Vim append mode ===
@@ -1847,8 +1830,8 @@ mod tests {
         app.cursor_line = 0;
         app.cursor_col = 2; // on 'l'
         app.handle_char('a');
-        assert_eq!(app.vim_mode, Mode::Insert);
-        assert_eq!(app.cursor_col, 3); // moved right to after 'l'
+        assert_eq!(app.vim_mode, Mode::Insert, "a should enter Insert mode");
+        assert_eq!(app.cursor_col, 3, "a should advance cursor one position right");
     }
 
     #[test]
@@ -1858,10 +1841,10 @@ mod tests {
         app.cursor_line = 0;
         app.cursor_col = 1; // on 'i', which is the last char before newline
         app.handle_char('a');
-        assert_eq!(app.vim_mode, Mode::Insert);
+        assert_eq!(app.vim_mode, Mode::Insert, "a should enter Insert mode");
         // max_col = len_chars - 1 = 2 (h, i, \n → 3 chars, max=2)
         // cursor was at 1, < 2, so moves to 2
-        assert_eq!(app.cursor_col, 2);
+        assert_eq!(app.cursor_col, 2, "a at end should move cursor to line end");
     }
 
     // === Unit test: Smart typography in insert mode ===
@@ -3260,5 +3243,52 @@ mod tests {
             app.move_cursor(vim_bindings::Direction::Up);
         }
         assert_eq!(app.cursor_col, 0, "back at start");
+    }
+
+    // === Undo recording tests for Ctrl-chord actions ===
+
+    #[test]
+    fn ctrl_x_records_undo() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello world");
+        // Select "hello" (chars 0..4)
+        app.selection_anchor = Some((0, 0));
+        app.cursor_line = 0;
+        app.cursor_col = 4;
+        app.vim_mode = Mode::Visual;
+        // Cut via Ctrl+X (now routed through DeleteSelection)
+        app.handle_key(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(app.buffer.to_string(), " world", "selection should be deleted");
+        // Undo should restore
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.to_string(), "hello world", "undo should restore deleted text");
+    }
+
+    #[test]
+    fn ctrl_v_paste_at_cursor_records_undo() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("world");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.yank_register = Some("hello ".to_string());
+        // Paste via Ctrl+V
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(app.buffer.to_string(), "hello world", "text should be pasted");
+        // Undo should restore
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.to_string(), "world", "undo should remove pasted text");
+    }
+
+    #[test]
+    fn paste_after_records_undo() {
+        let mut app = App::new();
+        app.buffer = Buffer::from_text("hello");
+        app.cursor_line = 0;
+        app.cursor_col = 4;
+        app.yank_register = Some(" world".to_string());
+        app.apply_action(Action::PasteAfter);
+        assert_eq!(app.buffer.to_string(), "hello world", "text should be pasted after cursor");
+        app.apply_action(Action::Undo);
+        assert_eq!(app.buffer.to_string(), "hello", "undo should remove pasted text");
     }
 }

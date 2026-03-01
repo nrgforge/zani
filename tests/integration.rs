@@ -125,18 +125,18 @@ fn styling_preserves_raw_buffer_content() {
 
     // The buffer content should be exactly what was typed
     let content = buffer.to_string();
-    assert_eq!(content, text);
+    assert_eq!(content, text, "buffer content should match original text");
 
     // Markdown styling does NOT modify the buffer
     let line = buffer.line(0).to_string();
     let styles = markdown_styling::style_line(&line);
     // styles is per-character metadata, not a modified string
-    assert_eq!(styles.len(), line.chars().count());
+    assert_eq!(styles.len(), line.chars().count(), "style count should match char count");
 
     // If we were to write this to disk, we'd write buffer.to_string()
     // which is the original text — no styling information included
-    assert!(!content.contains('\u{1b}')); // No ANSI escape codes
-    assert!(content.contains("**bold**")); // Markdown syntax preserved
-    assert!(content.contains("*italic*"));
-    assert!(content.contains("--")); // Raw dashes (smart typography only applies on keystroke)
+    assert!(!content.contains('\u{1b}'), "buffer should not contain ANSI escape codes");
+    assert!(content.contains("**bold**"), "markdown bold syntax should be preserved");
+    assert!(content.contains("*italic*"), "markdown italic syntax should be preserved");
+    assert!(content.contains("--"), "raw dashes should be preserved (no smart typography)");
 }

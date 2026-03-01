@@ -155,10 +155,10 @@ mod tests {
     #[test]
     fn default_config_values() {
         let config = Config::default();
-        assert_eq!(config.palette, "Ember");
-        assert_eq!(config.focus_mode, FocusMode::Off);
-        assert_eq!(config.column_width, 60);
-        assert_eq!(config.editing_mode, EditingMode::Vim);
+        assert_eq!(config.palette, "Ember", "default palette should be Ember");
+        assert_eq!(config.focus_mode, FocusMode::Off, "default focus mode should be Off");
+        assert_eq!(config.column_width, 60, "default column width should be 60");
+        assert_eq!(config.editing_mode, EditingMode::Vim, "default editing mode should be Vim");
     }
 
     #[test]
@@ -179,9 +179,9 @@ mod tests {
     fn deserialize_with_missing_fields_uses_defaults() {
         let toml_str = r#"palette = "Parchment""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.palette, "Parchment");
-        assert_eq!(config.focus_mode, FocusMode::Off);
-        assert_eq!(config.column_width, 60);
+        assert_eq!(config.palette, "Parchment", "palette should match specified value");
+        assert_eq!(config.focus_mode, FocusMode::Off, "missing focus_mode should default to Off");
+        assert_eq!(config.column_width, 60, "missing column_width should default to 60");
     }
 
     #[test]

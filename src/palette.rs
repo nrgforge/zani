@@ -303,7 +303,7 @@ mod tests {
     fn interpolate_clamps_out_of_range() {
         let a = Color::Rgb(100, 100, 100);
         let b = Color::Rgb(200, 200, 200);
-        assert_eq!(interpolate(&a, &b, -0.5), a);
-        assert_eq!(interpolate(&a, &b, 1.5), b);
+        assert_eq!(interpolate(&a, &b, -0.5), a, "negative t should clamp to first color");
+        assert_eq!(interpolate(&a, &b, 1.5), b, "t > 1 should clamp to second color");
     }
 }

@@ -7,6 +7,7 @@ use ropey::Rope;
 #[derive(Debug, Clone)]
 pub struct Buffer {
     rope: Rope,
+    version: u64,
 }
 
 impl fmt::Display for Buffer {
@@ -28,13 +29,20 @@ impl Buffer {
     pub fn new() -> Self {
         Self {
             rope: Rope::new(),
+            version: 0,
         }
     }
 
     pub fn from_text(text: &str) -> Self {
         Self {
             rope: Rope::from_str(text),
+            version: 0,
         }
+    }
+
+    /// Monotonically increasing version, incremented on each mutation.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Extract a slice of the buffer as a String.
@@ -80,11 +88,13 @@ impl Buffer {
     /// Insert text at a character offset.
     pub fn insert(&mut self, char_idx: usize, text: &str) {
         self.rope.insert(char_idx, text);
+        self.version += 1;
     }
 
     /// Remove a range of characters.
     pub fn remove(&mut self, start: usize, end: usize) {
         self.rope.remove(start..end);
+        self.version += 1;
     }
 }
 
@@ -95,24 +105,40 @@ mod tests {
     #[test]
     fn empty_buffer() {
         let buf = Buffer::new();
-        assert_eq!(buf.len_chars(), 0);
-        assert_eq!(buf.len_lines(), 1); // Ropey counts 1 line for empty
+        assert_eq!(buf.len_chars(), 0, "empty buffer should have 0 chars");
+        assert_eq!(buf.len_lines(), 1, "empty buffer should have 1 line (ropey convention)");
     }
 
     #[test]
     fn from_text() {
         let buf = Buffer::from_text("hello\nworld");
-        assert_eq!(buf.len_lines(), 2);
-        assert_eq!(buf.line(0).to_string(), "hello\n");
-        assert_eq!(buf.line(1).to_string(), "world");
+        assert_eq!(buf.len_lines(), 2, "two-line text should have 2 lines");
+        assert_eq!(buf.line(0).to_string(), "hello\n", "first line should include newline");
+        assert_eq!(buf.line(1).to_string(), "world", "second line should be 'world'");
     }
 
     #[test]
     fn insert_and_remove() {
         let mut buf = Buffer::from_text("hello world");
         buf.insert(5, " beautiful");
-        assert_eq!(buf.to_string(), "hello beautiful world");
+        assert_eq!(buf.to_string(), "hello beautiful world", "insert should add text at position");
         buf.remove(5, 15);
-        assert_eq!(buf.to_string(), "hello world");
+        assert_eq!(buf.to_string(), "hello world", "remove should restore original text");
+    }
+
+    #[test]
+    fn version_increments_on_insert() {
+        let mut buf = Buffer::new();
+        let v0 = buf.version();
+        buf.insert(0, "hello");
+        assert_eq!(buf.version(), v0 + 1, "version should increment after insert");
+    }
+
+    #[test]
+    fn version_increments_on_remove() {
+        let mut buf = Buffer::from_text("hello");
+        let v0 = buf.version();
+        buf.remove(0, 3);
+        assert_eq!(buf.version(), v0 + 1, "version should increment after remove");
     }
 }

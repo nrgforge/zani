@@ -450,9 +450,9 @@ mod tests {
         // Find the 'H' character and verify its style
         let x_offset = (80 - 60) / 2; // 10
         let cell = &buf[(x_offset, 0)];
-        assert_eq!(cell.symbol(), "H");
-        assert_eq!(cell.fg, palette.foreground);
-        assert_eq!(cell.bg, palette.background);
+        assert_eq!(cell.symbol(), "H", "first char should be 'H'");
+        assert_eq!(cell.fg, palette.foreground, "fg should match palette foreground");
+        assert_eq!(cell.bg, palette.background, "bg should match palette background");
     }
 
     // === Acceptance test: Cursor positioning accounts for soft-wrapped lines ===

@@ -153,25 +153,25 @@ mod tests {
     #[test]
     fn short_line_no_wrap() {
         let lines = wrap_line("Hello world", 60, 0);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].char_start, 0);
-        assert_eq!(lines[0].char_end, 11);
+        assert_eq!(lines.len(), 1, "short line should produce 1 visual line");
+        assert_eq!(lines[0].char_start, 0, "char_start should be 0");
+        assert_eq!(lines[0].char_end, 11, "char_end should be 11");
     }
 
     #[test]
     fn empty_line() {
         let lines = wrap_line("", 60, 0);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].char_start, 0);
-        assert_eq!(lines[0].char_end, 0);
+        assert_eq!(lines.len(), 1, "empty line should produce 1 visual line");
+        assert_eq!(lines[0].char_start, 0, "char_start should be 0");
+        assert_eq!(lines[0].char_end, 0, "char_end should be 0");
     }
 
     #[test]
     fn newline_only() {
         let lines = wrap_line("\n", 60, 0);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].char_start, 0);
-        assert_eq!(lines[0].char_end, 0);
+        assert_eq!(lines.len(), 1, "newline-only should produce 1 visual line");
+        assert_eq!(lines[0].char_start, 0, "char_start should be 0");
+        assert_eq!(lines[0].char_end, 0, "char_end should be 0");
     }
 
     #[test]
@@ -198,15 +198,15 @@ mod tests {
         ];
         let visual = wrap_all(&input, 30);
         // First and third lines fit in 30 chars, second wraps
-        assert!(visual.len() > 3);
-        assert_eq!(visual[0].logical_line, 0);
-        assert_eq!(visual.last().unwrap().logical_line, 2);
+        assert!(visual.len() > 3, "wrapping long line should produce more than 3 visual lines");
+        assert_eq!(visual[0].logical_line, 0, "first visual line should be logical line 0");
+        assert_eq!(visual.last().unwrap().logical_line, 2, "last visual line should be logical line 2");
     }
 
     #[test]
     fn trailing_newline_stripped_for_wrapping() {
         let lines = wrap_line("Hello world\n", 60, 0);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].char_end, 11); // "Hello world" is 11 chars, \n stripped
+        assert_eq!(lines.len(), 1, "trailing newline should not add a visual line");
+        assert_eq!(lines[0].char_end, 11, "char_end should exclude trailing newline");
     }
 }
