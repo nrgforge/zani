@@ -6,6 +6,7 @@ pub mod config;
 pub mod draft_name;
 pub mod color_profile;
 pub mod editing_mode;
+pub mod editor;
 pub mod find;
 pub mod focus_mode;
 pub mod markdown_styling;

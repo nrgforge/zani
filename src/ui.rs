@@ -35,16 +35,16 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
     // Build Writing Surface
     let line_opacities = app.line_opacities();
     let sentence_fades = app.dimming.sentence_fade_snapshot();
-    let surface = WritingSurface::new(&app.buffer, &effective)
+    let surface = WritingSurface::new(&app.editor.buffer, &effective)
         .column_width(app.column_width)
         .scroll_offset(app.scroll_display.round() as usize)
-        .cursor(app.cursor_line, app.cursor_col)
+        .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
-        .sentence_bounds(app.sentence_bounds())
+        .sentence_bounds(app.editor.sentence_bounds())
         .sentence_fades(&sentence_fades)
         .color_profile(app.color_profile)
         .vertical_offset(app.typewriter_vertical_offset)
-        .selection(app.selection_range())
+        .selection(app.editor.selection_range())
         .find_matches(find_ranges, find_current)
         .line_opacities(&line_opacities)
         .precomputed_visual_lines(visual_lines);
@@ -182,7 +182,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     EditingMode::Vim => "Vim",
                     EditingMode::Standard => "Standard",
                 };
-                let marker = if *mode == app.editing_mode { ">" } else { " " };
+                let marker = if *mode == app.editor.editing_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::Palette(idx) => {
@@ -246,16 +246,16 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     }
 
     // Status information (not selectable)
-    let mode_str = if app.editing_mode == EditingMode::Standard {
+    let mode_str = if app.editor.editing_mode == EditingMode::Standard {
         "STANDARD"
     } else {
-        match app.vim_mode {
+        match app.editor.vim_mode {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
         }
     };
-    let dirty_str = if app.dirty { " [+]" } else { "" };
+    let dirty_str = if app.editor.dirty { " [+]" } else { "" };
     let error_str = if let Some(ref err) = app.save_error {
         format!("  Save failed: {}", err)
     } else {
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn settings_layer_does_not_replace_writing_surface() {
         let mut app = App::new();
-        app.buffer = crate::buffer::Buffer::from_text("The quick brown fox");
+        app.editor.buffer = crate::buffer::Buffer::from_text("The quick brown fox");
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn settings_layer_shows_dirty_state() {
         let mut app = App::new();
-        app.dirty = true;
+        app.editor.dirty = true;
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
@@ -611,8 +611,8 @@ mod tests {
     #[test]
     fn settings_layer_shows_standard_mode_label() {
         let mut app = App::new();
-        app.editing_mode = crate::editing_mode::EditingMode::Standard;
-        app.vim_mode = crate::vim_bindings::Mode::Insert;
+        app.editor.editing_mode = crate::editing_mode::EditingMode::Standard;
+        app.editor.vim_mode = crate::vim_bindings::Mode::Insert;
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
@@ -793,7 +793,7 @@ mod tests {
         assert!(text.contains("Settings"), "Settings Layer title should be visible");
 
         // Dismiss via Escape — overlay should disappear
-        app.handle_escape();
+        app.dismiss_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
         assert!(

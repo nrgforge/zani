@@ -67,9 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.dimming.focus_mode = config.focus_mode;
     app.scroll_mode = config.scroll_mode;
     app.column_width = config.column_width;
-    app.editing_mode = config.editing_mode;
-    if app.editing_mode == zani::editing_mode::EditingMode::Standard {
-        app.vim_mode = zani::vim_bindings::Mode::Insert;
+    app.editor.editing_mode = config.editing_mode;
+    if app.editor.editing_mode == zani::editing_mode::EditingMode::Standard {
+        app.editor.vim_mode = zani::vim_bindings::Mode::Insert;
     }
     if let Some(ref path) = file_path {
         let content = std::fs::read_to_string(path).unwrap_or_default();
@@ -131,7 +131,7 @@ fn run(
         }
 
         // Set cursor shape based on vim mode
-        let cursor_style = match app.cursor_shape() {
+        let cursor_style = match app.editor.cursor_shape() {
             CursorShape::Bar => crossterm::cursor::SetCursorStyle::BlinkingBar,
             CursorShape::Block => crossterm::cursor::SetCursorStyle::SteadyBlock,
         };
