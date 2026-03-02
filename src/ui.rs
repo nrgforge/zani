@@ -14,7 +14,7 @@ use crate::wrap::VisualLine;
 use crate::writing_surface::WritingSurface;
 
 /// Render the application state to a frame.
-pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) {
+pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], sentence_bounds: Option<(usize, usize)>) {
     let area = frame.area();
     if area.height < 1 {
         return; // terminal too small
@@ -41,7 +41,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
         .scroll_offset(app.viewport.scroll_display.round() as usize)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
-        .sentence_bounds(app.editor.sentence_bounds())
+        .sentence_bounds(sentence_bounds)
         .sentence_fades(&sentence_fades)
         .color_profile(app.color_profile)
         .vertical_offset(app.viewport.typewriter_vertical_offset)
@@ -429,9 +429,10 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
+        let sentence_bounds = app.editor.sentence_bounds_cached();
         terminal
             .draw(|frame| {
-                draw(frame, &app, &visual_lines);
+                draw(frame, &app, &visual_lines, sentence_bounds);
             })
             .unwrap();
         terminal.backend().buffer().clone()

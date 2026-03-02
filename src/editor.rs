@@ -9,6 +9,13 @@ use crate::undo::UndoHistory;
 use crate::vim_bindings::{self, Action, CursorShape, Direction, Mode};
 use crate::wrap::{self, VisualLine};
 
+/// Cached paragraph/sentence bounds, invalidated on cursor move or buffer edit.
+struct BoundsCache {
+    key: (u64, usize, usize), // (buffer_version, cursor_line, cursor_col)
+    paragraph: Option<(usize, usize)>,
+    sentence: Option<(usize, usize)>,
+}
+
 /// Text editor core: buffer, cursor, undo, selection, and vim state.
 pub struct Editor {
     pub buffer: Buffer,
@@ -21,6 +28,7 @@ pub struct Editor {
     pub yank_register: Option<String>,
     pub undo_history: UndoHistory,
     pub dirty: bool,
+    bounds_cache: Option<BoundsCache>,
 }
 
 impl Default for Editor {
@@ -42,6 +50,7 @@ impl Editor {
             yank_register: None,
             undo_history: UndoHistory::new(),
             dirty: false,
+            bounds_cache: None,
         }
     }
 
@@ -709,6 +718,7 @@ impl Editor {
     }
 
     /// Find the paragraph bounds (start_line, end_line) containing the cursor.
+    /// Uses rope slice iteration to avoid String allocation.
     pub fn paragraph_bounds(&self) -> Option<(usize, usize)> {
         let total = self.buffer.len_lines();
         if total == 0 {
@@ -717,8 +727,7 @@ impl Editor {
 
         let mut start = self.cursor_line;
         while start > 0 {
-            let line = self.buffer.line(start - 1).to_string();
-            if line.trim().is_empty() {
+            if self.buffer.line(start - 1).chars().all(|c| c.is_whitespace()) {
                 break;
             }
             start -= 1;
@@ -726,14 +735,38 @@ impl Editor {
 
         let mut end = self.cursor_line;
         while end + 1 < total {
-            let line = self.buffer.line(end + 1).to_string();
-            if line.trim().is_empty() {
+            if self.buffer.line(end + 1).chars().all(|c| c.is_whitespace()) {
                 break;
             }
             end += 1;
         }
 
         Some((start, end))
+    }
+
+    /// Populate the bounds cache if the key has changed, then return it.
+    fn ensure_bounds_cached(&mut self) {
+        let key = (self.buffer.version(), self.cursor_line, self.cursor_col);
+        if let Some(ref cache) = self.bounds_cache {
+            if cache.key == key {
+                return;
+            }
+        }
+        let paragraph = self.paragraph_bounds();
+        let sentence = self.sentence_bounds();
+        self.bounds_cache = Some(BoundsCache { key, paragraph, sentence });
+    }
+
+    /// Cached paragraph bounds — recomputes only when cursor or buffer changes.
+    pub fn paragraph_bounds_cached(&mut self) -> Option<(usize, usize)> {
+        self.ensure_bounds_cached();
+        self.bounds_cache.as_ref().unwrap().paragraph
+    }
+
+    /// Cached sentence bounds — recomputes only when cursor or buffer changes.
+    pub fn sentence_bounds_cached(&mut self) -> Option<(usize, usize)> {
+        self.ensure_bounds_cached();
+        self.bounds_cache.as_ref().unwrap().sentence
     }
 
     /// Returns the normalized selection range (start_line, start_col, end_line, end_col).
@@ -1512,5 +1545,59 @@ mod tests {
         editor.cursor_col = 5;
         editor.clamp_cursor_col();
         assert_eq!(editor.cursor_col, 5);
+    }
+
+    // === Bounds cache ===
+
+    #[test]
+    fn bounds_cache_returns_same_result_on_second_call() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First paragraph.\n\nSecond paragraph.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 5;
+
+        let pb1 = editor.paragraph_bounds_cached();
+        let sb1 = editor.sentence_bounds_cached();
+
+        // Second call should hit cache (same result)
+        let pb2 = editor.paragraph_bounds_cached();
+        let sb2 = editor.sentence_bounds_cached();
+
+        assert_eq!(pb1, pb2);
+        assert_eq!(sb1, sb2);
+    }
+
+    #[test]
+    fn bounds_cache_invalidates_on_cursor_move() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First paragraph.\n\nSecond paragraph.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+
+        let pb1 = editor.paragraph_bounds_cached();
+        assert_eq!(pb1, Some((0, 0)));
+
+        // Move cursor to second paragraph
+        editor.cursor_line = 2;
+        let pb2 = editor.paragraph_bounds_cached();
+        assert_eq!(pb2, Some((2, 2)));
+    }
+
+    #[test]
+    fn bounds_cache_invalidates_on_buffer_edit() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("One.\n\nTwo.\n");
+        editor.cursor_line = 2;
+        editor.cursor_col = 0;
+
+        let pb1 = editor.paragraph_bounds_cached();
+        assert_eq!(pb1, Some((2, 2)));
+
+        // Insert a line that merges the paragraphs
+        editor.buffer.remove(4, 5); // remove the blank line's newline
+
+        let pb2 = editor.paragraph_bounds_cached();
+        // After merging, paragraph should now span more lines
+        assert_ne!(pb1, pb2);
     }
 }
