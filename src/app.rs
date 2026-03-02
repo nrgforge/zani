@@ -205,10 +205,48 @@ impl App {
             return;
         }
 
+        // Intercept Up/Down to use cached visual lines (O(1) instead of O(N))
+        if self.try_handle_vertical_move(code, modifiers) {
+            return;
+        }
+
         // Route to editor for text editing keys
         if self.editor.handle_key(code, modifiers) {
             self.should_quit = true;
         }
+    }
+
+    /// Handle vertical cursor movement using the viewport's cached visual lines.
+    /// Returns true if the key was handled.
+    fn try_handle_vertical_move(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        use crate::vim_bindings::Direction;
+
+        let dir = match code {
+            KeyCode::Up => Direction::Up,
+            KeyCode::Down => Direction::Down,
+            KeyCode::Char('k') if self.can_vim_navigate() => Direction::Up,
+            KeyCode::Char('j') if self.can_vim_navigate() => Direction::Down,
+            _ => return false,
+        };
+
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            self.editor.extend_selection_visual(dir, &visual_lines);
+        } else {
+            // Clear selection for standard mode arrow keys
+            if self.editor.editing_mode == EditingMode::Standard {
+                self.editor.selection_anchor = None;
+            }
+            self.editor.move_cursor_visual(dir, &visual_lines);
+        }
+        true
+    }
+
+    /// Whether the current mode allows vim navigation keys (j/k in Normal/Visual).
+    fn can_vim_navigate(&self) -> bool {
+        self.editor.editing_mode == EditingMode::Vim
+            && matches!(self.editor.vim_mode, Mode::Normal | Mode::Visual)
     }
 
     /// Handle Ctrl+key combinations.

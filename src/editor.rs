@@ -710,6 +710,17 @@ impl Editor {
         }
     }
 
+    /// Extend selection using pre-computed visual lines for Up/Down movement.
+    pub fn extend_selection_visual(&mut self, dir: Direction, visual_lines: &[VisualLine]) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+        }
+        self.move_cursor_visual(dir, visual_lines);
+        if self.editing_mode == EditingMode::Vim && self.vim_mode != Mode::Visual {
+            self.vim_mode = Mode::Visual;
+        }
+    }
+
     /// Delete the current selection without yanking (for Standard mode replace-on-type).
     pub fn delete_selection_silent(&mut self) {
         if let Some((sl, sc, el, ec)) = self.selection_range() {

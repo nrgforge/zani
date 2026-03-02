@@ -37,8 +37,8 @@ pub struct RenderCache {
     code_block_state: Vec<bool>,
     line_char_offsets: Vec<usize>,
     md_styles: Vec<Vec<markdown_styling::CharStyle>>,
-    /// Scratch buffer for building line text during refresh (avoids allocation).
-    line_buf: String,
+    line_texts: Vec<String>,
+    line_chars: Vec<Vec<char>>,
 }
 
 impl RenderCache {
@@ -48,7 +48,8 @@ impl RenderCache {
             code_block_state: Vec::new(),
             line_char_offsets: Vec::new(),
             md_styles: Vec::new(),
-            line_buf: String::new(),
+            line_texts: Vec::new(),
+            line_chars: Vec::new(),
         }
     }
 
@@ -67,12 +68,26 @@ impl RenderCache {
         self.code_block_state.clear();
         self.line_char_offsets.clear();
 
-        // Resize md_styles to match line count, reusing inner Vec capacity
-        if self.md_styles.len() > line_count {
-            self.md_styles.truncate(line_count);
+        // Resize per-line vecs to match line count, reusing inner capacity
+        for vecs in [&mut self.md_styles as &mut Vec<Vec<_>>] {
+            if vecs.len() > line_count {
+                vecs.truncate(line_count);
+            }
+            while vecs.len() < line_count {
+                vecs.push(Vec::new());
+            }
         }
-        while self.md_styles.len() < line_count {
-            self.md_styles.push(Vec::new());
+        if self.line_texts.len() > line_count {
+            self.line_texts.truncate(line_count);
+        }
+        while self.line_texts.len() < line_count {
+            self.line_texts.push(String::new());
+        }
+        if self.line_chars.len() > line_count {
+            self.line_chars.truncate(line_count);
+        }
+        while self.line_chars.len() < line_count {
+            self.line_chars.push(Vec::new());
         }
 
         let mut in_code_block = false;
@@ -88,11 +103,17 @@ impl RenderCache {
                 self.code_block_state.push(in_code_block);
             }
 
+            // Build line text (reuses String capacity)
+            self.line_texts[i].clear();
+            let _ = write!(self.line_texts[i], "{}", line);
+
+            // Build line chars (reuses Vec capacity)
+            self.line_chars[i].clear();
+            self.line_chars[i].extend(self.line_texts[i].chars());
+
             // Compute markdown styles for this line
-            self.line_buf.clear();
-            let _ = write!(self.line_buf, "{}", line);
             let styles = markdown_styling::style_line_with_context(
-                &self.line_buf,
+                &self.line_texts[i],
                 *self.code_block_state.last().unwrap(),
             );
             // Reuse inner Vec: clear + extend preserves capacity
@@ -111,6 +132,14 @@ impl RenderCache {
 
     pub fn md_styles(&self) -> &[Vec<markdown_styling::CharStyle>] {
         &self.md_styles
+    }
+
+    pub fn line_texts(&self) -> &[String] {
+        &self.line_texts
+    }
+
+    pub fn line_chars(&self) -> &[Vec<char>] {
+        &self.line_chars
     }
 }
 
@@ -160,6 +189,10 @@ pub struct WritingSurface<'a> {
     precomputed_line_char_offsets: Option<&'a [usize]>,
     /// Pre-computed markdown styles per logical line (from RenderCache).
     precomputed_md_styles: Option<&'a [Vec<markdown_styling::CharStyle>]>,
+    /// Pre-computed line text per logical line (from RenderCache).
+    precomputed_line_texts: Option<&'a [String]>,
+    /// Pre-computed line chars per logical line (from RenderCache).
+    precomputed_line_chars: Option<&'a [Vec<char>]>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -183,6 +216,8 @@ impl<'a> WritingSurface<'a> {
             precomputed_code_block_state: None,
             precomputed_line_char_offsets: None,
             precomputed_md_styles: None,
+            precomputed_line_texts: None,
+            precomputed_line_chars: None,
         }
     }
 
@@ -259,6 +294,16 @@ impl<'a> WritingSurface<'a> {
 
     pub fn md_styles(mut self, styles: &'a [Vec<markdown_styling::CharStyle>]) -> Self {
         self.precomputed_md_styles = Some(styles);
+        self
+    }
+
+    pub fn precomputed_line_texts(mut self, texts: &'a [String]) -> Self {
+        self.precomputed_line_texts = Some(texts);
+        self
+    }
+
+    pub fn precomputed_line_chars(mut self, chars: &'a [Vec<char>]) -> Self {
+        self.precomputed_line_chars = Some(chars);
         self
     }
 
@@ -340,11 +385,23 @@ impl Widget for WritingSurface<'_> {
         };
         let x_offset = self.center_offset(area.width);
 
-        // Fill background
+        // Targeted background fill — avoids double-writing cells that the
+        // character loop will overwrite. Fills margins, vertical offset rows,
+        // and rows below content. Trailing cells on short lines are filled
+        // inside the render loop.
         let bg = self.color_profile.map_color(self.palette.background);
+        let bg_style = Style::default().bg(bg);
+        let content_left = area.left() + x_offset;
+        let content_right = (content_left + self.column_width).min(area.right());
+
+        // Left and right margins (columns outside the content column) for all rows
         for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buf[(x, y)].set_style(Style::default().bg(bg));
+            for x in area.left()..content_left {
+                buf[(x, y)].set_style(bg_style);
+                buf[(x, y)].set_char(' ');
+            }
+            for x in content_right..area.right() {
+                buf[(x, y)].set_style(bg_style);
                 buf[(x, y)].set_char(' ');
             }
         }
@@ -398,10 +455,20 @@ impl Widget for WritingSurface<'_> {
         let effective_height = (area.height as usize).saturating_sub(self.vertical_offset as usize);
         let visible_end = (self.scroll_offset + effective_height).min(visual_lines.len());
 
-        // Reuse line data across visual lines from the same logical line
+        // Fill vertical offset rows (content column, above content)
+        for y in area.top()..area.top() + self.vertical_offset {
+            for x in content_left..content_right {
+                buf[(x, y)].set_style(bg_style);
+                buf[(x, y)].set_char(' ');
+            }
+        }
+
+        // Reuse line data across visual lines from the same logical line.
+        // When precomputed data is available, index directly with no allocation.
         let mut last_logical_line: Option<usize> = None;
-        let mut line_text = String::new();
-        let mut chars: Vec<char> = Vec::new();
+        let mut fallback_line_text = String::new();
+        let mut fallback_chars: Vec<char> = Vec::new();
+        let mut active_chars: &[char] = &[];
         let mut computed_md_styles = Vec::<markdown_styling::CharStyle>::new();
         let mut active_md_styles: &[markdown_styling::CharStyle] = &computed_md_styles;
         let mut line_opacity: f64 = 1.0;
@@ -414,21 +481,33 @@ impl Widget for WritingSurface<'_> {
             if last_logical_line != Some(vl.logical_line) {
                 last_logical_line = Some(vl.logical_line);
 
-                line_text.clear();
-                use std::fmt::Write;
-                let _ = write!(line_text, "{}", self.buffer.line(vl.logical_line));
-                chars.clear();
-                chars.extend(line_text.chars());
+                // Use precomputed chars/text when available, fallback to inline
+                active_chars = if let Some(cached) = self.precomputed_line_chars {
+                    cached.get(vl.logical_line).map(|v| v.as_slice()).unwrap_or(&[])
+                } else {
+                    fallback_line_text.clear();
+                    use std::fmt::Write;
+                    let _ = write!(fallback_line_text, "{}", self.buffer.line(vl.logical_line));
+                    fallback_chars.clear();
+                    fallback_chars.extend(fallback_line_text.chars());
+                    &fallback_chars
+                };
 
                 // Use precomputed markdown styles when available
                 active_md_styles = if let Some(cached) = self.precomputed_md_styles {
                     cached.get(vl.logical_line).map(|v| v.as_slice()).unwrap_or(&[])
                 } else {
+                    // Ensure fallback_line_text is populated for md style computation
+                    if self.precomputed_line_chars.is_some() {
+                        fallback_line_text.clear();
+                        use std::fmt::Write;
+                        let _ = write!(fallback_line_text, "{}", self.buffer.line(vl.logical_line));
+                    }
                     let line_in_code_block = code_block_state
                         .get(vl.logical_line)
                         .copied()
                         .unwrap_or(false);
-                    computed_md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
+                    computed_md_styles = markdown_styling::style_line_with_context(&fallback_line_text, line_in_code_block);
                     &computed_md_styles
                 };
 
@@ -446,7 +525,7 @@ impl Widget for WritingSurface<'_> {
             let y = area.top() + self.vertical_offset + screen_row as u16;
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
                 let x = area.left() + x_offset + col as u16;
-                if x < area.right() && char_idx < chars.len() {
+                if x < area.right() && char_idx < active_chars.len() {
                     // Per-character opacity with animated sentence transitions.
                     // Check fading sentences FIRST so fade-in animations are
                     // visible even when the chars are in the current sentence.
@@ -517,9 +596,26 @@ impl Widget for WritingSurface<'_> {
                         None => style,
                     };
 
-                    buf[(x, y)].set_char(chars[char_idx]);
+                    buf[(x, y)].set_char(active_chars[char_idx]);
                     buf[(x, y)].set_style(style);
                 }
+            }
+
+            // Fill trailing cells after content on this visual line (within content column)
+            let chars_rendered = (vl.char_end - vl.char_start).min(active_chars.len().saturating_sub(vl.char_start));
+            let trail_start = content_left + chars_rendered as u16;
+            for x in trail_start..content_right {
+                buf[(x, y)].set_style(bg_style);
+                buf[(x, y)].set_char(' ');
+            }
+        }
+
+        // Fill rows below content (content column, after last visual line)
+        let content_end_row = area.top() + self.vertical_offset + (visible_end - visible_start) as u16;
+        for y in content_end_row..area.bottom() {
+            for x in content_left..content_right {
+                buf[(x, y)].set_style(bg_style);
+                buf[(x, y)].set_char(' ');
             }
         }
     }

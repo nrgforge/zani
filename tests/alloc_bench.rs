@@ -105,7 +105,9 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect) {
         .precomputed_visual_lines(&visual_lines)
         .code_block_state(app.render_cache.code_block_state())
         .line_char_offsets(app.render_cache.line_char_offsets())
-        .md_styles(app.render_cache.md_styles());
+        .md_styles(app.render_cache.md_styles())
+        .precomputed_line_texts(app.render_cache.line_texts())
+        .precomputed_line_chars(app.render_cache.line_chars());
 
     let mut buf = RatatuiBuffer::empty(area);
     surface.render(area, &mut buf);

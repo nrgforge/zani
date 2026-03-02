@@ -50,7 +50,9 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
         .precomputed_visual_lines(visual_lines)
         .code_block_state(app.render_cache.code_block_state())
         .line_char_offsets(app.render_cache.line_char_offsets())
-        .md_styles(app.render_cache.md_styles());
+        .md_styles(app.render_cache.md_styles())
+        .precomputed_line_texts(app.render_cache.line_texts())
+        .precomputed_line_chars(app.render_cache.line_chars());
 
     // Compute cursor position before render consumes the surface
     let cursor_pos = surface.cursor_visual_position(visual_lines);
