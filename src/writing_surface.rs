@@ -10,6 +10,84 @@ use crate::markdown_styling;
 use crate::palette::Palette;
 use crate::wrap::{self, VisualLine};
 
+/// Check if a RopeSlice is a fenced code block delimiter (starts with ```).
+/// Zero allocation — inspects chars directly via the rope iterator.
+fn is_fence_from_rope_slice(slice: ropey::RopeSlice<'_>) -> bool {
+    let mut backtick_count = 0;
+    for ch in slice.chars() {
+        if ch.is_whitespace() && backtick_count == 0 {
+            continue; // skip leading whitespace
+        }
+        if ch == '`' {
+            backtick_count += 1;
+            if backtick_count >= 3 {
+                return true;
+            }
+        } else {
+            return false;
+        }
+    }
+    false
+}
+
+/// Cached per-logical-line metadata for the rendering pipeline.
+/// Reuses Vec capacity across frames; only recomputes when buffer version changes.
+pub struct RenderCache {
+    version: u64,
+    code_block_state: Vec<bool>,
+    line_char_offsets: Vec<usize>,
+}
+
+impl RenderCache {
+    pub fn new() -> Self {
+        Self {
+            version: u64::MAX, // force first refresh
+            code_block_state: Vec::new(),
+            line_char_offsets: Vec::new(),
+        }
+    }
+
+    /// Refresh if buffer has changed. Reuses existing Vec capacity.
+    pub fn refresh(&mut self, buffer: &Buffer) {
+        let ver = buffer.version();
+        if self.version == ver {
+            return;
+        }
+        self.version = ver;
+
+        self.code_block_state.clear();
+        self.line_char_offsets.clear();
+
+        let mut in_code_block = false;
+        let mut char_offset = 0;
+        for i in 0..buffer.len_lines() {
+            let line = buffer.line(i);
+            self.line_char_offsets.push(char_offset);
+            char_offset += line.len_chars();
+            if is_fence_from_rope_slice(line) {
+                self.code_block_state.push(false);
+                in_code_block = !in_code_block;
+            } else {
+                self.code_block_state.push(in_code_block);
+            }
+        }
+    }
+
+    pub fn code_block_state(&self) -> &[bool] {
+        &self.code_block_state
+    }
+
+    pub fn line_char_offsets(&self) -> &[usize] {
+        &self.line_char_offsets
+    }
+}
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The custom text viewport where prose is rendered.
 /// Handles soft-wrapping, scroll positioning, and per-character styling.
 /// Renders directly to ratatui's cell buffer, bypassing the Paragraph widget.
@@ -44,6 +122,10 @@ pub struct WritingSurface<'a> {
     line_opacities: &'a [f64],
     /// Pre-computed visual lines (soft-wrapped).
     precomputed_visual_lines: Option<&'a [VisualLine]>,
+    /// Pre-computed code block state per logical line (from RenderCache).
+    precomputed_code_block_state: Option<&'a [bool]>,
+    /// Pre-computed char offsets per logical line (from RenderCache).
+    precomputed_line_char_offsets: Option<&'a [usize]>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -64,6 +146,8 @@ impl<'a> WritingSurface<'a> {
             find_current: None,
             line_opacities: &[],
             precomputed_visual_lines: None,
+            precomputed_code_block_state: None,
+            precomputed_line_char_offsets: None,
         }
     }
 
@@ -125,6 +209,16 @@ impl<'a> WritingSurface<'a> {
 
     pub fn precomputed_visual_lines(mut self, lines: &'a [VisualLine]) -> Self {
         self.precomputed_visual_lines = Some(lines);
+        self
+    }
+
+    pub fn code_block_state(mut self, state: &'a [bool]) -> Self {
+        self.precomputed_code_block_state = Some(state);
+        self
+    }
+
+    pub fn line_char_offsets(mut self, offsets: &'a [usize]) -> Self {
+        self.precomputed_line_char_offsets = Some(offsets);
         self
     }
 
@@ -215,22 +309,43 @@ impl Widget for WritingSurface<'_> {
             }
         }
 
-        // Pre-compute per-logical-line metadata
-        let mut code_block_state: Vec<bool> = Vec::with_capacity(self.buffer.len_lines());
-        let mut line_char_offsets: Vec<usize> = Vec::with_capacity(self.buffer.len_lines());
-        let mut in_code_block = false;
-        let mut char_offset = 0;
-        for i in 0..self.buffer.len_lines() {
-            let line_text = self.buffer.line(i).to_string();
-            line_char_offsets.push(char_offset);
-            char_offset += line_text.chars().count();
-            if markdown_styling::is_fence_line(&line_text) {
-                code_block_state.push(false);
-                in_code_block = !in_code_block;
-            } else {
-                code_block_state.push(in_code_block);
+        // Use precomputed per-logical-line metadata when available, fallback to inline.
+        let computed_cbs;
+        let computed_lco;
+        let code_block_state: &[bool] = match self.precomputed_code_block_state {
+            Some(s) => s,
+            None => {
+                computed_cbs = {
+                    let mut v = Vec::with_capacity(self.buffer.len_lines());
+                    let mut in_cb = false;
+                    for i in 0..self.buffer.len_lines() {
+                        if is_fence_from_rope_slice(self.buffer.line(i)) {
+                            v.push(false);
+                            in_cb = !in_cb;
+                        } else {
+                            v.push(in_cb);
+                        }
+                    }
+                    v
+                };
+                &computed_cbs
             }
-        }
+        };
+        let line_char_offsets: &[usize] = match self.precomputed_line_char_offsets {
+            Some(s) => s,
+            None => {
+                computed_lco = {
+                    let mut v = Vec::with_capacity(self.buffer.len_lines());
+                    let mut off = 0;
+                    for i in 0..self.buffer.len_lines() {
+                        v.push(off);
+                        off += self.buffer.line(i).len_chars();
+                    }
+                    v
+                };
+                &computed_lco
+            }
+        };
 
         // Sentence mode: use per-character distance
         let use_sentence_dimming = self.focus_mode == FocusMode::Sentence

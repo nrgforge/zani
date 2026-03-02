@@ -15,6 +15,7 @@ use crate::persistence::Persistence;
 use crate::settings::{RenameState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, Mode};
 use crate::viewport::Viewport;
+use crate::writing_surface::RenderCache;
 
 /// Thin coordinator that owns subsystems and routes input between them.
 pub struct App {
@@ -30,6 +31,7 @@ pub struct App {
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
+    pub render_cache: RenderCache,
 }
 
 impl Default for App {
@@ -52,6 +54,7 @@ impl App {
             rename: RenameState::new(),
             find_state: None,
             animations: AnimationManager::new(),
+            render_cache: RenderCache::new(),
         }
     }
 

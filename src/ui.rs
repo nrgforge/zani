@@ -46,7 +46,9 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
         .selection(app.editor.selection_range())
         .find_matches(find_ranges, find_current)
         .line_opacities(app.dimming.line_opacities())
-        .precomputed_visual_lines(visual_lines);
+        .precomputed_visual_lines(visual_lines)
+        .code_block_state(app.render_cache.code_block_state())
+        .line_char_offsets(app.render_cache.line_char_offsets());
 
     // Compute cursor position before render consumes the surface
     let cursor_pos = surface.cursor_visual_position(visual_lines);
@@ -428,6 +430,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
         let sentence_bounds = app.editor.sentence_bounds_cached();
+        app.render_cache.refresh(&app.editor.buffer);
         terminal
             .draw(|frame| {
                 draw(frame, &app, &visual_lines, sentence_bounds);

@@ -105,6 +105,9 @@ fn run(
         let sb = app.editor.sentence_bounds_cached();
         app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
 
+        // Refresh render cache (reuses Vec capacity across frames)
+        app.render_cache.refresh(&app.editor.buffer);
+
         // Draw — reuse visual_lines computed above for ensure_cursor_visible
         terminal.draw(|frame| {
             zani::ui::draw(frame, app, &visual_lines, sb);

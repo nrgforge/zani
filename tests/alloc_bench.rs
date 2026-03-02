@@ -86,7 +86,10 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect) {
     let sb = app.editor.sentence_bounds_cached();
     app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
 
-    // 4. Build and render WritingSurface (the heaviest part)
+    // 4. Refresh render cache (reuses Vec capacity across frames)
+    app.render_cache.refresh(&app.editor.buffer);
+
+    // 5. Build and render WritingSurface (the heaviest part)
     let palette = app.effective_palette();
     let surface = zani::writing_surface::WritingSurface::new(&app.editor.buffer, &palette)
         .column_width(app.viewport.column_width)
@@ -99,7 +102,9 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect) {
         .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
         .line_opacities(app.dimming.line_opacities())
-        .precomputed_visual_lines(&visual_lines);
+        .precomputed_visual_lines(&visual_lines)
+        .code_block_state(app.render_cache.code_block_state())
+        .line_char_offsets(app.render_cache.line_char_offsets());
 
     let mut buf = RatatuiBuffer::empty(area);
     surface.render(area, &mut buf);
@@ -168,10 +173,10 @@ fn measure_allocations_per_frame() {
 
     eprintln!();
 
-    // Threshold assertion — will tighten as steps 4-6 land
+    // Threshold assertion — tightened after Steps 1-5
     assert!(
-        paragraph_per_frame < 500,
-        "Steady-state allocations per frame ({paragraph_per_frame}) should be under 500 \
-         (original baseline was ~620, target is <100)"
+        paragraph_per_frame < 100,
+        "Steady-state allocations per frame ({paragraph_per_frame}) should be under 100 \
+         (original baseline was ~440, current target is <100)"
     );
 }
