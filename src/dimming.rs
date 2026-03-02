@@ -13,6 +13,9 @@ pub struct DimmingState {
     pub paragraph_dim: DimLayer,
     last_sentence_bounds: Option<(usize, usize)>,
     sentence_fades: Vec<(usize, usize, LineOpacity)>,
+    /// Pre-populated output buffers, reused across frames.
+    line_opacities_buf: Vec<f64>,
+    sentence_fades_buf: Vec<(usize, usize, f64)>,
 }
 
 impl DimmingState {
@@ -25,15 +28,14 @@ impl DimmingState {
             ),
             last_sentence_bounds: None,
             sentence_fades: Vec::new(),
+            line_opacities_buf: Vec::new(),
+            sentence_fades_buf: Vec::new(),
         }
     }
 
-    /// Snapshot of all in-flight sentence fades: (char_start, char_end, current_opacity).
-    pub fn sentence_fade_snapshot(&self) -> Vec<(usize, usize, f64)> {
-        self.sentence_fades
-            .iter()
-            .map(|(s, e, o)| (*s, *e, o.current_opacity()))
-            .collect()
+    /// Pre-populated sentence fades for the renderer.
+    pub fn sentence_fade_snapshot(&self) -> &[(usize, usize, f64)] {
+        &self.sentence_fades_buf
     }
 
     /// Whether any dimming layer is still animating.
@@ -43,6 +45,7 @@ impl DimmingState {
     }
 
     /// Recompute dimming layer targets based on current focus mode and cursor position.
+    /// Also populates the output buffers for line_opacities and sentence_fade_snapshot.
     pub fn update(
         &mut self,
         line_count: usize,
@@ -51,8 +54,7 @@ impl DimmingState {
     ) {
         match self.focus_mode {
             FocusMode::Off => {
-                let targets = vec![1.0; line_count];
-                self.paragraph_dim.update_targets(&targets);
+                self.paragraph_dim.set_all_to(1.0, line_count);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
             }
@@ -99,13 +101,23 @@ impl DimmingState {
                 self.sentence_fades.retain(|(_, _, o)| o.is_animating());
             }
         }
+
+        // Populate output buffers (reuses existing Vec capacity)
+        self.line_opacities_buf.clear();
+        self.line_opacities_buf.reserve(line_count.saturating_sub(self.line_opacities_buf.capacity()));
+        for i in 0..line_count {
+            self.line_opacities_buf.push(self.paragraph_dim.opacity(i));
+        }
+
+        self.sentence_fades_buf.clear();
+        for (s, e, o) in &self.sentence_fades {
+            self.sentence_fades_buf.push((*s, *e, o.current_opacity()));
+        }
     }
 
-    /// Compute final per-line opacities for the renderer.
-    pub fn line_opacities(&self, line_count: usize) -> Vec<f64> {
-        (0..line_count)
-            .map(|i| self.paragraph_dim.opacity(i))
-            .collect()
+    /// Pre-populated per-line opacities for the renderer.
+    pub fn line_opacities(&self) -> &[f64] {
+        &self.line_opacities_buf
     }
 }
 

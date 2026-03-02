@@ -315,11 +315,28 @@ impl DimLayer {
         self.lines.get(line).map_or(1.0, |lo| lo.current_opacity())
     }
 
+    /// Set all lines to the same target value, resizing as needed.
+    /// Fast path for FocusMode::Off — avoids allocating a targets Vec.
+    pub fn set_all_to(&mut self, value: f64, line_count: usize) {
+        while self.lines.len() < line_count {
+            self.lines.push(LineOpacity::new(value));
+        }
+        self.lines.truncate(line_count);
+        for lo in &mut self.lines {
+            let current = lo.current_opacity();
+            let config = if value > current {
+                self.fade_in.clone()
+            } else {
+                self.fade_out.clone()
+            };
+            lo.set_target(value, config);
+        }
+    }
+
     /// True if any line is still animating.
     pub fn is_animating(&self) -> bool {
         self.lines.iter().any(|lo| lo.is_animating())
     }
-
 }
 
 #[cfg(test)]

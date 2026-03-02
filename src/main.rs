@@ -100,12 +100,14 @@ fn run(
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
         app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, surface_height, &mut app.animations);
 
-        // Pre-compute sentence bounds for this frame (cached, zero-cost on hit)
-        let sentence_bounds = app.editor.sentence_bounds_cached();
+        // Update dimming layer targets before draw so output buffers are fresh
+        let pb = app.editor.paragraph_bounds_cached();
+        let sb = app.editor.sentence_bounds_cached();
+        app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
 
         // Draw — reuse visual_lines computed above for ensure_cursor_visible
         terminal.draw(|frame| {
-            zani::ui::draw(frame, app, &visual_lines, sentence_bounds);
+            zani::ui::draw(frame, app, &visual_lines, sb);
         })?;
         app.animations.tick();
 
@@ -133,11 +135,6 @@ fn run(
                 _ => {}
             }
         }
-
-        // Update dimming layer targets based on current cursor position
-        let pb = app.editor.paragraph_bounds_cached();
-        let sb = app.editor.sentence_bounds_cached();
-        app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
 
         // Autosave on idle
         if app.persistence.should_autosave(app.editor.dirty) {

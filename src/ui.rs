@@ -34,20 +34,18 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
     };
 
     // Build Writing Surface
-    let line_opacities = app.dimming.line_opacities(app.editor.buffer.len_lines());
-    let sentence_fades = app.dimming.sentence_fade_snapshot();
     let surface = WritingSurface::new(&app.editor.buffer, &effective)
         .column_width(app.viewport.column_width)
         .scroll_offset(app.viewport.scroll_display.round() as usize)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
         .sentence_bounds(sentence_bounds)
-        .sentence_fades(&sentence_fades)
+        .sentence_fades(app.dimming.sentence_fade_snapshot())
         .color_profile(app.color_profile)
         .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
         .find_matches(find_ranges, find_current)
-        .line_opacities(&line_opacities)
+        .line_opacities(app.dimming.line_opacities())
         .precomputed_visual_lines(visual_lines);
 
     // Compute cursor position before render consumes the surface
