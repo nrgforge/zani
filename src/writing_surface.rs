@@ -36,6 +36,9 @@ pub struct RenderCache {
     version: u64,
     code_block_state: Vec<bool>,
     line_char_offsets: Vec<usize>,
+    md_styles: Vec<Vec<markdown_styling::CharStyle>>,
+    /// Scratch buffer for building line text during refresh (avoids allocation).
+    line_buf: String,
 }
 
 impl RenderCache {
@@ -44,23 +47,37 @@ impl RenderCache {
             version: u64::MAX, // force first refresh
             code_block_state: Vec::new(),
             line_char_offsets: Vec::new(),
+            md_styles: Vec::new(),
+            line_buf: String::new(),
         }
     }
 
     /// Refresh if buffer has changed. Reuses existing Vec capacity.
     pub fn refresh(&mut self, buffer: &Buffer) {
+        use std::fmt::Write;
+
         let ver = buffer.version();
         if self.version == ver {
             return;
         }
         self.version = ver;
 
+        let line_count = buffer.len_lines();
+
         self.code_block_state.clear();
         self.line_char_offsets.clear();
 
+        // Resize md_styles to match line count, reusing inner Vec capacity
+        if self.md_styles.len() > line_count {
+            self.md_styles.truncate(line_count);
+        }
+        while self.md_styles.len() < line_count {
+            self.md_styles.push(Vec::new());
+        }
+
         let mut in_code_block = false;
         let mut char_offset = 0;
-        for i in 0..buffer.len_lines() {
+        for i in 0..line_count {
             let line = buffer.line(i);
             self.line_char_offsets.push(char_offset);
             char_offset += line.len_chars();
@@ -70,6 +87,17 @@ impl RenderCache {
             } else {
                 self.code_block_state.push(in_code_block);
             }
+
+            // Compute markdown styles for this line
+            self.line_buf.clear();
+            let _ = write!(self.line_buf, "{}", line);
+            let styles = markdown_styling::style_line_with_context(
+                &self.line_buf,
+                *self.code_block_state.last().unwrap(),
+            );
+            // Reuse inner Vec: clear + extend preserves capacity
+            self.md_styles[i].clear();
+            self.md_styles[i].extend(styles);
         }
     }
 
@@ -79,6 +107,10 @@ impl RenderCache {
 
     pub fn line_char_offsets(&self) -> &[usize] {
         &self.line_char_offsets
+    }
+
+    pub fn md_styles(&self) -> &[Vec<markdown_styling::CharStyle>] {
+        &self.md_styles
     }
 }
 
@@ -126,6 +158,8 @@ pub struct WritingSurface<'a> {
     precomputed_code_block_state: Option<&'a [bool]>,
     /// Pre-computed char offsets per logical line (from RenderCache).
     precomputed_line_char_offsets: Option<&'a [usize]>,
+    /// Pre-computed markdown styles per logical line (from RenderCache).
+    precomputed_md_styles: Option<&'a [Vec<markdown_styling::CharStyle>]>,
 }
 
 impl<'a> WritingSurface<'a> {
@@ -148,6 +182,7 @@ impl<'a> WritingSurface<'a> {
             precomputed_visual_lines: None,
             precomputed_code_block_state: None,
             precomputed_line_char_offsets: None,
+            precomputed_md_styles: None,
         }
     }
 
@@ -219,6 +254,11 @@ impl<'a> WritingSurface<'a> {
 
     pub fn line_char_offsets(mut self, offsets: &'a [usize]) -> Self {
         self.precomputed_line_char_offsets = Some(offsets);
+        self
+    }
+
+    pub fn md_styles(mut self, styles: &'a [Vec<markdown_styling::CharStyle>]) -> Self {
+        self.precomputed_md_styles = Some(styles);
         self
     }
 
@@ -362,7 +402,8 @@ impl Widget for WritingSurface<'_> {
         let mut last_logical_line: Option<usize> = None;
         let mut line_text = String::new();
         let mut chars: Vec<char> = Vec::new();
-        let mut md_styles: Vec<markdown_styling::CharStyle> = Vec::new();
+        let mut computed_md_styles = Vec::<markdown_styling::CharStyle>::new();
+        let mut active_md_styles: &[markdown_styling::CharStyle] = &computed_md_styles;
         let mut line_opacity: f64 = 1.0;
         let mut abs_line_start: usize = 0;
 
@@ -379,11 +420,17 @@ impl Widget for WritingSurface<'_> {
                 chars.clear();
                 chars.extend(line_text.chars());
 
-                let line_in_code_block = code_block_state
-                    .get(vl.logical_line)
-                    .copied()
-                    .unwrap_or(false);
-                md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
+                // Use precomputed markdown styles when available
+                active_md_styles = if let Some(cached) = self.precomputed_md_styles {
+                    cached.get(vl.logical_line).map(|v| v.as_slice()).unwrap_or(&[])
+                } else {
+                    let line_in_code_block = code_block_state
+                        .get(vl.logical_line)
+                        .copied()
+                        .unwrap_or(false);
+                    computed_md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
+                    &computed_md_styles
+                };
 
                 line_opacity = self.line_opacities
                     .get(vl.logical_line)
@@ -425,8 +472,8 @@ impl Widget for WritingSurface<'_> {
                     };
 
                     // Resolve markdown style for this character
-                    let style = if char_idx < md_styles.len() {
-                        let resolved = md_styles[char_idx].resolve(self.palette);
+                    let style = if char_idx < active_md_styles.len() {
+                        let resolved = active_md_styles[char_idx].resolve(self.palette);
                         if char_opacity < 1.0 {
                             match self.color_profile {
                                 ColorProfile::Basic => {
