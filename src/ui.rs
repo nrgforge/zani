@@ -213,7 +213,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             }
             SettingsItem::File => {
                 let file_str = app
-                    .file_path
+                    .persistence.file_path
                     .as_ref()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
@@ -256,7 +256,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
         }
     };
     let dirty_str = if app.editor.dirty { " [+]" } else { "" };
-    let error_str = if let Some(ref err) = app.save_error {
+    let error_str = if let Some(ref err) = app.persistence.save_error {
         format!("  Save failed: {}", err)
     } else {
         String::new()
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn settings_layer_shows_vim_mode_and_filename() {
         let mut app = App::new();
-        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn settings_layer_shows_save_error() {
         let mut app = App::new();
-        app.save_error = Some("Permission denied".to_string());
+        app.persistence.save_error = Some("Permission denied".to_string());
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn settings_layer_shows_file_row() {
         let mut app = App::new();
-        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
@@ -783,7 +783,7 @@ mod tests {
     #[test]
     fn dismissed_settings_layer_returns_to_chromeless() {
         let mut app = App::new();
-        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
 
         // Open settings — overlay should be visible
         app.toggle_settings();
@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn rename_mode_shows_editable_text() {
         let mut app = App::new();
-        app.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
         app.settings.cursor = 11; // File
         app.rename_open();
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn rename_cursor_char_has_inverted_style() {
         let mut app = App::new();
-        app.file_path = Some(std::path::PathBuf::from("/tmp/abc.md"));
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/abc.md"));
         app.toggle_settings();
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();

@@ -1,18 +1,17 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::animation::AnimationManager;
-use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::color_profile::ColorProfile;
-use crate::draft_name;
 use crate::editing_mode::EditingMode;
 use crate::editor::Editor;
 use crate::find::FindState;
 use crate::focus_mode::{DimLayer, FadeConfig, FocusMode, LineOpacity, paragraph_target_opacities};
 use crate::palette::Palette;
+use crate::persistence::Persistence;
 use crate::scroll_mode::ScrollMode;
 use crate::vim_bindings::{Action, Mode};
 use crate::viewport::Viewport;
@@ -138,12 +137,7 @@ pub struct App {
     pub color_profile: ColorProfile,
     pub settings: SettingsState,
     pub should_quit: bool,
-    pub file_path: Option<PathBuf>,
-    pub is_scratch: bool,
-    pub last_save: Option<Instant>,
-    pub autosave_interval: Duration,
-    /// Last save error message, surfaced in the settings layer.
-    pub save_error: Option<String>,
+    pub persistence: Persistence,
     pub rename: RenameState,
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
@@ -166,11 +160,7 @@ impl App {
             color_profile: ColorProfile::TrueColor,
             settings: SettingsState { visible: false, cursor: 0 },
             should_quit: false,
-            file_path: None,
-            is_scratch: false,
-            last_save: None,
-            autosave_interval: Duration::from_secs(3),
-            save_error: None,
+            persistence: Persistence::new(),
             rename: RenameState { active: false, buf: String::new(), cursor: 0 },
             find_state: None,
             animations: AnimationManager::new(),
@@ -178,14 +168,12 @@ impl App {
     }
 
     pub fn with_file(mut self, path: PathBuf, content: &str) -> Self {
-        self.editor.buffer = Buffer::from_text(content);
-        self.file_path = Some(path);
+        self.persistence.with_file(path, &mut self.editor.buffer, content);
         self
     }
 
     pub fn with_scratch_name(mut self) -> Self {
-        self.file_path = Some(PathBuf::from(draft_name::generate()));
-        self.is_scratch = true;
+        self.persistence.with_scratch_name();
         self
     }
 
@@ -291,7 +279,7 @@ impl App {
     /// Open inline rename: seed buffer with current filename, cursor at end.
     pub fn rename_open(&mut self) {
         let name = self
-            .file_path
+            .persistence.file_path
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
@@ -339,7 +327,7 @@ impl App {
             return;
         }
 
-        if let Some(old_path) = &self.file_path {
+        if let Some(old_path) = &self.persistence.file_path {
             let new_path = old_path.with_file_name(&self.rename.buf);
 
             // Only attempt fs::rename if old file exists on disk
@@ -350,9 +338,9 @@ impl App {
                 return;
             }
 
-            self.file_path = Some(new_path);
-            if self.is_scratch {
-                self.is_scratch = false;
+            self.persistence.file_path = Some(new_path);
+            if self.persistence.is_scratch {
+                self.persistence.is_scratch = false;
             }
         }
 
@@ -434,7 +422,7 @@ impl App {
                 self.toggle_settings();
             }
             KeyCode::Char('s') => {
-                self.autosave();
+                self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
             }
             KeyCode::Char('f') => {
                 if self.find_state.is_none() {
@@ -622,40 +610,6 @@ impl App {
             .collect()
     }
 
-    /// Check if autosave should trigger (dirty + enough time elapsed).
-    pub fn should_autosave(&self) -> bool {
-        if !self.editor.dirty {
-            return false;
-        }
-        match self.last_save {
-            Some(last) => last.elapsed() >= self.autosave_interval,
-            None => true, // Never saved and dirty — save now
-        }
-    }
-
-    /// Perform autosave if a file path is set. Returns true if saved.
-    pub fn autosave(&mut self) -> bool {
-        if !self.editor.dirty || self.file_path.is_none() {
-            return false;
-        }
-
-        if let Some(path) = &self.file_path {
-            let content = self.editor.buffer.to_string();
-            match std::fs::write(path, &content) {
-                Ok(()) => {
-                    self.editor.dirty = false;
-                    self.last_save = Some(Instant::now());
-                    self.save_error = None;
-                    return true;
-                }
-                Err(e) => {
-                    self.save_error = Some(e.to_string());
-                }
-            }
-        }
-        false
-    }
-
     /// Returns the effective palette, accounting for any active crossfade animation.
     pub fn effective_palette(&self) -> Palette {
         if let Some((progress, from, _to)) = self.animations.palette_progress() {
@@ -699,9 +653,11 @@ fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buffer;
     use crate::editing_mode::EditingMode;
     use crate::vim_bindings::{self, CursorShape};
     use std::io::Write;
+    use std::time::Instant;
     use tempfile::NamedTempFile;
 
     // === Unit test: SettingsItem::all() matches expected count ===
@@ -762,7 +718,7 @@ mod tests {
         app.editor.handle_char('!');
         assert!(app.editor.dirty);
 
-        let saved = app.autosave();
+        let saved = app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
         assert!(saved);
         assert!(!app.editor.dirty);
 
@@ -779,7 +735,7 @@ mod tests {
         let path = tmp.path().to_path_buf();
         let mut app = App::new().with_file(path, "content");
         // Not dirty
-        assert!(!app.autosave());
+        assert!(!app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty));
     }
 
     // === Acceptance test: Vim mode switch ===
@@ -1150,8 +1106,8 @@ mod tests {
     #[test]
     fn scratch_sets_file_path() {
         let app = App::new().with_scratch_name();
-        assert!(app.file_path.is_some());
-        assert!(app.is_scratch);
+        assert!(app.persistence.file_path.is_some());
+        assert!(app.persistence.is_scratch);
     }
 
     #[test]
@@ -1159,12 +1115,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new();
         let name = crate::draft_name::generate();
-        app.file_path = Some(dir.path().join(&name));
-        app.is_scratch = true;
+        app.persistence.file_path = Some(dir.path().join(&name));
+        app.persistence.is_scratch = true;
         app.editor.vim_mode = Mode::Insert;
         app.editor.handle_char('x');
         assert!(app.editor.dirty);
-        let saved = app.autosave();
+        let saved = app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
         assert!(saved, "scratch buffer should autosave");
     }
 
@@ -1172,8 +1128,8 @@ mod tests {
     fn explicit_file_is_not_scratch() {
         let tmp = NamedTempFile::new().unwrap();
         let app = App::new().with_file(tmp.path().to_path_buf(), "hello");
-        assert!(!app.is_scratch);
-        assert!(app.file_path.is_some());
+        assert!(!app.persistence.is_scratch);
+        assert!(app.persistence.file_path.is_some());
     }
 
     // === Inline rename ===
@@ -1181,7 +1137,7 @@ mod tests {
     #[test]
     fn rename_open_seeds_buffer_with_filename() {
         let mut app = App::new();
-        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
         assert!(app.rename.active);
         assert_eq!(app.rename.buf, "draft.md");
@@ -1256,7 +1212,7 @@ mod tests {
     #[test]
     fn rename_cancel_clears_state() {
         let mut app = App::new();
-        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
         assert!(app.rename.active);
 
@@ -1273,7 +1229,7 @@ mod tests {
         std::fs::write(&old_path, "content").unwrap();
 
         let mut app = App::new();
-        app.file_path = Some(old_path.clone());
+        app.persistence.file_path = Some(old_path.clone());
         app.rename_open();
         // Clear buffer and type new name
         app.rename.buf = "new.md".to_string();
@@ -1282,7 +1238,7 @@ mod tests {
 
         assert!(!app.rename.active);
         let new_path = dir.path().join("new.md");
-        assert_eq!(app.file_path, Some(new_path.clone()));
+        assert_eq!(app.persistence.file_path, Some(new_path.clone()));
         assert!(new_path.exists());
         assert!(!old_path.exists());
     }
@@ -1290,7 +1246,7 @@ mod tests {
     #[test]
     fn rename_confirm_empty_name_cancels() {
         let mut app = App::new();
-        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.rename_open();
         app.rename.buf = "".to_string();
         app.rename.cursor = 0;
@@ -1298,7 +1254,7 @@ mod tests {
 
         assert!(!app.rename.active);
         // file_path unchanged
-        assert_eq!(app.file_path, Some(PathBuf::from("/tmp/draft.md")));
+        assert_eq!(app.persistence.file_path, Some(PathBuf::from("/tmp/draft.md")));
     }
 
     #[test]
@@ -1308,20 +1264,20 @@ mod tests {
         std::fs::write(&old_path, "").unwrap();
 
         let mut app = App::new();
-        app.file_path = Some(old_path);
-        app.is_scratch = true;
+        app.persistence.file_path = Some(old_path);
+        app.persistence.is_scratch = true;
         app.rename_open();
         app.rename.buf = "real.md".to_string();
         app.rename.cursor = 7;
         app.rename_confirm();
 
-        assert!(!app.is_scratch);
+        assert!(!app.persistence.is_scratch);
     }
 
     #[test]
     fn settings_apply_file_opens_rename() {
         let mut app = App::new();
-        app.file_path = Some(PathBuf::from("/tmp/draft.md"));
+        app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
         app.settings.cursor = 11; // File
         app.settings_apply();
         assert!(app.rename.active);
@@ -1332,8 +1288,8 @@ mod tests {
     fn rename_confirm_unsaved_scratch_updates_path_without_fs_rename() {
         // File doesn't exist on disk — should just update path
         let mut app = App::new();
-        app.file_path = Some(PathBuf::from("/nonexistent/dir/scratch.md"));
-        app.is_scratch = true;
+        app.persistence.file_path = Some(PathBuf::from("/nonexistent/dir/scratch.md"));
+        app.persistence.is_scratch = true;
         app.rename_open();
         app.rename.buf = "real.md".to_string();
         app.rename.cursor = 7;
@@ -1341,10 +1297,10 @@ mod tests {
 
         assert!(!app.rename.active);
         assert_eq!(
-            app.file_path,
+            app.persistence.file_path,
             Some(PathBuf::from("/nonexistent/dir/real.md"))
         );
-        assert!(!app.is_scratch);
+        assert!(!app.persistence.is_scratch);
     }
 
     // === Editing mode tests ===

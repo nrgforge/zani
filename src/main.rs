@@ -150,12 +150,12 @@ fn run(
         app.update_dim_layers();
 
         // Autosave on idle
-        if app.should_autosave() {
-            app.autosave();
+        if app.persistence.should_autosave(app.editor.dirty) {
+            app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
         }
 
         if app.should_quit {
-            app.autosave();
+            app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
             break;
         }
     }
