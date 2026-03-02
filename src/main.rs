@@ -61,22 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load();
 
     // Create application state
-    let mut app = App::new();
-    app.color_profile = color_profile;
-    app.set_palette(config.resolve_palette());
-    app.dimming.focus_mode = config.focus_mode;
-    app.viewport.scroll_mode = config.scroll_mode;
-    app.viewport.column_width = config.column_width;
-    app.editor.editing_mode = config.editing_mode;
-    if app.editor.editing_mode == zani::editing_mode::EditingMode::Standard {
-        app.editor.vim_mode = zani::vim_bindings::Mode::Insert;
-    }
-    if let Some(ref path) = file_path {
-        let content = std::fs::read_to_string(path).unwrap_or_default();
-        app = app.with_file(path.clone(), &content);
-    } else {
-        app = app.with_scratch_name();
-    }
+    let mut app = App::from_config(&config, color_profile, file_path);
 
     // Initialize terminal
     terminal::enable_raw_mode()?;

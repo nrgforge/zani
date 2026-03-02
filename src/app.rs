@@ -16,7 +16,7 @@ use crate::settings::{RenameState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, Mode};
 use crate::viewport::Viewport;
 
-/// Application state.
+/// Thin coordinator that owns subsystems and routes input between them.
 pub struct App {
     pub editor: Editor,
     pub viewport: Viewport,
@@ -63,6 +63,27 @@ impl App {
     pub fn with_scratch_name(mut self) -> Self {
         self.persistence.with_scratch_name();
         self
+    }
+
+    /// Build an App fully configured from persisted settings.
+    pub fn from_config(config: &Config, color_profile: ColorProfile, file_path: Option<PathBuf>) -> Self {
+        let mut app = Self::new();
+        app.color_profile = color_profile;
+        app.palette = config.resolve_palette();
+        app.dimming.focus_mode = config.focus_mode;
+        app.viewport.scroll_mode = config.scroll_mode;
+        app.viewport.column_width = config.column_width;
+        app.editor.editing_mode = config.editing_mode;
+        if config.editing_mode == EditingMode::Standard {
+            app.editor.vim_mode = Mode::Insert;
+        }
+        if let Some(ref path) = file_path {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            app = app.with_file(path.clone(), &content);
+        } else {
+            app = app.with_scratch_name();
+        }
+        app
     }
 
     /// Toggle the Settings Layer visibility.
