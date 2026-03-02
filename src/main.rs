@@ -65,8 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.color_profile = color_profile;
     app.set_palette(config.resolve_palette());
     app.dimming.focus_mode = config.focus_mode;
-    app.scroll_mode = config.scroll_mode;
-    app.column_width = config.column_width;
+    app.viewport.scroll_mode = config.scroll_mode;
+    app.viewport.column_width = config.column_width;
     app.editor.editing_mode = config.editing_mode;
     if app.editor.editing_mode == zani::editing_mode::EditingMode::Standard {
         app.editor.vim_mode = zani::vim_bindings::Mode::Insert;
@@ -112,8 +112,8 @@ fn run(
         // Adjust scroll to keep cursor visible
         let size = terminal.size()?;
         let surface_height = size.height; // full height — no Chrome by default
-        let visual_lines = app.visual_lines();
-        app.ensure_cursor_visible(&visual_lines, surface_height);
+        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, surface_height, &mut app.animations);
 
         // Draw — reuse visual_lines computed above for ensure_cursor_visible
         terminal.draw(|frame| {
@@ -122,13 +122,7 @@ fn run(
         app.animations.tick();
 
         // Update smooth scroll display value
-        if let Some(progress) = app.animations.scroll_progress() {
-            if let Some((from, to)) = app.animations.scroll_values() {
-                app.scroll_display = from + (to - from) * progress;
-            }
-        } else {
-            app.scroll_display = app.scroll_offset as f64;
-        }
+        app.viewport.sync_scroll(&app.animations);
 
         // Set cursor shape based on vim mode
         let cursor_style = match app.editor.cursor_shape() {

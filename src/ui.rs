@@ -36,14 +36,14 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
     let line_opacities = app.line_opacities();
     let sentence_fades = app.dimming.sentence_fade_snapshot();
     let surface = WritingSurface::new(&app.editor.buffer, &effective)
-        .column_width(app.column_width)
-        .scroll_offset(app.scroll_display.round() as usize)
+        .column_width(app.viewport.column_width)
+        .scroll_offset(app.viewport.scroll_display.round() as usize)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
         .sentence_bounds(app.editor.sentence_bounds())
         .sentence_fades(&sentence_fades)
         .color_profile(app.color_profile)
-        .vertical_offset(app.typewriter_vertical_offset)
+        .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
         .find_matches(find_ranges, find_current)
         .line_opacities(&line_opacities)
@@ -74,10 +74,10 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
         frame.set_cursor_position((cursor_x, area.y));
     } else if let Some((vl_idx, col)) = cursor_pos {
-        let screen_row = vl_idx.saturating_sub(app.scroll_display.round() as usize);
+        let screen_row = vl_idx.saturating_sub(app.viewport.scroll_display.round() as usize);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
-            let y = surface_area.y + app.typewriter_vertical_offset + screen_row as u16;
+            let y = surface_area.y + app.viewport.typewriter_vertical_offset + screen_row as u16;
             frame.set_cursor_position((x, y));
         }
     }
@@ -205,11 +205,11 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     ScrollMode::Edge => "Edge",
                     ScrollMode::Typewriter => "Typewriter",
                 };
-                let marker = if *mode == app.scroll_mode { ">" } else { " " };
+                let marker = if *mode == app.viewport.scroll_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::ColumnWidth => {
-                format!("  Column      {}", app.column_width)
+                format!("  Column      {}", app.viewport.column_width)
             }
             SettingsItem::File => {
                 let file_str = app
@@ -427,7 +427,7 @@ mod tests {
     fn render_app(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        let visual_lines = app.visual_lines();
+        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
         terminal
             .draw(|frame| {
                 draw(frame, &app, &visual_lines);

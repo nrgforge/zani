@@ -15,6 +15,7 @@ pub mod scroll_mode;
 pub mod smart_typography;
 pub mod ui;
 pub mod undo;
+pub mod viewport;
 pub mod vim_bindings;
 pub mod wrap;
 pub mod writing_surface;

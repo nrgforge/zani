@@ -15,7 +15,7 @@ use crate::focus_mode::{DimLayer, FadeConfig, FocusMode, LineOpacity, paragraph_
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 use crate::vim_bindings::{Action, Mode};
-use crate::wrap::{self, VisualLine};
+use crate::viewport::Viewport;
 
 /// A selectable item in the Settings Layer.
 /// Defines the logical meaning of each row, replacing magic indices.
@@ -132,13 +132,10 @@ impl DimmingState {
 /// Application state.
 pub struct App {
     pub editor: Editor,
+    pub viewport: Viewport,
     pub palette: Palette,
     pub dimming: DimmingState,
-    pub scroll_mode: ScrollMode,
     pub color_profile: ColorProfile,
-    pub scroll_offset: usize,
-    pub scroll_display: f64,
-    pub column_width: u16,
     pub settings: SettingsState,
     pub should_quit: bool,
     pub file_path: Option<PathBuf>,
@@ -148,15 +145,9 @@ pub struct App {
     /// Last save error message, surfaced in the settings layer.
     pub save_error: Option<String>,
     pub rename: RenameState,
-    /// Vertical offset for Typewriter mode rendering. When the cursor is near
-    /// the top of the document, content starts this many rows down so the cursor
-    /// appears vertically centered.
-    pub typewriter_vertical_offset: u16,
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
-    /// Cache for visual_lines: (buffer_version, column_width, result).
-    visual_lines_cache: Option<(u64, u16, Vec<VisualLine>)>,
 }
 
 impl Default for App {
@@ -169,13 +160,10 @@ impl App {
     pub fn new() -> Self {
         Self {
             editor: Editor::new(),
+            viewport: Viewport::new(),
             palette: Palette::default_palette(),
             dimming: DimmingState::new(),
-            scroll_mode: ScrollMode::Edge,
             color_profile: ColorProfile::TrueColor,
-            scroll_offset: 0,
-            scroll_display: 0.0,
-            column_width: 60,
             settings: SettingsState { visible: false, cursor: 0 },
             should_quit: false,
             file_path: None,
@@ -184,10 +172,8 @@ impl App {
             autosave_interval: Duration::from_secs(3),
             save_error: None,
             rename: RenameState { active: false, buf: String::new(), cursor: 0 },
-            typewriter_vertical_offset: 0,
             find_state: None,
             animations: AnimationManager::new(),
-            visual_lines_cache: None,
         }
     }
 
@@ -290,7 +276,7 @@ impl App {
                 }
             }
             SettingsItem::FocusMode(mode) => self.dimming.focus_mode = mode,
-            SettingsItem::ScrollMode(mode) => self.scroll_mode = mode,
+            SettingsItem::ScrollMode(mode) => self.viewport.scroll_mode = mode,
             SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
             SettingsItem::File => self.rename_open(),
         }
@@ -298,8 +284,8 @@ impl App {
 
     /// Adjust column width by delta, clamped to 20–120.
     pub fn settings_adjust_column(&mut self, delta: i16) {
-        let new = self.column_width as i16 + delta;
-        self.column_width = new.clamp(20, 120) as u16;
+        let new = self.viewport.column_width as i16 + delta;
+        self.viewport.column_width = new.clamp(20, 120) as u16;
     }
 
     /// Open inline rename: seed buffer with current filename, cursor at end.
@@ -380,9 +366,9 @@ impl App {
         let config = Config {
             palette: self.palette.name.to_string(),
             focus_mode: self.dimming.focus_mode,
-            column_width: self.column_width,
+            column_width: self.viewport.column_width,
             editing_mode: self.editor.editing_mode,
-            scroll_mode: self.scroll_mode,
+            scroll_mode: self.viewport.scroll_mode,
         };
         let _ = config.save();
     }
@@ -634,88 +620,6 @@ impl App {
         (0..line_count)
             .map(|i| self.dimming.paragraph_dim.opacity(i))
             .collect()
-    }
-
-    /// Compute visual lines for the current buffer and column width.
-    /// Returns cached result when buffer and column width haven't changed.
-    pub fn visual_lines(&mut self) -> Vec<VisualLine> {
-        let ver = self.editor.buffer.version();
-        let cw = self.column_width;
-        if let Some((cv, ccw, ref cached)) = self.visual_lines_cache
-            && cv == ver && ccw == cw
-        {
-            return cached.clone();
-        }
-        let result = wrap::visual_lines_for_buffer(&self.editor.buffer, self.column_width);
-        self.visual_lines_cache = Some((ver, cw, result.clone()));
-        result
-    }
-
-    /// Adjust scroll_offset so the cursor stays visible within the given height.
-    /// Accepts pre-computed visual lines to avoid redundant computation.
-    pub fn ensure_cursor_visible(&mut self, visual_lines: &[VisualLine], visible_height: u16) {
-        let height = visible_height as usize;
-        if height == 0 {
-            return;
-        }
-
-        let old_offset = self.scroll_offset;
-
-        // Find the cursor's visual line position
-        let mut cursor_vl = 0;
-        let mut found = false;
-        for (vl_index, vl) in visual_lines.iter().enumerate() {
-            if vl.logical_line == self.editor.cursor_line
-                && self.editor.cursor_col >= vl.char_start
-                && self.editor.cursor_col < vl.char_end
-            {
-                cursor_vl = vl_index;
-                found = true;
-                break;
-            }
-            // Handle cursor at end of a visual line
-            if vl.logical_line == self.editor.cursor_line && self.editor.cursor_col == vl.char_end {
-                cursor_vl = vl_index;
-            }
-        }
-
-        // If not found in any range, use the last match from end-of-line check
-        let _ = found;
-
-        if self.scroll_mode == ScrollMode::Typewriter {
-            // Typewriter mode: keep cursor centered vertically
-            let center = height / 2;
-            if cursor_vl >= center {
-                // Enough content above — scroll so cursor lands at center
-                self.scroll_offset = cursor_vl - center;
-                self.typewriter_vertical_offset = 0;
-            } else {
-                // Near top of document — push content down so cursor is centered
-                self.scroll_offset = 0;
-                self.typewriter_vertical_offset = (center - cursor_vl) as u16;
-            }
-        } else {
-            self.typewriter_vertical_offset = 0;
-            // Edge-scrolling: only adjust when cursor would be off-screen
-            if cursor_vl < self.scroll_offset {
-                self.scroll_offset = cursor_vl;
-            } else if cursor_vl >= self.scroll_offset + height {
-                self.scroll_offset = cursor_vl - height + 1;
-            }
-        }
-
-        if self.scroll_offset != old_offset {
-            let from = self.scroll_display;
-            let to = self.scroll_offset as f64;
-            if (from - to).abs() > 0.01 {
-                use crate::animation::{Easing, TransitionKind};
-                self.animations.start(
-                    TransitionKind::Scroll { from, to },
-                    std::time::Duration::from_millis(150),
-                    Easing::EaseOut,
-                );
-            }
-        }
     }
 
     /// Check if autosave should trigger (dirty + enough time elapsed).
@@ -1038,16 +942,16 @@ mod tests {
         // Create a buffer with 20 lines
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.editor.buffer = Buffer::from_text(&text);
-        app.scroll_mode = ScrollMode::Typewriter;
+        app.viewport.scroll_mode = ScrollMode::Typewriter;
         app.editor.cursor_line = 10;
         app.editor.cursor_col = 0;
 
-        let visual_lines = app.visual_lines();
-        app.ensure_cursor_visible(&visual_lines, 10); // height 10
+        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10, &mut app.animations); // height 10
 
         // Cursor at visual line 10, height 10 → scroll_offset = 10 - 5 = 5
-        assert_eq!(app.scroll_offset, 5, "scroll should center cursor in viewport");
-        assert_eq!(app.typewriter_vertical_offset, 0, "no vertical offset needed when content fills above");
+        assert_eq!(app.viewport.scroll_offset, 5, "scroll should center cursor in viewport");
+        assert_eq!(app.viewport.typewriter_vertical_offset, 0, "no vertical offset needed when content fills above");
     }
 
     #[test]
@@ -1055,17 +959,17 @@ mod tests {
         let mut app = App::new();
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.editor.buffer = Buffer::from_text(&text);
-        app.scroll_mode = ScrollMode::Typewriter;
+        app.viewport.scroll_mode = ScrollMode::Typewriter;
         app.editor.cursor_line = 1;
         app.editor.cursor_col = 0;
 
-        let visual_lines = app.visual_lines();
-        app.ensure_cursor_visible(&visual_lines, 10);
+        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10, &mut app.animations);
 
         // Cursor at visual line 1, center = 5
         // Not enough content above → scroll stays 0, vertical offset pushes down
-        assert_eq!(app.scroll_offset, 0, "scroll should stay at 0 when near top");
-        assert_eq!(app.typewriter_vertical_offset, 4, "vertical offset should push content down to center cursor");
+        assert_eq!(app.viewport.scroll_offset, 0, "scroll should stay at 0 when near top");
+        assert_eq!(app.viewport.typewriter_vertical_offset, 4, "vertical offset should push content down to center cursor");
     }
 
     // === Acceptance test: Vim append mode ===
@@ -1195,44 +1099,44 @@ mod tests {
         let mut app = App::new();
         app.settings.cursor = 9; // ScrollMode::Typewriter
         app.settings_apply();
-        assert_eq!(app.scroll_mode, ScrollMode::Typewriter, "cursor 9 should select Typewriter scroll");
+        assert_eq!(app.viewport.scroll_mode, ScrollMode::Typewriter, "cursor 9 should select Typewriter scroll");
 
         app.settings.cursor = 8; // ScrollMode::Edge
         app.settings_apply();
-        assert_eq!(app.scroll_mode, ScrollMode::Edge, "cursor 8 should select Edge scroll");
+        assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge, "cursor 8 should select Edge scroll");
     }
 
     #[test]
     fn settings_apply_column_is_noop() {
         let mut app = App::new();
         app.settings.cursor = 10; // ColumnWidth
-        let before = app.column_width;
+        let before = app.viewport.column_width;
         app.settings_apply();
-        assert_eq!(app.column_width, before, "ColumnWidth row should not change width on Enter");
+        assert_eq!(app.viewport.column_width, before, "ColumnWidth row should not change width on Enter");
     }
 
     #[test]
     fn settings_adjust_column_increases() {
         let mut app = App::new();
-        assert_eq!(app.column_width, 60, "default column width should be 60");
+        assert_eq!(app.viewport.column_width, 60, "default column width should be 60");
         app.settings_adjust_column(5);
-        assert_eq!(app.column_width, 65, "adjusting +5 should increase to 65");
+        assert_eq!(app.viewport.column_width, 65, "adjusting +5 should increase to 65");
     }
 
     #[test]
     fn settings_adjust_column_clamps_low() {
         let mut app = App::new();
-        app.column_width = 22;
+        app.viewport.column_width = 22;
         app.settings_adjust_column(-5);
-        assert_eq!(app.column_width, 20, "column width should clamp at 20");
+        assert_eq!(app.viewport.column_width, 20, "column width should clamp at 20");
     }
 
     #[test]
     fn settings_adjust_column_clamps_high() {
         let mut app = App::new();
-        app.column_width = 118;
+        app.viewport.column_width = 118;
         app.settings_adjust_column(5);
-        assert_eq!(app.column_width, 120, "column width should clamp at 120");
+        assert_eq!(app.viewport.column_width, 120, "column width should clamp at 120");
     }
 
     #[test]
@@ -2053,13 +1957,13 @@ mod tests {
     fn scroll_animation_starts_on_scroll_change() {
         let mut app = App::new();
         app.editor.buffer = Buffer::from_text(&"line\n".repeat(50));
-        app.scroll_display = 0.0;
-        app.scroll_offset = 0;
-        let visual_lines = app.visual_lines();
+        app.viewport.scroll_display = 0.0;
+        app.viewport.scroll_offset = 0;
+        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
         app.editor.cursor_line = 30;
         app.editor.cursor_col = 0;
-        app.ensure_cursor_visible(&visual_lines, 20);
-        assert!(app.scroll_offset > 0);
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 20, &mut app.animations);
+        assert!(app.viewport.scroll_offset > 0);
         assert!(app.animations.is_active());
         assert!(app.animations.scroll_progress().is_some());
     }
@@ -2367,7 +2271,7 @@ mod tests {
     fn app_with_wrap(text: &str, width: u16) -> App {
         let mut app = App::new();
         app.editor.buffer = Buffer::from_text(text);
-        app.column_width = width;
+        app.viewport.column_width = width;
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
         app
@@ -2384,7 +2288,7 @@ mod tests {
         let mut app = app_with_wrap("hello world foo", 6);
         app.editor.cursor_col = 0; // on vl0
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         // Should move to vl1, same logical line
         assert_eq!(app.editor.cursor_line, 0, "stays on same logical line");
         assert_eq!(app.editor.cursor_col, 6, "moved to start of next visual line");
@@ -2396,7 +2300,7 @@ mod tests {
         // Start on second visual line
         app.editor.cursor_col = 6; // vl1 start
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 0, "stays on same logical line");
         assert_eq!(app.editor.cursor_col, 0, "moved to start of first visual line");
     }
@@ -2407,7 +2311,7 @@ mod tests {
         // Width 60 means no wrapping; two visual lines, one per logical line
         app.editor.cursor_col = 2;
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 1, "moved to next logical line");
         assert_eq!(app.editor.cursor_col, 2, "preserved visual column");
     }
@@ -2417,7 +2321,7 @@ mod tests {
         let mut app = app_with_wrap("longline\nhi", 60);
         app.editor.cursor_col = 7; // near end of "longline"
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 1);
         // "hi" has length 2, so col should clamp to 2
         assert_eq!(app.editor.cursor_col, 2, "clamped to end of shorter line");
@@ -2428,7 +2332,7 @@ mod tests {
         let mut app = app_with_wrap("hello\nworld", 60);
         app.editor.cursor_col = 3;
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 0);
         assert_eq!(app.editor.cursor_col, 3, "cursor unchanged");
     }
@@ -2439,7 +2343,7 @@ mod tests {
         app.editor.cursor_line = 1;
         app.editor.cursor_col = 3;
 
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 1);
         assert_eq!(app.editor.cursor_col, 3, "cursor unchanged");
     }
@@ -2450,12 +2354,12 @@ mod tests {
         app.editor.cursor_col = 3;
 
         // Down from "above" -> empty line
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 1);
         assert_eq!(app.editor.cursor_col, 0, "empty line clamps to 0");
 
         // Down from empty line -> "below"
-        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+        app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
         assert_eq!(app.editor.cursor_line, 2);
         assert_eq!(app.editor.cursor_col, 0, "visual col was 0 from empty line");
     }
@@ -2469,7 +2373,7 @@ mod tests {
         let mut positions = vec![(app.editor.cursor_line, app.editor.cursor_col)];
         for _ in 0..5 {
             let prev = (app.editor.cursor_line, app.editor.cursor_col);
-            app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.column_width);
+            app.editor.move_cursor_with_width(vim_bindings::Direction::Down, app.viewport.column_width);
             let curr = (app.editor.cursor_line, app.editor.cursor_col);
             if curr == prev {
                 break; // hit bottom
@@ -2487,7 +2391,7 @@ mod tests {
 
         // Now go back up through all of them
         for _ in 0..2 {
-            app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.column_width);
+            app.editor.move_cursor_with_width(vim_bindings::Direction::Up, app.viewport.column_width);
         }
         assert_eq!(app.editor.cursor_col, 0, "back at start");
     }
