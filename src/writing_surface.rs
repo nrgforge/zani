@@ -243,29 +243,43 @@ impl Widget for WritingSurface<'_> {
         let effective_height = (area.height as usize).saturating_sub(self.vertical_offset as usize);
         let visible_end = (self.scroll_offset + effective_height).min(visual_lines.len());
 
+        // Reuse line data across visual lines from the same logical line
+        let mut last_logical_line: Option<usize> = None;
+        let mut line_text = String::new();
+        let mut chars: Vec<char> = Vec::new();
+        let mut md_styles: Vec<markdown_styling::CharStyle> = Vec::new();
+        let mut line_opacity: f64 = 1.0;
+        let mut abs_line_start: usize = 0;
+
         for (screen_row, vl_idx) in (visible_start..visible_end).enumerate() {
             let vl = &visual_lines[vl_idx];
-            let line_text = self.buffer.line(vl.logical_line).to_string();
-            let chars: Vec<char> = line_text.chars().collect();
 
-            // Markdown styling for this logical line (with code block context)
-            let line_in_code_block = code_block_state
-                .get(vl.logical_line)
-                .copied()
-                .unwrap_or(false);
-            let md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
+            // Only recompute when the logical line changes
+            if last_logical_line != Some(vl.logical_line) {
+                last_logical_line = Some(vl.logical_line);
 
-            // Get the pre-computed line opacity for this logical line
-            let line_opacity = self.line_opacities
-                .get(vl.logical_line)
-                .copied()
-                .unwrap_or(1.0);
+                line_text.clear();
+                use std::fmt::Write;
+                let _ = write!(line_text, "{}", self.buffer.line(vl.logical_line));
+                chars.clear();
+                chars.extend(line_text.chars());
 
-            // Absolute char offset for this logical line
-            let abs_line_start = line_char_offsets
-                .get(vl.logical_line)
-                .copied()
-                .unwrap_or(0);
+                let line_in_code_block = code_block_state
+                    .get(vl.logical_line)
+                    .copied()
+                    .unwrap_or(false);
+                md_styles = markdown_styling::style_line_with_context(&line_text, line_in_code_block);
+
+                line_opacity = self.line_opacities
+                    .get(vl.logical_line)
+                    .copied()
+                    .unwrap_or(1.0);
+
+                abs_line_start = line_char_offsets
+                    .get(vl.logical_line)
+                    .copied()
+                    .unwrap_or(0);
+            }
 
             let y = area.top() + self.vertical_offset + screen_row as u16;
             for (col, char_idx) in (vl.char_start..vl.char_end).enumerate() {
