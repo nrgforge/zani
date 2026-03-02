@@ -34,12 +34,12 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
 
     // Build Writing Surface
     let line_opacities = app.line_opacities();
-    let sentence_fades = app.sentence_fade_snapshot();
+    let sentence_fades = app.dimming.sentence_fade_snapshot();
     let surface = WritingSurface::new(&app.buffer, &effective)
         .column_width(app.column_width)
         .scroll_offset(app.scroll_display.round() as usize)
         .cursor(app.cursor_line, app.cursor_col)
-        .focus_mode(app.focus_mode)
+        .focus_mode(app.dimming.focus_mode)
         .sentence_bounds(app.sentence_bounds())
         .sentence_fades(&sentence_fades)
         .color_profile(app.color_profile)
@@ -197,7 +197,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     FocusMode::Sentence => "Sentence",
                     FocusMode::Paragraph => "Paragraph",
                 };
-                let marker = if *mode == app.focus_mode { ">" } else { " " };
+                let marker = if *mode == app.dimming.focus_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::ScrollMode(mode) => {

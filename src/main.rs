@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new();
     app.color_profile = color_profile;
     app.set_palette(config.resolve_palette());
-    app.focus_mode = config.focus_mode;
+    app.dimming.focus_mode = config.focus_mode;
     app.scroll_mode = config.scroll_mode;
     app.column_width = config.column_width;
     app.editing_mode = config.editing_mode;
@@ -138,7 +138,7 @@ fn run(
         crossterm::execute!(terminal.backend_mut(), cursor_style)?;
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
-        let poll_timeout = if app.animations.is_active() || app.dim_animating() {
+        let poll_timeout = if app.animations.is_active() || app.dimming.dim_animating() {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(250)

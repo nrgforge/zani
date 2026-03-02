@@ -91,6 +91,46 @@ pub struct SettingsState {
     pub cursor: usize,
 }
 
+/// Focus mode and dimming animation state.
+///
+/// Groups the dimming concern: which mode is active, the paragraph-level
+/// DimLayer, and the per-sentence fade queue. Data flows one way —
+/// buffer content and cursor position are inputs; dimming state is output.
+pub struct DimmingState {
+    pub focus_mode: FocusMode,
+    pub paragraph_dim: DimLayer,
+    last_sentence_bounds: Option<(usize, usize)>,
+    sentence_fades: Vec<(usize, usize, LineOpacity)>,
+}
+
+impl DimmingState {
+    fn new() -> Self {
+        Self {
+            focus_mode: FocusMode::Off,
+            paragraph_dim: DimLayer::new(
+                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
+                FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
+            ),
+            last_sentence_bounds: None,
+            sentence_fades: Vec::new(),
+        }
+    }
+
+    /// Snapshot of all in-flight sentence fades: (char_start, char_end, current_opacity).
+    pub fn sentence_fade_snapshot(&self) -> Vec<(usize, usize, f64)> {
+        self.sentence_fades
+            .iter()
+            .map(|(s, e, o)| (*s, *e, o.current_opacity()))
+            .collect()
+    }
+
+    /// Whether any dimming layer is still animating.
+    pub fn dim_animating(&self) -> bool {
+        self.paragraph_dim.is_animating()
+            || self.sentence_fades.iter().any(|(_, _, o)| o.is_animating())
+    }
+}
+
 /// Application state.
 ///
 /// Cursor, scroll, and selection fields live here rather than in a separate
@@ -99,7 +139,7 @@ pub struct SettingsState {
 pub struct App {
     pub buffer: Buffer,
     pub palette: Palette,
-    pub focus_mode: FocusMode,
+    pub dimming: DimmingState,
     pub scroll_mode: ScrollMode,
     pub editing_mode: EditingMode,
     pub color_profile: ColorProfile,
@@ -134,12 +174,6 @@ pub struct App {
     /// Find overlay state (None when find is not active).
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
-    pub paragraph_dim: DimLayer,
-    /// Full bounds of the last known sentence (to detect genuine changes).
-    last_sentence_bounds: Option<(usize, usize)>,
-    /// Queue of sentences fading out, each with its own animation.
-    /// (char_start, char_end, animated opacity).
-    sentence_fades: Vec<(usize, usize, LineOpacity)>,
     /// Cache for visual_lines: (buffer_version, column_width, result).
     visual_lines_cache: Option<(u64, u16, Vec<VisualLine>)>,
 }
@@ -155,7 +189,7 @@ impl App {
         Self {
             buffer: Buffer::new(),
             palette: Palette::default_palette(),
-            focus_mode: FocusMode::Off,
+            dimming: DimmingState::new(),
             scroll_mode: ScrollMode::Edge,
             editing_mode: EditingMode::default(),
             color_profile: ColorProfile::TrueColor,
@@ -181,12 +215,6 @@ impl App {
             undo_history: UndoHistory::new(),
             find_state: None,
             animations: AnimationManager::new(),
-            paragraph_dim: DimLayer::new(
-                FadeConfig { duration: Duration::from_millis(150), easing: crate::animation::Easing::EaseOut },
-                FadeConfig { duration: Duration::from_millis(1800), easing: crate::animation::Easing::EaseOut },
-            ),
-            last_sentence_bounds: None,
-            sentence_fades: Vec::new(),
             visual_lines_cache: None,
         }
     }
@@ -297,7 +325,7 @@ impl App {
                     self.palette = p;
                 }
             }
-            SettingsItem::FocusMode(mode) => self.focus_mode = mode,
+            SettingsItem::FocusMode(mode) => self.dimming.focus_mode = mode,
             SettingsItem::ScrollMode(mode) => self.scroll_mode = mode,
             SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
             SettingsItem::File => self.rename_open(),
@@ -387,7 +415,7 @@ impl App {
     fn save_config(&self) {
         let config = Config {
             palette: self.palette.name.to_string(),
-            focus_mode: self.focus_mode,
+            focus_mode: self.dimming.focus_mode,
             column_width: self.column_width,
             editing_mode: self.editing_mode,
             scroll_mode: self.scroll_mode,
@@ -1301,50 +1329,50 @@ impl App {
     /// Recompute dimming layer targets based on current focus mode and cursor position.
     pub fn update_dim_layers(&mut self) {
         let line_count = self.buffer.len_lines();
-        match self.focus_mode {
+        match self.dimming.focus_mode {
             FocusMode::Off => {
                 let targets = vec![1.0; line_count];
-                self.paragraph_dim.update_targets(&targets);
-                self.last_sentence_bounds = None;
-                self.sentence_fades.clear();
+                self.dimming.paragraph_dim.update_targets(&targets);
+                self.dimming.last_sentence_bounds = None;
+                self.dimming.sentence_fades.clear();
             }
             FocusMode::Paragraph => {
                 let targets = paragraph_target_opacities(
                     line_count,
                     self.paragraph_bounds(),
                 );
-                self.paragraph_dim.update_targets(&targets);
-                self.last_sentence_bounds = None;
-                self.sentence_fades.clear();
+                self.dimming.paragraph_dim.update_targets(&targets);
+                self.dimming.last_sentence_bounds = None;
+                self.dimming.sentence_fades.clear();
             }
             FocusMode::Sentence => {
                 let targets = paragraph_target_opacities(
                     line_count,
                     self.paragraph_bounds(),
                 );
-                self.paragraph_dim.update_targets(&targets);
+                self.dimming.paragraph_dim.update_targets(&targets);
 
                 let current_bounds = self.sentence_bounds();
                 let current_start = current_bounds.map(|(s, _)| s);
-                let last_start = self.last_sentence_bounds.map(|(s, _)| s);
+                let last_start = self.dimming.last_sentence_bounds.map(|(s, _)| s);
 
                 // Detect genuine sentence change (start index changed).
                 if current_start != last_start {
                     // Check if we're returning to any currently-fading sentence
                     let returning_idx = current_bounds.and_then(|(cs, _)| {
-                        self.sentence_fades.iter().position(|(fs, _, _)| *fs == cs)
+                        self.dimming.sentence_fades.iter().position(|(fs, _, _)| *fs == cs)
                     });
 
                     if let Some(idx) = returning_idx {
                         // Reverse that entry: fade back in (current → 1.0, 150ms)
-                        self.sentence_fades[idx].2.set_target(
+                        self.dimming.sentence_fades[idx].2.set_target(
                             1.0,
                             FadeConfig {
                                 duration: Duration::from_millis(150),
                                 easing: crate::animation::Easing::EaseOut,
                             },
                         );
-                    } else if let Some((old_start, old_end)) = self.last_sentence_bounds {
+                    } else if let Some((old_start, old_end)) = self.dimming.last_sentence_bounds {
                         // Push a new fade for the sentence we just left
                         let mut opacity = LineOpacity::new(1.0);
                         opacity.set_target(
@@ -1354,13 +1382,13 @@ impl App {
                                 easing: crate::animation::Easing::EaseOut,
                             },
                         );
-                        self.sentence_fades.push((old_start, old_end, opacity));
+                        self.dimming.sentence_fades.push((old_start, old_end, opacity));
                     }
                 }
-                self.last_sentence_bounds = current_bounds;
+                self.dimming.last_sentence_bounds = current_bounds;
 
                 // Prune completed fades
-                self.sentence_fades.retain(|(_, _, o)| o.is_animating());
+                self.dimming.sentence_fades.retain(|(_, _, o)| o.is_animating());
 
                 // Sentence dimming is handled per-character by the renderer
                 // via sentence_fades, not by a line-level DimLayer.
@@ -1368,26 +1396,12 @@ impl App {
         }
     }
 
-    /// Snapshot of all in-flight sentence fades: (char_start, char_end, current_opacity).
-    pub fn sentence_fade_snapshot(&self) -> Vec<(usize, usize, f64)> {
-        self.sentence_fades
-            .iter()
-            .map(|(s, e, o)| (*s, *e, o.current_opacity()))
-            .collect()
-    }
-
     /// Compute final per-line opacities for the renderer.
     pub fn line_opacities(&self) -> Vec<f64> {
         let line_count = self.buffer.len_lines();
         (0..line_count)
-            .map(|i| self.paragraph_dim.opacity(i))
+            .map(|i| self.dimming.paragraph_dim.opacity(i))
             .collect()
-    }
-
-    /// Whether any dimming layer is still animating.
-    pub fn dim_animating(&self) -> bool {
-        self.paragraph_dim.is_animating()
-            || self.sentence_fades.iter().any(|(_, _, o)| o.is_animating())
     }
 
     /// Compute visual lines for the current buffer and column width.
@@ -1936,11 +1950,11 @@ mod tests {
         let mut app = App::new();
         app.settings.cursor = 6; // Sentence
         app.settings_apply();
-        assert_eq!(app.focus_mode, FocusMode::Sentence, "cursor 6 should select Sentence focus");
+        assert_eq!(app.dimming.focus_mode, FocusMode::Sentence, "cursor 6 should select Sentence focus");
 
         app.settings.cursor = 7; // Paragraph
         app.settings_apply();
-        assert_eq!(app.focus_mode, FocusMode::Paragraph, "cursor 7 should select Paragraph focus");
+        assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph, "cursor 7 should select Paragraph focus");
     }
 
     #[test]
@@ -2883,7 +2897,7 @@ mod tests {
     fn dim_layers_produce_opacities() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("Line 1\n\nLine 3\nLine 4");
-        app.focus_mode = FocusMode::Paragraph;
+        app.dimming.focus_mode = FocusMode::Paragraph;
         app.cursor_line = 0;
         app.update_dim_layers();
         let opacities = app.line_opacities();
@@ -2897,14 +2911,14 @@ mod tests {
         let mut app = App::new();
         // Two sentences on separate lines
         app.buffer = Buffer::from_text("First sentence.\nSecond sentence.");
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
         app.cursor_line = 0;
         app.cursor_col = 0;
 
         app.update_dim_layers();
 
         // No fades in progress initially
-        assert!(app.sentence_fades.is_empty());
+        assert!(app.dimming.sentence_fades.is_empty());
 
         // Move cursor to line 1 (second sentence)
         app.cursor_line = 1;
@@ -2912,17 +2926,17 @@ mod tests {
         app.update_dim_layers();
 
         // One fade should be queued for the old sentence
-        assert_eq!(app.sentence_fades.len(), 1, "should have one fading sentence");
-        let snap = app.sentence_fade_snapshot();
+        assert_eq!(app.dimming.sentence_fades.len(), 1, "should have one fading sentence");
+        let snap = app.dimming.sentence_fade_snapshot();
         assert!(snap[0].2 > 0.9, "Opacity should be near 1.0 right after change");
-        assert!(app.dim_animating(), "should be animating");
+        assert!(app.dimming.dim_animating(), "should be animating");
     }
 
     #[test]
     fn focus_off_all_bright() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("Line 1\nLine 2\nLine 3");
-        app.focus_mode = FocusMode::Off;
+        app.dimming.focus_mode = FocusMode::Off;
         app.update_dim_layers();
         let opacities = app.line_opacities();
         for (i, &o) in opacities.iter().enumerate() {
@@ -2935,21 +2949,21 @@ mod tests {
     #[test]
     fn rapid_typing_after_period_preserves_fade() {
         let mut app = App::new();
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
 
         // Cursor in "Hello world."
         app.buffer = Buffer::from_text("Hello world.");
         app.cursor_line = 0;
         app.cursor_col = 5;
         app.update_dim_layers();
-        assert!(app.sentence_fades.is_empty(), "No fades initially");
+        assert!(app.dimming.sentence_fades.is_empty(), "No fades initially");
 
         // Simulate typing space after period: "Hello world. "
         app.buffer = Buffer::from_text("Hello world. ");
         app.cursor_col = 12;
         app.update_dim_layers();
-        assert_eq!(app.sentence_fades.len(), 1, "One fade after leaving sentence");
-        let original_start = app.sentence_fades[0].0;
+        assert_eq!(app.dimming.sentence_fades.len(), 1, "One fade after leaving sentence");
+        let original_start = app.dimming.sentence_fades[0].0;
 
         // Simulate typing 'T': "Hello world. T"
         app.buffer = Buffer::from_text("Hello world. T");
@@ -2958,7 +2972,7 @@ mod tests {
 
         // The original "Hello world." fade must survive the second sentence change
         assert!(
-            app.sentence_fades.iter().any(|(s, _, _)| *s == original_start),
+            app.dimming.sentence_fades.iter().any(|(s, _, _)| *s == original_start),
             "Original sentence fade must survive rapid typing"
         );
     }
@@ -2967,7 +2981,7 @@ mod tests {
     fn multiple_sentences_fade_independently() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("First.\n\nSecond.\n\nThird.");
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
 
         // Start in first sentence
         app.cursor_line = 0;
@@ -2978,16 +2992,16 @@ mod tests {
         app.cursor_line = 2;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert_eq!(app.sentence_fades.len(), 1);
+        assert_eq!(app.dimming.sentence_fades.len(), 1);
 
         // Move to third sentence
         app.cursor_line = 4;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert_eq!(app.sentence_fades.len(), 2, "Two sentences should be fading simultaneously");
+        assert_eq!(app.dimming.sentence_fades.len(), 2, "Two sentences should be fading simultaneously");
 
         // Both should have high opacity (just started or recently started)
-        let snap = app.sentence_fade_snapshot();
+        let snap = app.dimming.sentence_fade_snapshot();
         assert!(snap[0].2 > 0.5, "First fade should still be in progress");
         assert!(snap[1].2 > 0.9, "Second fade should have just started");
     }
@@ -2996,7 +3010,7 @@ mod tests {
     fn returning_to_fading_sentence_reverses_fade() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("First.\n\nSecond.");
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
 
         app.cursor_line = 0;
         app.cursor_col = 0;
@@ -3006,21 +3020,21 @@ mod tests {
         app.cursor_line = 2;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert_eq!(app.sentence_fades.len(), 1);
-        assert!((app.sentence_fades[0].2.target - 0.6).abs() < f64::EPSILON);
+        assert_eq!(app.dimming.sentence_fades.len(), 1);
+        assert!((app.dimming.sentence_fades[0].2.target - 0.6).abs() < f64::EPSILON);
 
         // Return to first — should reverse that entry toward 1.0
         app.cursor_line = 0;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert!((app.sentence_fades[0].2.target - 1.0).abs() < f64::EPSILON, "Should reverse to 1.0");
+        assert!((app.dimming.sentence_fades[0].2.target - 1.0).abs() < f64::EPSILON, "Should reverse to 1.0");
     }
 
     #[test]
     fn completed_fades_are_pruned() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("First.\n\nSecond.");
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
 
         app.cursor_line = 0;
         app.cursor_col = 0;
@@ -3029,15 +3043,15 @@ mod tests {
         app.cursor_line = 2;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert_eq!(app.sentence_fades.len(), 1);
+        assert_eq!(app.dimming.sentence_fades.len(), 1);
 
         // Backdate the animation past its 1800ms duration
-        app.sentence_fades[0].2.start_time =
+        app.dimming.sentence_fades[0].2.start_time =
             Some(Instant::now() - Duration::from_millis(2000));
 
         // Next update should prune the completed entry
         app.update_dim_layers();
-        assert!(app.sentence_fades.is_empty(), "Completed fade should be pruned");
+        assert!(app.dimming.sentence_fades.is_empty(), "Completed fade should be pruned");
     }
 
     // === Cursor navigation tests ===
@@ -3097,7 +3111,7 @@ mod tests {
     fn mode_switch_clears_fade_queue() {
         let mut app = App::new();
         app.buffer = Buffer::from_text("First.\n\nSecond.");
-        app.focus_mode = FocusMode::Sentence;
+        app.dimming.focus_mode = FocusMode::Sentence;
 
         app.cursor_line = 0;
         app.cursor_col = 0;
@@ -3106,12 +3120,12 @@ mod tests {
         app.cursor_line = 2;
         app.cursor_col = 0;
         app.update_dim_layers();
-        assert!(!app.sentence_fades.is_empty());
+        assert!(!app.dimming.sentence_fades.is_empty());
 
         // Switch to Off
-        app.focus_mode = FocusMode::Off;
+        app.dimming.focus_mode = FocusMode::Off;
         app.update_dim_layers();
-        assert!(app.sentence_fades.is_empty(), "Off mode should clear all fades");
+        assert!(app.dimming.sentence_fades.is_empty(), "Off mode should clear all fades");
     }
 
     // === Visual-line cursor navigation tests ===
