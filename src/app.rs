@@ -594,46 +594,38 @@ impl App {
                 self.find_state = None;
             }
             KeyCode::Enter => {
-                // Jump to current match and close find
-                if let Some((line, col)) = find.current_match_pos() {
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                }
+                self.jump_to_find_match();
                 self.find_state = None;
             }
             KeyCode::Backspace => {
                 find.backspace();
                 find.search(&self.buffer);
-                // Jump cursor to first match for live preview
-                if let Some((line, col)) = find.current_match_pos() {
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                }
+                self.jump_to_find_match();
             }
             KeyCode::Up => {
                 find.prev_match();
-                if let Some((line, col)) = find.current_match_pos() {
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                }
+                self.jump_to_find_match();
             }
             KeyCode::Down => {
                 find.next_match();
-                if let Some((line, col)) = find.current_match_pos() {
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                }
+                self.jump_to_find_match();
             }
             KeyCode::Char(c) => {
                 find.insert_char(c);
                 find.search(&self.buffer);
-                // Jump cursor to first match for live preview
-                if let Some((line, col)) = find.current_match_pos() {
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                }
+                self.jump_to_find_match();
             }
             _ => {}
+        }
+    }
+
+    /// Move cursor to the current find match position, if any.
+    fn jump_to_find_match(&mut self) {
+        if let Some(find) = &self.find_state
+            && let Some((line, col)) = find.current_match_pos()
+        {
+            self.cursor_line = line;
+            self.cursor_col = col;
         }
     }
 
