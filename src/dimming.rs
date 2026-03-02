@@ -18,6 +18,12 @@ pub struct DimmingState {
     /// Pre-populated output buffers, reused across frames.
     line_opacities_buf: Vec<f64>,
     sentence_fades_buf: Vec<(usize, usize, f64)>,
+    /// True when output buffers are valid and no animations are running.
+    settled: bool,
+    /// Last inputs for change detection (enables early return when settled).
+    last_line_count: usize,
+    last_focus_mode: FocusMode,
+    last_paragraph_bounds: Option<(usize, usize)>,
 }
 
 impl DimmingState {
@@ -33,6 +39,10 @@ impl DimmingState {
             paragraph_targets_buf: Vec::new(),
             line_opacities_buf: Vec::new(),
             sentence_fades_buf: Vec::new(),
+            settled: false,
+            last_line_count: 0,
+            last_focus_mode: FocusMode::Off,
+            last_paragraph_bounds: None,
         }
     }
 
@@ -49,12 +59,24 @@ impl DimmingState {
 
     /// Recompute dimming layer targets based on current focus mode and cursor position.
     /// Also populates the output buffers for line_opacities and sentence_fade_snapshot.
+    /// Short-circuits when inputs haven't changed and all animations have settled.
     pub fn update(
         &mut self,
         line_count: usize,
         paragraph_bounds: Option<(usize, usize)>,
         sentence_bounds: Option<(usize, usize)>,
     ) {
+        // Early return when settled and inputs unchanged — output buffers are still valid
+        if self.settled
+            && line_count == self.last_line_count
+            && self.focus_mode == self.last_focus_mode
+            && paragraph_bounds == self.last_paragraph_bounds
+            && sentence_bounds == self.last_sentence_bounds
+            && !self.dim_animating()
+        {
+            return;
+        }
+
         match self.focus_mode {
             FocusMode::Off => {
                 self.paragraph_dim.set_all_to(1.0, line_count);
@@ -116,6 +138,13 @@ impl DimmingState {
         for (s, e, o) in &self.sentence_fades {
             self.sentence_fades_buf.push((*s, *e, o.current_opacity()));
         }
+
+        // Settle: reconcile animating counts and track for next frame's early return
+        self.paragraph_dim.settle();
+        self.last_line_count = line_count;
+        self.last_focus_mode = self.focus_mode;
+        self.last_paragraph_bounds = paragraph_bounds;
+        self.settled = !self.dim_animating();
     }
 
     /// Pre-populated per-line opacities for the renderer.

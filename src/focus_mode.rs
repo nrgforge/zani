@@ -196,14 +196,16 @@ impl LineOpacity {
     /// Set a new target opacity. Captures the current visual state as
     /// `start_value` so the animation chases from the current position.
     /// No-ops if the target hasn't changed (within epsilon).
-    pub fn set_target(&mut self, new_target: f64, config: FadeConfig) {
+    /// Returns true if a new animation was started.
+    pub fn set_target(&mut self, new_target: f64, config: FadeConfig) -> bool {
         if (new_target - self.target).abs() < f64::EPSILON {
-            return;
+            return false;
         }
         self.start_value = self.current_opacity();
         self.target = new_target;
         self.start_time = Some(Instant::now());
         self.fade_config = config;
+        true
     }
 
     /// Returns the current visual opacity accounting for animation progress.
@@ -287,6 +289,9 @@ pub struct DimLayer {
     lines: Vec<LineOpacity>,
     fade_in: FadeConfig,
     fade_out: FadeConfig,
+    /// Approximate count of lines with active animations.
+    /// Incremented when set_target starts an animation, recounted by settle().
+    animating_count: usize,
 }
 
 impl DimLayer {
@@ -296,6 +301,7 @@ impl DimLayer {
             lines: Vec::new(),
             fade_in,
             fade_out,
+            animating_count: 0,
         }
     }
 
@@ -319,7 +325,9 @@ impl DimLayer {
             } else {
                 self.fade_out.clone()
             };
-            self.lines[i].set_target(target, config);
+            if self.lines[i].set_target(target, config) {
+                self.animating_count += 1;
+            }
         }
     }
 
@@ -342,13 +350,24 @@ impl DimLayer {
             } else {
                 self.fade_out.clone()
             };
-            lo.set_target(value, config);
+            if lo.set_target(value, config) {
+                self.animating_count += 1;
+            }
         }
     }
 
-    /// True if any line is still animating.
+    /// True if any line is still animating. O(1) when settled.
     pub fn is_animating(&self) -> bool {
-        self.lines.iter().any(|lo| lo.is_animating())
+        self.animating_count > 0
+    }
+
+    /// Recount actual animating lines. Call periodically to reconcile the
+    /// approximate animating_count with reality. No-op when count is already 0.
+    pub fn settle(&mut self) {
+        if self.animating_count == 0 {
+            return;
+        }
+        self.animating_count = self.lines.iter().filter(|lo| lo.is_animating()).count();
     }
 }
 

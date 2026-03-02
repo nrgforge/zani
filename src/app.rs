@@ -32,6 +32,8 @@ pub struct App {
     pub find_state: Option<FindState>,
     pub animations: AnimationManager,
     pub render_cache: RenderCache,
+    /// Whether the next frame requires a full redraw.
+    pub needs_redraw: bool,
 }
 
 impl Default for App {
@@ -55,6 +57,7 @@ impl App {
             find_state: None,
             animations: AnimationManager::new(),
             render_cache: RenderCache::new(),
+            needs_redraw: true,
         }
     }
 
@@ -181,6 +184,8 @@ impl App {
 
     /// Handle a key press event. This is the main input dispatch entry point.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        self.needs_redraw = true;
+
         // Ctrl combinations — checked first, independent of vim mode
         if modifiers.contains(KeyModifiers::CONTROL) {
             self.handle_ctrl_key(code);
