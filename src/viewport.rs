@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::animation::AnimationManager;
 use crate::buffer::Buffer;
 use crate::scroll_mode::ScrollMode;
@@ -11,7 +13,7 @@ pub struct Viewport {
     pub scroll_mode: ScrollMode,
     pub column_width: u16,
     /// Cache for visual_lines: (buffer_version, column_width, result).
-    visual_lines_cache: Option<(u64, u16, Vec<VisualLine>)>,
+    visual_lines_cache: Option<(u64, u16, Rc<[VisualLine]>)>,
 }
 
 impl Default for Viewport {
@@ -34,16 +36,17 @@ impl Viewport {
 
     /// Compute visual lines for the current buffer and column width.
     /// Returns cached result when buffer and column width haven't changed.
-    pub fn visual_lines(&mut self, buffer: &Buffer) -> Vec<VisualLine> {
+    /// Rc::clone is O(1) — no heap allocation on cache hit.
+    pub fn visual_lines(&mut self, buffer: &Buffer) -> Rc<[VisualLine]> {
         let ver = buffer.version();
         let cw = self.column_width;
-        if let Some((cv, ccw, ref cached)) = self.visual_lines_cache
-            && cv == ver && ccw == cw
-        {
-            return cached.clone();
+        if let Some((cv, ccw, ref cached)) = self.visual_lines_cache {
+            if cv == ver && ccw == cw {
+                return Rc::clone(cached);
+            }
         }
-        let result = wrap::visual_lines_for_buffer(buffer, self.column_width);
-        self.visual_lines_cache = Some((ver, cw, result.clone()));
+        let result: Rc<[VisualLine]> = wrap::visual_lines_for_buffer(buffer, self.column_width).into();
+        self.visual_lines_cache = Some((ver, cw, Rc::clone(&result)));
         result
     }
 
