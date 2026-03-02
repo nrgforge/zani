@@ -12,6 +12,8 @@ pub struct FindState {
     pub current_match: usize,
     /// Cursor position before find was opened (for cancel restore).
     pub saved_cursor: (usize, usize),
+    /// Cached match ranges (line, start_col, end_col), populated by search().
+    match_ranges_cache: Vec<(usize, usize, usize)>,
 }
 
 impl FindState {
@@ -22,6 +24,7 @@ impl FindState {
             matches: Vec::new(),
             current_match: 0,
             saved_cursor: (cursor_line, cursor_col),
+            match_ranges_cache: Vec::new(),
         }
     }
 
@@ -31,6 +34,7 @@ impl FindState {
         self.current_match = 0;
 
         if self.query.is_empty() {
+            self.match_ranges_cache.clear();
             return;
         }
 
@@ -45,6 +49,14 @@ impl FindState {
                 self.matches.push((line_idx, char_col));
                 search_start += byte_pos + query_lower.len();
             }
+        }
+
+        // Populate match_ranges_cache
+        let query_len = self.query.chars().count();
+        self.match_ranges_cache.clear();
+        self.match_ranges_cache.reserve(self.matches.len().saturating_sub(self.match_ranges_cache.capacity()));
+        for &(line, col) in &self.matches {
+            self.match_ranges_cache.push((line, col, col + query_len));
         }
     }
 
@@ -95,16 +107,9 @@ impl FindState {
         self.query.replace_range(byte_idx..byte_idx + ch.len_utf8(), "");
     }
 
-    /// Compute match ranges for highlighting: (line, start_col, end_col).
-    pub fn match_ranges(&self) -> Vec<(usize, usize, usize)> {
-        let query_len = self.query.chars().count();
-        if query_len == 0 {
-            return Vec::new();
-        }
-        self.matches
-            .iter()
-            .map(|&(line, col)| (line, col, col + query_len))
-            .collect()
+    /// Return cached match ranges for highlighting: (line, start_col, end_col).
+    pub fn match_ranges(&self) -> &[(usize, usize, usize)] {
+        &self.match_ranges_cache
     }
 }
 

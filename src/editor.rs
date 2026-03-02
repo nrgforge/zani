@@ -9,11 +9,17 @@ use crate::undo::UndoHistory;
 use crate::vim_bindings::{self, Action, CursorShape, Direction, Mode};
 use crate::wrap::{self, VisualLine};
 
-/// Cached paragraph/sentence bounds, invalidated on cursor move or buffer edit.
-struct BoundsCache {
+/// Cached paragraph bounds, keyed on (buffer_version, cursor_line).
+/// Horizontal cursor movement does not invalidate paragraph bounds.
+struct ParagraphBoundsCache {
+    key: (u64, usize), // (buffer_version, cursor_line)
+    bounds: Option<(usize, usize)>,
+}
+
+/// Cached sentence bounds, keyed on (buffer_version, cursor_line, cursor_col).
+struct SentenceBoundsCache {
     key: (u64, usize, usize), // (buffer_version, cursor_line, cursor_col)
-    paragraph: Option<(usize, usize)>,
-    sentence: Option<(usize, usize)>,
+    bounds: Option<(usize, usize)>,
 }
 
 /// Text editor core: buffer, cursor, undo, selection, and vim state.
@@ -28,7 +34,8 @@ pub struct Editor {
     pub yank_register: Option<String>,
     pub undo_history: UndoHistory,
     pub dirty: bool,
-    bounds_cache: Option<BoundsCache>,
+    paragraph_cache: Option<ParagraphBoundsCache>,
+    sentence_cache: Option<SentenceBoundsCache>,
 }
 
 impl Default for Editor {
@@ -50,7 +57,8 @@ impl Editor {
             yank_register: None,
             undo_history: UndoHistory::new(),
             dirty: false,
-            bounds_cache: None,
+            paragraph_cache: None,
+            sentence_cache: None,
         }
     }
 
@@ -453,25 +461,34 @@ impl Editor {
     pub fn insert_char(&mut self, ch: char) {
         let idx = self.cursor_char_index();
 
-        let preceding = self.preceding_text(idx);
-        if let Some(edit) = smart_typography::transform(ch, &preceding) {
-            if edit.delete_before > 0 {
-                let start = idx.saturating_sub(edit.delete_before);
-                let deleted = self.buffer.slice_to_string(start, idx);
-                self.undo_history.record_delete(start, &deleted);
-                self.buffer.remove(start, idx);
-                self.cursor_col -= edit.delete_before;
+        // Only compute preceding text for chars that smart typography acts on.
+        // This avoids a String allocation for ~99% of keystrokes.
+        if matches!(ch, '"' | '\'' | '-' | '.') {
+            let preceding = self.preceding_text(idx);
+            if let Some(edit) = smart_typography::transform(ch, &preceding) {
+                if edit.delete_before > 0 {
+                    let start = idx.saturating_sub(edit.delete_before);
+                    let deleted = self.buffer.slice_to_string(start, idx);
+                    self.undo_history.record_delete(start, &deleted);
+                    self.buffer.remove(start, idx);
+                    self.cursor_col -= edit.delete_before;
+                }
+                let new_idx = self.cursor_char_index();
+                self.undo_history.record_insert(new_idx, edit.insert);
+                self.buffer.insert(new_idx, edit.insert);
+                self.cursor_col += edit.insert.chars().count();
+                self.dirty = true;
+                if ch == ' ' || ch == '\t' {
+                    self.undo_history.commit_group();
+                }
+                return;
             }
-            let new_idx = self.cursor_char_index();
-            self.undo_history.record_insert(new_idx, edit.insert);
-            self.buffer.insert(new_idx, edit.insert);
-            self.cursor_col += edit.insert.chars().count();
-        } else {
-            let s = ch.to_string();
-            self.undo_history.record_insert(idx, &s);
-            self.buffer.insert(idx, &s);
-            self.cursor_col += 1;
         }
+
+        let s = ch.to_string();
+        self.undo_history.record_insert(idx, &s);
+        self.buffer.insert(idx, &s);
+        self.cursor_col += 1;
         self.dirty = true;
 
         if ch == ' ' || ch == '\t' {
@@ -744,29 +761,40 @@ impl Editor {
         Some((start, end))
     }
 
-    /// Populate the bounds cache if the key has changed, then return it.
-    fn ensure_bounds_cached(&mut self) {
-        let key = (self.buffer.version(), self.cursor_line, self.cursor_col);
-        if let Some(ref cache) = self.bounds_cache {
+    /// Ensure paragraph bounds cache is fresh. Only depends on buffer version and cursor line.
+    fn ensure_paragraph_cached(&mut self) {
+        let key = (self.buffer.version(), self.cursor_line);
+        if let Some(ref cache) = self.paragraph_cache {
             if cache.key == key {
                 return;
             }
         }
-        let paragraph = self.paragraph_bounds();
-        let sentence = self.sentence_bounds();
-        self.bounds_cache = Some(BoundsCache { key, paragraph, sentence });
+        let bounds = self.paragraph_bounds();
+        self.paragraph_cache = Some(ParagraphBoundsCache { key, bounds });
     }
 
-    /// Cached paragraph bounds — recomputes only when cursor or buffer changes.
+    /// Ensure sentence bounds cache is fresh. Depends on buffer version, cursor line, and col.
+    fn ensure_sentence_cached(&mut self) {
+        let key = (self.buffer.version(), self.cursor_line, self.cursor_col);
+        if let Some(ref cache) = self.sentence_cache {
+            if cache.key == key {
+                return;
+            }
+        }
+        let bounds = self.sentence_bounds();
+        self.sentence_cache = Some(SentenceBoundsCache { key, bounds });
+    }
+
+    /// Cached paragraph bounds — recomputes only when cursor line or buffer changes.
     pub fn paragraph_bounds_cached(&mut self) -> Option<(usize, usize)> {
-        self.ensure_bounds_cached();
-        self.bounds_cache.as_ref().unwrap().paragraph
+        self.ensure_paragraph_cached();
+        self.paragraph_cache.as_ref().unwrap().bounds
     }
 
-    /// Cached sentence bounds — recomputes only when cursor or buffer changes.
+    /// Cached sentence bounds — recomputes only when cursor position or buffer changes.
     pub fn sentence_bounds_cached(&mut self) -> Option<(usize, usize)> {
-        self.ensure_bounds_cached();
-        self.bounds_cache.as_ref().unwrap().sentence
+        self.ensure_sentence_cached();
+        self.sentence_cache.as_ref().unwrap().bounds
     }
 
     /// Returns the normalized selection range (start_line, start_col, end_line, end_col).

@@ -93,6 +93,7 @@ fn run(
     terminal: &mut Terminal<ratatui::backend::CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut last_cursor_shape: Option<CursorShape> = None;
     loop {
         // Adjust scroll to keep cursor visible
         let size = terminal.size()?;
@@ -117,12 +118,16 @@ fn run(
         // Update smooth scroll display value
         app.viewport.sync_scroll(&app.animations);
 
-        // Set cursor shape based on vim mode
-        let cursor_style = match app.editor.cursor_shape() {
-            CursorShape::Bar => crossterm::cursor::SetCursorStyle::BlinkingBar,
-            CursorShape::Block => crossterm::cursor::SetCursorStyle::SteadyBlock,
-        };
-        crossterm::execute!(terminal.backend_mut(), cursor_style)?;
+        // Set cursor shape based on vim mode (only emit when changed)
+        let shape = app.editor.cursor_shape();
+        if last_cursor_shape != Some(shape) {
+            last_cursor_shape = Some(shape);
+            let cursor_style = match shape {
+                CursorShape::Bar => crossterm::cursor::SetCursorStyle::BlinkingBar,
+                CursorShape::Block => crossterm::cursor::SetCursorStyle::SteadyBlock,
+            };
+            crossterm::execute!(terminal.backend_mut(), cursor_style)?;
+        }
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
         let poll_timeout = if app.animations.is_active() || app.dimming.dim_animating() {

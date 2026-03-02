@@ -147,7 +147,7 @@ pub struct WritingSurface<'a> {
     /// Visual mode selection range: (start_line, start_col, end_line, end_col).
     selection: Option<(usize, usize, usize, usize)>,
     /// Find match ranges: (line, start_col, end_col) for highlighting.
-    find_matches: Vec<(usize, usize, usize)>,
+    find_matches: &'a [(usize, usize, usize)],
     /// The current (active) find match index, if any.
     find_current: Option<usize>,
     /// Pre-computed opacity for each logical line (from DimLayer).
@@ -176,7 +176,7 @@ impl<'a> WritingSurface<'a> {
             color_profile: ColorProfile::TrueColor,
             vertical_offset: 0,
             selection: None,
-            find_matches: Vec::new(),
+            find_matches: &[],
             find_current: None,
             line_opacities: &[],
             precomputed_visual_lines: None,
@@ -231,7 +231,7 @@ impl<'a> WritingSurface<'a> {
         self
     }
 
-    pub fn find_matches(mut self, matches: Vec<(usize, usize, usize)>, current: Option<usize>) -> Self {
+    pub fn find_matches(mut self, matches: &'a [(usize, usize, usize)], current: Option<usize>) -> Self {
         self.find_matches = matches;
         self.find_current = current;
         self

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::animation::Easing;
-use crate::focus_mode::{DimLayer, FadeConfig, FocusMode, LineOpacity, paragraph_target_opacities};
+use crate::focus_mode::{DimLayer, FadeConfig, FocusMode, LineOpacity, fill_paragraph_target_opacities};
 
 /// Focus mode and dimming animation state.
 ///
@@ -13,6 +13,8 @@ pub struct DimmingState {
     pub paragraph_dim: DimLayer,
     last_sentence_bounds: Option<(usize, usize)>,
     sentence_fades: Vec<(usize, usize, LineOpacity)>,
+    /// Reusable buffer for paragraph target opacities (avoids alloc per frame).
+    paragraph_targets_buf: Vec<f64>,
     /// Pre-populated output buffers, reused across frames.
     line_opacities_buf: Vec<f64>,
     sentence_fades_buf: Vec<(usize, usize, f64)>,
@@ -28,6 +30,7 @@ impl DimmingState {
             ),
             last_sentence_bounds: None,
             sentence_fades: Vec::new(),
+            paragraph_targets_buf: Vec::new(),
             line_opacities_buf: Vec::new(),
             sentence_fades_buf: Vec::new(),
         }
@@ -59,14 +62,14 @@ impl DimmingState {
                 self.sentence_fades.clear();
             }
             FocusMode::Paragraph => {
-                let targets = paragraph_target_opacities(line_count, paragraph_bounds);
-                self.paragraph_dim.update_targets(&targets);
+                fill_paragraph_target_opacities(&mut self.paragraph_targets_buf, line_count, paragraph_bounds);
+                self.paragraph_dim.update_targets(&self.paragraph_targets_buf);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
             }
             FocusMode::Sentence => {
-                let targets = paragraph_target_opacities(line_count, paragraph_bounds);
-                self.paragraph_dim.update_targets(&targets);
+                fill_paragraph_target_opacities(&mut self.paragraph_targets_buf, line_count, paragraph_bounds);
+                self.paragraph_dim.update_targets(&self.paragraph_targets_buf);
 
                 let current_start = sentence_bounds.map(|(s, _)| s);
                 let last_start = self.last_sentence_bounds.map(|(s, _)| s);

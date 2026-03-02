@@ -26,11 +26,12 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
     // Compute the effective palette (mid-crossfade interpolation when animating).
     let effective = app.effective_palette();
 
-    // Compute find match ranges for the writing surface
+    // Get find match ranges for the writing surface (cached in FindState)
+    let empty_ranges: &[(usize, usize, usize)] = &[];
     let (find_ranges, find_current) = if let Some(ref fs) = app.find_state {
         (fs.match_ranges(), if fs.matches.is_empty() { None } else { Some(fs.current_match) })
     } else {
-        (Vec::new(), None)
+        (empty_ranges, None)
     };
 
     // Build Writing Surface

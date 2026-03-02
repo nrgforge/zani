@@ -241,30 +241,43 @@ pub fn paragraph_target_opacities(
     line_count: usize,
     paragraph_bounds: Option<(usize, usize)>,
 ) -> Vec<f64> {
+    let mut buf = Vec::with_capacity(line_count);
+    fill_paragraph_target_opacities(&mut buf, line_count, paragraph_bounds);
+    buf
+}
+
+/// Fill `buf` with target opacities for the paragraph dimming layer.
+/// Clears and reuses the provided buffer to avoid allocation on steady-state frames.
+pub fn fill_paragraph_target_opacities(
+    buf: &mut Vec<f64>,
+    line_count: usize,
+    paragraph_bounds: Option<(usize, usize)>,
+) {
+    buf.clear();
     if line_count == 0 {
-        return Vec::new();
+        return;
     }
+    buf.reserve(line_count.saturating_sub(buf.capacity()));
     let Some((para_start, para_end)) = paragraph_bounds else {
-        return vec![1.0; line_count];
+        buf.resize(line_count, 1.0);
+        return;
     };
-    let mut targets = Vec::with_capacity(line_count);
     for i in 0..line_count {
         if i >= para_start && i <= para_end {
-            targets.push(1.0);
+            buf.push(1.0);
         } else {
             let dist = if i < para_start {
                 para_start - i
             } else {
                 i - para_end
             };
-            targets.push(match dist {
+            buf.push(match dist {
                 1..=3 => 0.6,
                 4..=6 => 0.35,
                 _ => 0.2,
             });
         }
     }
-    targets
 }
 
 /// Manages a vector of `LineOpacity` values. Each layer independently
