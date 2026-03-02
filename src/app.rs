@@ -485,98 +485,20 @@ impl App {
         }
 
         // Find overlay — swallow all keys when active
-        if let Some(ref mut find) = self.find_state {
-            match code {
-                KeyCode::Esc => {
-                    // Cancel: restore cursor to pre-search position
-                    let (line, col) = find.saved_cursor;
-                    self.cursor_line = line;
-                    self.cursor_col = col;
-                    self.find_state = None;
-                }
-                KeyCode::Enter => {
-                    // Jump to current match and close find
-                    if let Some((line, col)) = find.current_match_pos() {
-                        self.cursor_line = line;
-                        self.cursor_col = col;
-                    }
-                    self.find_state = None;
-                }
-                KeyCode::Backspace => {
-                    find.backspace();
-                    find.search(&self.buffer);
-                    // Jump cursor to first match for live preview
-                    if let Some((line, col)) = find.current_match_pos() {
-                        self.cursor_line = line;
-                        self.cursor_col = col;
-                    }
-                }
-                KeyCode::Up => {
-                    find.prev_match();
-                    if let Some((line, col)) = find.current_match_pos() {
-                        self.cursor_line = line;
-                        self.cursor_col = col;
-                    }
-                }
-                KeyCode::Down => {
-                    find.next_match();
-                    if let Some((line, col)) = find.current_match_pos() {
-                        self.cursor_line = line;
-                        self.cursor_col = col;
-                    }
-                }
-                KeyCode::Char(c) => {
-                    find.insert_char(c);
-                    find.search(&self.buffer);
-                    // Jump cursor to first match for live preview
-                    if let Some((line, col)) = find.current_match_pos() {
-                        self.cursor_line = line;
-                        self.cursor_col = col;
-                    }
-                }
-                _ => {}
-            }
+        if self.find_state.is_some() {
+            self.handle_find_key(code);
             return;
         }
 
         // Inline rename — swallow all keys when active
         if self.rename.active {
-            match code {
-                KeyCode::Esc => self.rename_cancel(),
-                KeyCode::Enter => self.rename_confirm(),
-                KeyCode::Backspace => self.rename_backspace(),
-                KeyCode::Left => self.rename.cursor_left(),
-                KeyCode::Right => self.rename.cursor_right(),
-                KeyCode::Char(c) => self.rename_insert(c),
-                _ => {}
-            }
+            self.handle_rename_key(code);
             return;
         }
 
         // Settings Layer navigation — swallow all keys when open
         if self.settings.visible {
-            match code {
-                KeyCode::Esc => self.dismiss_settings(),
-                KeyCode::Up | KeyCode::Char('k') => self.settings_nav_up(),
-                KeyCode::Down | KeyCode::Char('j') => self.settings_nav_down(),
-                KeyCode::Enter => {
-                    self.settings_apply();
-                    self.save_config();
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                        self.settings_adjust_column(-1);
-                        self.save_config();
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                        self.settings_adjust_column(1);
-                        self.save_config();
-                    }
-                }
-                _ => {} // swallow all other keys
-            }
+            self.handle_settings_key(code);
             return;
         }
 
@@ -657,6 +579,100 @@ impl App {
                 self.apply_action(Action::MoveCursor(Direction::Down));
             }
             _ => {}
+        }
+    }
+
+    /// Handle key input while the find overlay is active.
+    fn handle_find_key(&mut self, code: KeyCode) {
+        let find = self.find_state.as_mut().unwrap();
+        match code {
+            KeyCode::Esc => {
+                // Cancel: restore cursor to pre-search position
+                let (line, col) = find.saved_cursor;
+                self.cursor_line = line;
+                self.cursor_col = col;
+                self.find_state = None;
+            }
+            KeyCode::Enter => {
+                // Jump to current match and close find
+                if let Some((line, col)) = find.current_match_pos() {
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                }
+                self.find_state = None;
+            }
+            KeyCode::Backspace => {
+                find.backspace();
+                find.search(&self.buffer);
+                // Jump cursor to first match for live preview
+                if let Some((line, col)) = find.current_match_pos() {
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                }
+            }
+            KeyCode::Up => {
+                find.prev_match();
+                if let Some((line, col)) = find.current_match_pos() {
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                }
+            }
+            KeyCode::Down => {
+                find.next_match();
+                if let Some((line, col)) = find.current_match_pos() {
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                }
+            }
+            KeyCode::Char(c) => {
+                find.insert_char(c);
+                find.search(&self.buffer);
+                // Jump cursor to first match for live preview
+                if let Some((line, col)) = find.current_match_pos() {
+                    self.cursor_line = line;
+                    self.cursor_col = col;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle key input while the inline rename is active.
+    fn handle_rename_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.rename_cancel(),
+            KeyCode::Enter => self.rename_confirm(),
+            KeyCode::Backspace => self.rename_backspace(),
+            KeyCode::Left => self.rename.cursor_left(),
+            KeyCode::Right => self.rename.cursor_right(),
+            KeyCode::Char(c) => self.rename_insert(c),
+            _ => {}
+        }
+    }
+
+    /// Handle key input while the Settings Layer is open.
+    fn handle_settings_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.dismiss_settings(),
+            KeyCode::Up | KeyCode::Char('k') => self.settings_nav_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.settings_nav_down(),
+            KeyCode::Enter => {
+                self.settings_apply();
+                self.save_config();
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
+                    self.settings_adjust_column(-1);
+                    self.save_config();
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
+                    self.settings_adjust_column(1);
+                    self.save_config();
+                }
+            }
+            _ => {} // swallow all other keys
         }
     }
 
