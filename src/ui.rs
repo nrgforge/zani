@@ -3,7 +3,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
-use crate::app::{App, SettingsItem};
+use crate::app::App;
+use crate::settings::SettingsItem;
 use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
@@ -793,7 +794,7 @@ mod tests {
         assert!(text.contains("Settings"), "Settings Layer title should be visible");
 
         // Dismiss via Escape — overlay should disappear
-        app.dismiss_settings();
+        app.settings.dismiss();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
         assert!(
@@ -864,7 +865,7 @@ mod tests {
         app.toggle_settings();
 
         // Move cursor to Inkwell (next palette after Ember)
-        app.settings_nav_down();
+        app.settings.nav_down();
         assert_eq!(app.settings.cursor, 3); // Inkwell at index 3
 
         let inkwell = Palette::inkwell();
@@ -900,7 +901,7 @@ mod tests {
         app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
         app.settings.cursor = 11; // File
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
 
         let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
@@ -923,7 +924,7 @@ mod tests {
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
         app.settings.cursor = 11; // File
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         // Cursor at end (position 6), so cursor char is a space
         // Move cursor to start to test on 'a'
         app.rename.cursor = 0;

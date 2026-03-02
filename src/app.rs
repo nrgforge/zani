@@ -10,84 +10,11 @@ use crate::dimming::DimmingState;
 use crate::editing_mode::EditingMode;
 use crate::editor::Editor;
 use crate::find::FindState;
-use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::persistence::Persistence;
-use crate::scroll_mode::ScrollMode;
+use crate::settings::{RenameState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, Mode};
 use crate::viewport::Viewport;
-
-/// A selectable item in the Settings Layer.
-/// Defines the logical meaning of each row, replacing magic indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SettingsItem {
-    /// An editing mode choice (Vim or Standard).
-    EditingMode(EditingMode),
-    /// A palette choice (index into Palette::all()).
-    Palette(usize),
-    /// A focus mode choice.
-    FocusMode(FocusMode),
-    /// A scroll mode choice.
-    ScrollMode(ScrollMode),
-    /// Column width (adjusted via Left/Right, not Enter).
-    ColumnWidth,
-    /// File row (opens inline rename on Enter).
-    File,
-}
-
-impl SettingsItem {
-    /// Returns the ordered list of all selectable settings items.
-    pub fn all() -> Vec<SettingsItem> {
-        let mut items = Vec::new();
-        items.push(SettingsItem::EditingMode(EditingMode::Vim));
-        items.push(SettingsItem::EditingMode(EditingMode::Standard));
-        for i in 0..Palette::all().len() {
-            items.push(SettingsItem::Palette(i));
-        }
-        items.push(SettingsItem::FocusMode(FocusMode::Off));
-        items.push(SettingsItem::FocusMode(FocusMode::Sentence));
-        items.push(SettingsItem::FocusMode(FocusMode::Paragraph));
-        items.push(SettingsItem::ScrollMode(ScrollMode::Edge));
-        items.push(SettingsItem::ScrollMode(ScrollMode::Typewriter));
-        items.push(SettingsItem::ColumnWidth);
-        items.push(SettingsItem::File);
-        items
-    }
-
-    /// Look up the item at a given cursor index.
-    pub fn at(index: usize) -> Option<SettingsItem> {
-        Self::all().into_iter().nth(index)
-    }
-}
-
-/// State for the inline rename overlay.
-pub struct RenameState {
-    pub active: bool,
-    pub buf: String,
-    pub cursor: usize,
-}
-
-impl RenameState {
-    /// Move rename cursor left.
-    pub fn cursor_left(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
-    }
-
-    /// Move rename cursor right.
-    pub fn cursor_right(&mut self) {
-        if self.cursor < self.buf.chars().count() {
-            self.cursor += 1;
-        }
-    }
-}
-
-/// State for the Settings Layer overlay.
-pub struct SettingsState {
-    pub visible: bool,
-    pub cursor: usize,
-}
 
 /// Application state.
 pub struct App {
@@ -119,10 +46,10 @@ impl App {
             palette: Palette::default_palette(),
             dimming: DimmingState::new(),
             color_profile: ColorProfile::TrueColor,
-            settings: SettingsState { visible: false, cursor: 0 },
+            settings: SettingsState::new(),
             should_quit: false,
             persistence: Persistence::new(),
-            rename: RenameState { active: false, buf: String::new(), cursor: 0 },
+            rename: RenameState::new(),
             find_state: None,
             animations: AnimationManager::new(),
         }
@@ -160,33 +87,12 @@ impl App {
         self.palette = palette;
     }
 
-    /// Dismiss the Settings Layer.
-    pub fn dismiss_settings(&mut self) {
-        self.settings.visible = false;
-    }
-
     /// Find the current palette's position in Palette::all().
     pub fn active_palette_index(&self) -> usize {
         Palette::all()
             .iter()
             .position(|p| p.name == self.palette.name)
             .unwrap_or(0)
-    }
-
-    /// Move the settings cursor up (wrapping).
-    pub fn settings_nav_up(&mut self) {
-        let count = SettingsItem::all().len();
-        if self.settings.cursor == 0 {
-            self.settings.cursor = count - 1;
-        } else {
-            self.settings.cursor -= 1;
-        }
-    }
-
-    /// Move the settings cursor down (wrapping).
-    pub fn settings_nav_down(&mut self) {
-        let count = SettingsItem::all().len();
-        self.settings.cursor = (self.settings.cursor + 1) % count;
     }
 
     /// Apply the currently selected settings item.
@@ -227,7 +133,7 @@ impl App {
             SettingsItem::FocusMode(mode) => self.dimming.focus_mode = mode,
             SettingsItem::ScrollMode(mode) => self.viewport.scroll_mode = mode,
             SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
-            SettingsItem::File => self.rename_open(),
+            SettingsItem::File => self.rename.open(self.persistence.file_path.as_deref()),
         }
     }
 
@@ -235,79 +141,6 @@ impl App {
     pub fn settings_adjust_column(&mut self, delta: i16) {
         let new = self.viewport.column_width as i16 + delta;
         self.viewport.column_width = new.clamp(20, 120) as u16;
-    }
-
-    /// Open inline rename: seed buffer with current filename, cursor at end.
-    pub fn rename_open(&mut self) {
-        let name = self
-            .persistence.file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        self.rename.buf = name;
-        self.rename.cursor = self.rename.buf.chars().count();
-        self.rename.active = true;
-    }
-
-    /// Insert a character at cursor position (filters out `/`).
-    pub fn rename_insert(&mut self, ch: char) {
-        if ch == '/' {
-            return;
-        }
-        let byte_idx = char_to_byte_index(&self.rename.buf, self.rename.cursor);
-        self.rename.buf.insert(byte_idx, ch);
-        self.rename.cursor += 1;
-    }
-
-    /// Delete the character before the cursor.
-    pub fn rename_backspace(&mut self) {
-        if self.rename.cursor == 0 {
-            return;
-        }
-        self.rename.cursor -= 1;
-        let byte_idx = char_to_byte_index(&self.rename.buf, self.rename.cursor);
-        // Find the byte length of the char at this position
-        let ch = self.rename.buf[byte_idx..].chars().next().unwrap();
-        self.rename.buf.replace_range(byte_idx..byte_idx + ch.len_utf8(), "");
-    }
-
-    /// Cancel rename, clearing state.
-    pub fn rename_cancel(&mut self) {
-        self.rename.active = false;
-        self.rename.buf.clear();
-        self.rename.cursor = 0;
-    }
-
-    /// Confirm rename: rename on disk, update file_path, clear scratch flag.
-    /// Empty name is treated as cancel.
-    pub fn rename_confirm(&mut self) {
-        if self.rename.buf.trim().is_empty() {
-            self.rename_cancel();
-            return;
-        }
-
-        if let Some(old_path) = &self.persistence.file_path {
-            let new_path = old_path.with_file_name(&self.rename.buf);
-
-            // Only attempt fs::rename if old file exists on disk
-            if old_path.exists()
-                && std::fs::rename(old_path, &new_path).is_err()
-            {
-                // Stay in rename mode so user can retry or Esc
-                return;
-            }
-
-            self.persistence.file_path = Some(new_path);
-            if self.persistence.is_scratch {
-                self.persistence.is_scratch = false;
-            }
-        }
-
-        self.rename.active = false;
-        self.rename.buf.clear();
-        self.rename.cursor = 0;
     }
 
     /// Persist current settings to config file (best-effort, errors silently ignored).
@@ -457,12 +290,12 @@ impl App {
     /// Handle key input while the inline rename is active.
     fn handle_rename_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Esc => self.rename_cancel(),
-            KeyCode::Enter => self.rename_confirm(),
-            KeyCode::Backspace => self.rename_backspace(),
+            KeyCode::Esc => self.rename.cancel(),
+            KeyCode::Enter => self.rename.confirm(&mut self.persistence.file_path, &mut self.persistence.is_scratch),
+            KeyCode::Backspace => self.rename.backspace(),
             KeyCode::Left => self.rename.cursor_left(),
             KeyCode::Right => self.rename.cursor_right(),
-            KeyCode::Char(c) => self.rename_insert(c),
+            KeyCode::Char(c) => self.rename.insert(c),
             _ => {}
         }
     }
@@ -470,9 +303,9 @@ impl App {
     /// Handle key input while the Settings Layer is open.
     fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Esc => self.dismiss_settings(),
-            KeyCode::Up | KeyCode::Char('k') => self.settings_nav_up(),
-            KeyCode::Down | KeyCode::Char('j') => self.settings_nav_down(),
+            KeyCode::Esc => self.settings.dismiss(),
+            KeyCode::Up | KeyCode::Char('k') => self.settings.nav_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.settings.nav_down(),
             KeyCode::Enter => {
                 self.settings_apply();
                 self.save_config();
@@ -525,19 +358,14 @@ impl App {
     }
 }
 
-/// Convert a char index to a byte index in a UTF-8 string.
-fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::editing_mode::EditingMode;
+    use crate::focus_mode::FocusMode;
+    use crate::scroll_mode::ScrollMode;
+    use crate::settings::SettingsItem;
     use crate::vim_bindings::{self, CursorShape};
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -574,7 +402,7 @@ mod tests {
         let mut app = App::new();
         app.toggle_settings();
         assert!(app.settings.visible);
-        app.dismiss_settings();
+        app.settings.dismiss();
         assert!(!app.settings.visible);
     }
 
@@ -884,7 +712,7 @@ mod tests {
     fn settings_nav_down_wraps() {
         let mut app = App::new();
         app.settings.cursor = 11;
-        app.settings_nav_down();
+        app.settings.nav_down();
         assert_eq!(app.settings.cursor, 0, "nav down from last item should wrap to 0");
     }
 
@@ -892,7 +720,7 @@ mod tests {
     fn settings_nav_up_wraps() {
         let mut app = App::new();
         app.settings.cursor = 0;
-        app.settings_nav_up();
+        app.settings.nav_up();
         assert_eq!(app.settings.cursor, 11, "nav up from 0 should wrap to last item");
     }
 
@@ -900,7 +728,7 @@ mod tests {
     fn settings_nav_down_increments() {
         let mut app = App::new();
         app.settings.cursor = 2;
-        app.settings_nav_down();
+        app.settings.nav_down();
         assert_eq!(app.settings.cursor, 3);
     }
 
@@ -908,7 +736,7 @@ mod tests {
     fn settings_nav_up_decrements() {
         let mut app = App::new();
         app.settings.cursor = 5;
-        app.settings_nav_up();
+        app.settings.nav_up();
         assert_eq!(app.settings.cursor, 4);
     }
 
@@ -1020,7 +848,7 @@ mod tests {
     fn rename_open_seeds_buffer_with_filename() {
         let mut app = App::new();
         app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         assert!(app.rename.active);
         assert_eq!(app.rename.buf, "draft.md");
         assert_eq!(app.rename.cursor, 8); // "draft.md".len()
@@ -1032,7 +860,7 @@ mod tests {
         app.rename.active = true;
         app.rename.buf = "ab".to_string();
         app.rename.cursor = 1;
-        app.rename_insert('X');
+        app.rename.insert('X');
         assert_eq!(app.rename.buf, "aXb");
         assert_eq!(app.rename.cursor, 2);
     }
@@ -1043,7 +871,7 @@ mod tests {
         app.rename.active = true;
         app.rename.buf = "ab".to_string();
         app.rename.cursor = 1;
-        app.rename_insert('/');
+        app.rename.insert('/');
         assert_eq!(app.rename.buf, "ab");
         assert_eq!(app.rename.cursor, 1);
     }
@@ -1054,7 +882,7 @@ mod tests {
         app.rename.active = true;
         app.rename.buf = "abc".to_string();
         app.rename.cursor = 2;
-        app.rename_backspace();
+        app.rename.backspace();
         assert_eq!(app.rename.buf, "ac");
         assert_eq!(app.rename.cursor, 1);
     }
@@ -1065,7 +893,7 @@ mod tests {
         app.rename.active = true;
         app.rename.buf = "abc".to_string();
         app.rename.cursor = 0;
-        app.rename_backspace();
+        app.rename.backspace();
         assert_eq!(app.rename.buf, "abc");
         assert_eq!(app.rename.cursor, 0);
     }
@@ -1095,10 +923,10 @@ mod tests {
     fn rename_cancel_clears_state() {
         let mut app = App::new();
         app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         assert!(app.rename.active);
 
-        app.rename_cancel();
+        app.rename.cancel();
         assert!(!app.rename.active);
         assert!(app.rename.buf.is_empty());
         assert_eq!(app.rename.cursor, 0);
@@ -1112,11 +940,11 @@ mod tests {
 
         let mut app = App::new();
         app.persistence.file_path = Some(old_path.clone());
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         // Clear buffer and type new name
         app.rename.buf = "new.md".to_string();
         app.rename.cursor = 6;
-        app.rename_confirm();
+        app.rename.confirm(&mut app.persistence.file_path, &mut app.persistence.is_scratch);
 
         assert!(!app.rename.active);
         let new_path = dir.path().join("new.md");
@@ -1129,10 +957,10 @@ mod tests {
     fn rename_confirm_empty_name_cancels() {
         let mut app = App::new();
         app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         app.rename.buf = "".to_string();
         app.rename.cursor = 0;
-        app.rename_confirm();
+        app.rename.confirm(&mut app.persistence.file_path, &mut app.persistence.is_scratch);
 
         assert!(!app.rename.active);
         // file_path unchanged
@@ -1148,10 +976,10 @@ mod tests {
         let mut app = App::new();
         app.persistence.file_path = Some(old_path);
         app.persistence.is_scratch = true;
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         app.rename.buf = "real.md".to_string();
         app.rename.cursor = 7;
-        app.rename_confirm();
+        app.rename.confirm(&mut app.persistence.file_path, &mut app.persistence.is_scratch);
 
         assert!(!app.persistence.is_scratch);
     }
@@ -1172,10 +1000,10 @@ mod tests {
         let mut app = App::new();
         app.persistence.file_path = Some(PathBuf::from("/nonexistent/dir/scratch.md"));
         app.persistence.is_scratch = true;
-        app.rename_open();
+        app.rename.open(app.persistence.file_path.as_deref());
         app.rename.buf = "real.md".to_string();
         app.rename.cursor = 7;
-        app.rename_confirm();
+        app.rename.confirm(&mut app.persistence.file_path, &mut app.persistence.is_scratch);
 
         assert!(!app.rename.active);
         assert_eq!(
@@ -1861,7 +1689,7 @@ mod tests {
         app.toggle_settings();
         // Clear the opening animation
         app.animations.transitions.clear();
-        app.dismiss_settings();
+        app.settings.dismiss();
         // No overlay animation started on dismiss
         assert!(app.animations.overlay_progress().is_none());
     }

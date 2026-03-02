@@ -14,6 +14,7 @@ pub mod markdown_styling;
 pub mod palette;
 pub mod persistence;
 pub mod scroll_mode;
+pub mod settings;
 pub mod smart_typography;
 pub mod ui;
 pub mod undo;
