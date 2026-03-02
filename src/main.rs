@@ -147,7 +147,9 @@ fn run(
         }
 
         // Update dimming layer targets based on current cursor position
-        app.update_dim_layers();
+        let pb = app.editor.paragraph_bounds();
+        let sb = app.editor.sentence_bounds();
+        app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
 
         // Autosave on idle
         if app.persistence.should_autosave(app.editor.dirty) {

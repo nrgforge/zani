@@ -33,7 +33,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine]) 
     };
 
     // Build Writing Surface
-    let line_opacities = app.line_opacities();
+    let line_opacities = app.dimming.line_opacities(app.editor.buffer.len_lines());
     let sentence_fades = app.dimming.sentence_fade_snapshot();
     let surface = WritingSurface::new(&app.editor.buffer, &effective)
         .column_width(app.viewport.column_width)

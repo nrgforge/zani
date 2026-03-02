@@ -3,6 +3,7 @@ pub mod app;
 pub mod buffer;
 pub mod clipboard;
 pub mod config;
+pub mod dimming;
 pub mod draft_name;
 pub mod color_profile;
 pub mod editing_mode;
