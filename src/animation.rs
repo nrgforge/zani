@@ -33,7 +33,6 @@ impl Easing {
 
 #[derive(Debug, Clone)]
 pub enum TransitionKind {
-    Scroll { from: f64, to: f64 },
     Palette { from: Box<Palette>, to: Box<Palette> },
     OverlayOpacity { appearing: bool },
 }
@@ -102,23 +101,6 @@ impl AnimationManager {
 
     pub fn tick(&mut self) {
         self.transitions.retain(|t| !t.is_complete());
-    }
-
-    pub fn scroll_progress(&self) -> Option<f64> {
-        self.transitions
-            .iter()
-            .find(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
-            .map(|t| t.progress())
-    }
-
-    pub fn scroll_values(&self) -> Option<(f64, f64)> {
-        self.transitions
-            .iter()
-            .find(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
-            .and_then(|t| match &t.kind {
-                TransitionKind::Scroll { from, to } => Some((*from, *to)),
-                _ => None,
-            })
     }
 
     pub fn palette_progress(&self) -> Option<(f64, &Palette, &Palette)> {
@@ -201,11 +183,10 @@ mod tests {
     #[test]
     fn transition_created_now_has_progress_near_zero() {
         let t = Transition::new(
-            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            TransitionKind::OverlayOpacity { appearing: true },
             Duration::from_secs(1),
             Easing::EaseOut,
         );
-        // Progress should be very small since we just created it
         assert!(t.progress() < 0.1, "Expected progress near 0, got {}", t.progress());
     }
 
@@ -213,7 +194,7 @@ mod tests {
     fn transition_in_the_past_is_complete() {
         let past_start = Instant::now() - Duration::from_secs(5);
         let t = Transition {
-            kind: TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            kind: TransitionKind::OverlayOpacity { appearing: true },
             start: past_start,
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
@@ -225,7 +206,7 @@ mod tests {
     fn transition_in_the_past_has_progress_near_one() {
         let past_start = Instant::now() - Duration::from_secs(5);
         let t = Transition {
-            kind: TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            kind: TransitionKind::OverlayOpacity { appearing: true },
             start: past_start,
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
@@ -234,15 +215,16 @@ mod tests {
     }
 
     #[test]
-    fn same_kind_matches_scroll_with_scroll() {
-        let a = TransitionKind::Scroll { from: 0.0, to: 5.0 };
-        let b = TransitionKind::Scroll { from: 3.0, to: 8.0 };
+    fn same_kind_matches_overlay_with_overlay() {
+        let a = TransitionKind::OverlayOpacity { appearing: true };
+        let b = TransitionKind::OverlayOpacity { appearing: false };
         assert!(a.same_kind(&b));
     }
 
     #[test]
-    fn same_kind_does_not_match_scroll_with_overlay() {
-        let a = TransitionKind::Scroll { from: 0.0, to: 5.0 };
+    fn same_kind_does_not_match_palette_with_overlay() {
+        let p = Palette::default_palette();
+        let a = TransitionKind::Palette { from: Box::new(p), to: Box::new(p) };
         let b = TransitionKind::OverlayOpacity { appearing: true };
         assert!(!a.same_kind(&b));
     }
@@ -253,68 +235,64 @@ mod tests {
     fn manager_starts_empty_and_inactive() {
         let mgr = AnimationManager::new();
         assert!(!mgr.is_active());
-        assert!(mgr.scroll_progress().is_none());
     }
 
     #[test]
     fn manager_tracks_started_transition() {
         let mut mgr = AnimationManager::new();
         mgr.start(
-            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            TransitionKind::OverlayOpacity { appearing: true },
             Duration::from_secs(1),
             Easing::EaseOut,
         );
         assert!(mgr.is_active());
-        assert!(mgr.scroll_progress().is_some());
+        assert!(mgr.overlay_progress().is_some());
     }
 
     #[test]
     fn manager_replaces_same_kind() {
         let mut mgr = AnimationManager::new();
         mgr.start(
-            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            TransitionKind::OverlayOpacity { appearing: true },
             Duration::from_secs(1),
             Easing::EaseOut,
         );
         mgr.start(
-            TransitionKind::Scroll { from: 5.0, to: 20.0 },
+            TransitionKind::OverlayOpacity { appearing: false },
             Duration::from_secs(1),
             Easing::EaseOut,
         );
-        let scroll_count = mgr
+        let overlay_count = mgr
             .transitions
             .iter()
-            .filter(|t| matches!(t.kind, TransitionKind::Scroll { .. }))
+            .filter(|t| matches!(t.kind, TransitionKind::OverlayOpacity { .. }))
             .count();
-        assert_eq!(scroll_count, 1, "Expected 1 scroll transition after replacing, got {scroll_count}");
+        assert_eq!(overlay_count, 1, "Expected 1 overlay transition after replacing, got {overlay_count}");
     }
 
     #[test]
     fn manager_tick_removes_completed() {
         let mut mgr = AnimationManager::new();
-        // Push a completed transition directly
         mgr.transitions.push(Transition {
-            kind: TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            kind: TransitionKind::OverlayOpacity { appearing: true },
             start: Instant::now() - Duration::from_secs(5),
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
         });
-        // Completed transition is in the vec but not active
         assert!(!mgr.is_active());
-        assert_eq!(mgr.transitions.len(), 1, "Completed transition still in vec before tick");
+        assert_eq!(mgr.transitions.len(), 1);
         mgr.tick();
         assert!(mgr.transitions.is_empty(), "tick() should prune completed transitions");
     }
 
-    // === Task 10: Final Polish ===
-
     #[test]
     fn multiple_animation_kinds_coexist() {
+        let p = Palette::default_palette();
         let mut m = AnimationManager::new();
         m.start(
-            TransitionKind::Scroll { from: 0.0, to: 10.0 },
+            TransitionKind::Palette { from: Box::new(p), to: Box::new(p) },
             Duration::from_millis(150),
-            Easing::EaseOut,
+            Easing::EaseInOut,
         );
         m.start(
             TransitionKind::OverlayOpacity { appearing: true },
@@ -322,7 +300,7 @@ mod tests {
             Easing::EaseOut,
         );
         assert_eq!(m.transitions.len(), 2);
-        assert!(m.scroll_progress().is_some());
+        assert!(m.palette_progress().is_some());
         assert!(m.overlay_progress().is_some());
     }
 }

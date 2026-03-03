@@ -105,7 +105,7 @@ fn run(
             let size = terminal.size()?;
             let surface_height = size.height; // full height — no Chrome by default
             let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-            app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, surface_height, &mut app.animations);
+            app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, surface_height);
 
             // Update dimming layer targets before draw so output buffers are fresh
             let pb = app.editor.paragraph_bounds_cached();
@@ -120,9 +120,6 @@ fn run(
                 zani::ui::draw(frame, app, &visual_lines, sb);
             })?;
             app.animations.tick();
-
-            // Update smooth scroll display value
-            app.viewport.sync_scroll(&app.animations);
 
             // Set cursor shape based on vim mode (only emit when changed)
             let shape = app.editor.cursor_shape();

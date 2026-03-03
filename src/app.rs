@@ -691,7 +691,7 @@ mod tests {
         app.editor.cursor_col = 0;
 
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10, &mut app.animations); // height 10
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10); // height 10
 
         // Cursor at visual line 10, height 10 → scroll_offset = 10 - 5 = 5
         assert_eq!(app.viewport.scroll_offset, 5, "scroll should center cursor in viewport");
@@ -708,7 +708,7 @@ mod tests {
         app.editor.cursor_col = 0;
 
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10, &mut app.animations);
+        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 10);
 
         // Cursor at visual line 1, center = 5
         // Not enough content above → scroll stays 0, vertical offset pushes down
@@ -1695,21 +1695,6 @@ mod tests {
         app.editor.set_cursor_from_char_index(total_chars.saturating_sub(1));
         assert_eq!(app.editor.selection_anchor, Some((0, 0)));
         assert!(app.editor.cursor_line > 0 || app.editor.cursor_col > 0);
-    }
-
-    #[test]
-    fn scroll_animation_starts_on_scroll_change() {
-        let mut app = App::new();
-        app.editor.buffer = Buffer::from_text(&"line\n".repeat(50));
-        app.viewport.scroll_display = 0.0;
-        app.viewport.scroll_offset = 0;
-        let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-        app.editor.cursor_line = 30;
-        app.editor.cursor_col = 0;
-        app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, 20, &mut app.animations);
-        assert!(app.viewport.scroll_offset > 0);
-        assert!(app.animations.is_active());
-        assert!(app.animations.scroll_progress().is_some());
     }
 
     #[test]

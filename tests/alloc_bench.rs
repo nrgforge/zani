@@ -78,7 +78,6 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
         app.editor.cursor_col,
         &visual_lines,
         area.height,
-        &mut app.animations,
     );
 
     // 3. Update dimming (populates output buffers)
@@ -93,7 +92,7 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
     let palette = app.effective_palette();
     let surface = zani::writing_surface::WritingSurface::new(&app.editor.buffer, &palette)
         .column_width(app.viewport.column_width)
-        .scroll_offset(app.viewport.scroll_display.round() as usize)
+        .scroll_offset(app.viewport.scroll_offset)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
         .sentence_bounds(sb)

@@ -83,15 +83,6 @@ pub fn wrap_line(text: &str, width: usize, logical_line: usize) -> Vec<VisualLin
     lines
 }
 
-/// Wrap all lines from a buffer, returning a flat list of visual lines.
-pub fn wrap_all(lines: &[String], width: usize) -> Vec<VisualLine> {
-    lines
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, line)| wrap_line(line, width, idx))
-        .collect()
-}
-
 /// Compute visual lines for a Buffer (rope-backed text).
 /// Shared between WritingSurface rendering and cursor visibility scrolling.
 pub fn visual_lines_for_buffer(buffer: &crate::buffer::Buffer, column_width: u16) -> Vec<VisualLine> {
@@ -110,6 +101,15 @@ pub fn visual_lines_for_buffer(buffer: &crate::buffer::Buffer, column_width: u16
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wrap all lines from a buffer, returning a flat list of visual lines.
+    fn wrap_all(lines: &[String], width: usize) -> Vec<VisualLine> {
+        lines
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, line)| wrap_line(line, width, idx))
+            .collect()
+    }
 
     // === Acceptance test: Text wraps at prose-width column ===
 

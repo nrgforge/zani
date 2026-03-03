@@ -47,26 +47,6 @@ pub fn detect_terminal(env: &dyn Fn(&str) -> Option<String>) -> Terminal {
     Terminal::Unknown(name)
 }
 
-/// Determine whether Zani should run inline (no window spawn).
-pub fn should_run_inline(
-    inline_flag: bool,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> bool {
-    // Explicit --inline flag
-    if inline_flag {
-        return true;
-    }
-    // Already in a Zani window
-    if env("ZANI_WINDOW").as_deref() == Some("1") {
-        return true;
-    }
-    // Inside a terminal multiplexer — run inline, configure fonts via escape sequences
-    if env("TMUX").is_some() || env("STY").is_some() {
-        return true;
-    }
-    false
-}
-
 /// Build the command to spawn a Writing Window for the detected terminal.
 /// `binary` is the path to the zani executable (use `std::env::current_exe()`).
 /// Returns None if the terminal is unknown (should run inline instead).
@@ -213,22 +193,6 @@ mod tests {
         }
     }
 
-    // === Acceptance test: Zani does not re-spawn when already in a Writing Window ===
-
-    #[test]
-    fn runs_inline_when_zani_window_set() {
-        let env = make_env(&[("ZANI_WINDOW", "1")]);
-        assert!(should_run_inline(false, &env));
-    }
-
-    // === Acceptance test: Inline Mode on --inline flag ===
-
-    #[test]
-    fn runs_inline_with_flag() {
-        let env = make_env(&[]);
-        assert!(should_run_inline(true, &env));
-    }
-
     // === Acceptance test: Unknown terminal falls back to Inline Mode ===
 
     #[test]
@@ -244,23 +208,4 @@ mod tests {
         assert!(matches!(detect_terminal(&env), Terminal::Unknown(_)));
     }
 
-    // === Unit tests ===
-
-    #[test]
-    fn runs_inline_inside_tmux() {
-        let env = make_env(&[("TMUX", "/tmp/tmux-501/default,12345,0")]);
-        assert!(should_run_inline(false, &env));
-    }
-
-    #[test]
-    fn runs_inline_inside_screen() {
-        let env = make_env(&[("STY", "12345.pts-0.hostname")]);
-        assert!(should_run_inline(false, &env));
-    }
-
-    #[test]
-    fn not_inline_by_default() {
-        let env = make_env(&[]);
-        assert!(!should_run_inline(false, &env));
-    }
 }

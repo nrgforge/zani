@@ -56,16 +56,6 @@ pub fn is_fence_line(line: &str) -> bool {
     line.trim_start().starts_with("```")
 }
 
-/// Parse a single line of markdown and return per-character style information.
-/// This is a render-time operation — it does not modify the text.
-///
-/// When `in_code_block` is true, all characters are styled as code and
-/// heading/bold/italic parsing is skipped. Fence lines (starting with ```)
-/// get `is_syntax + is_code` on all characters.
-pub fn style_line(line: &str) -> Vec<CharStyle> {
-    style_line_with_context(line, false)
-}
-
 /// Parse a line with code block context.
 pub fn style_line_with_context(line: &str, in_code_block: bool) -> Vec<CharStyle> {
     let chars: Vec<char> = line.chars().collect();
@@ -249,6 +239,11 @@ fn find_closing_single(chars: &[char], start: usize, delim: char) -> Option<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Convenience wrapper for tests: style a line without code block context.
+    fn style_line(line: &str) -> Vec<CharStyle> {
+        style_line_with_context(line, false)
+    }
 
     // === Acceptance test: Bold text is styled with visible syntax characters ===
 

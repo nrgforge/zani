@@ -30,25 +30,10 @@ impl ColorProfile {
 
     /// Detect the terminal's color capability from environment variables.
     pub fn detect() -> Self {
-        Self::detect_from_env(std::env::var("COLORTERM").ok().as_deref())
-    }
-
-    /// Detect from an explicit COLORTERM value (testable without env mutation).
-    pub fn detect_from_env(colorterm: Option<&str>) -> Self {
-        match colorterm {
-            Some("truecolor") | Some("24bit") => Self::TrueColor,
-            _ => {
-                // Heuristic: most modern terminals support 256 colors.
-                // Basic ANSI is the conservative fallback if we can't tell.
-                // In practice, terminals that set TERM to *-256color support 256.
-                if let Ok(term) = std::env::var("TERM")
-                    && term.contains("256color")
-                {
-                    return Self::Color256;
-                }
-                Self::Basic
-            }
-        }
+        Self::detect_from(
+            std::env::var("COLORTERM").ok().as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+        )
     }
 
     /// Detect from explicit COLORTERM and TERM values (fully testable).
