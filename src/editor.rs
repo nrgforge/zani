@@ -349,7 +349,7 @@ impl Editor {
                 self.vim_mode = Mode::Normal;
             }
             Action::PasteAfter => {
-                if let Some(text) = self.yank_register.clone() {
+                if let Some(text) = self.resolve_paste_text() {
                     self.undo_history.commit_group();
                     if text.contains('\n') {
                         let line_len = self.buffer.line(self.cursor_line).len_chars();
@@ -370,7 +370,7 @@ impl Editor {
                 }
             }
             Action::PasteBefore => {
-                if let Some(text) = self.yank_register.clone() {
+                if let Some(text) = self.resolve_paste_text() {
                     self.undo_history.commit_group();
                     if text.contains('\n') {
                         let insert_idx = self.line_start_char_index();
@@ -388,7 +388,7 @@ impl Editor {
                 }
             }
             Action::PasteAtCursor => {
-                if let Some(text) = self.yank_register.clone() {
+                if let Some(text) = self.resolve_paste_text() {
                     if self.editing_mode == EditingMode::Standard
                         && self.selection_anchor.is_some()
                     {
@@ -503,6 +503,17 @@ impl Editor {
             return String::new();
         }
         self.buffer.slice_to_string(line_start, char_idx)
+    }
+
+    /// Try system clipboard first, fall back to yank register.
+    /// Syncs clipboard content into yank_register so subsequent pastes use it.
+    fn resolve_paste_text(&mut self) -> Option<String> {
+        if let Some(text) = clipboard::read_clipboard() {
+            self.yank_register = Some(text.clone());
+            Some(text)
+        } else {
+            self.yank_register.clone()
+        }
     }
 
     /// Calculate the character index in the buffer for the current cursor position.

@@ -1,4 +1,48 @@
 use std::io::Write;
+use std::process::Command;
+
+/// Determine the clipboard-read command for the current platform.
+/// Separated for testability (platform flag + env detection injected).
+fn clipboard_read_command(
+    is_macos: bool,
+    env_fn: &dyn Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
+    if is_macos {
+        return Some(vec!["pbpaste".into()]);
+    }
+    if env_fn("WAYLAND_DISPLAY").is_some() {
+        return Some(vec!["wl-paste".into(), "--no-newline".into()]);
+    }
+    if env_fn("DISPLAY").is_some() {
+        return Some(vec![
+            "xclip".into(),
+            "-selection".into(),
+            "clipboard".into(),
+            "-o".into(),
+        ]);
+    }
+    None
+}
+
+/// Read text from the system clipboard via subprocess.
+/// Returns None on any failure (missing tool, empty clipboard, etc.).
+pub fn read_clipboard() -> Option<String> {
+    let cmd = clipboard_read_command(cfg!(target_os = "macos"), &|k| std::env::var(k).ok())?;
+    let output = Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim_end_matches('\n').to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
 
 /// Write text to the system clipboard via OSC 52 escape sequence.
 /// This works in terminals that support OSC 52 (most modern terminals).
@@ -88,5 +132,38 @@ mod tests {
         assert!(sequence.starts_with("\x1b]52;c;"));
         assert!(sequence.ends_with("\x07"));
         assert!(sequence.contains("dGVzdA=="));
+    }
+
+    // === Clipboard read command detection ===
+
+    #[test]
+    fn clipboard_command_macos() {
+        let cmd = clipboard_read_command(true, &|_| None);
+        assert_eq!(cmd, Some(vec!["pbpaste".to_string()]));
+    }
+
+    #[test]
+    fn clipboard_command_wayland() {
+        let cmd = clipboard_read_command(false, &|k| {
+            if k == "WAYLAND_DISPLAY" { Some("wayland-0".into()) } else { None }
+        });
+        assert_eq!(cmd, Some(vec!["wl-paste".to_string(), "--no-newline".to_string()]));
+    }
+
+    #[test]
+    fn clipboard_command_x11() {
+        let cmd = clipboard_read_command(false, &|k| {
+            if k == "DISPLAY" { Some(":0".into()) } else { None }
+        });
+        assert_eq!(cmd, Some(vec![
+            "xclip".to_string(), "-selection".to_string(),
+            "clipboard".to_string(), "-o".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn clipboard_command_unknown() {
+        let cmd = clipboard_read_command(false, &|_| None);
+        assert_eq!(cmd, None);
     }
 }
