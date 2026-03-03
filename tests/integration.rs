@@ -23,7 +23,7 @@ fn focus_dimming_and_markdown_styling_compose() {
     // For each line, compute both layers
     for line_idx in 0..line_count {
         let line_text = buffer.line(line_idx).to_string();
-        let md_styles = markdown_styling::style_line(&line_text);
+        let md_styles = markdown_styling::style_line_with_context(&line_text, false);
         let opacity = opacities[line_idx];
         let focus_color = focus_mode::apply_dimming_with_opacity(&palette.foreground, &palette, opacity);
 
@@ -91,7 +91,7 @@ fn palette_switch_updates_all_styling() {
     };
 
     let line = "## Heading with **bold**";
-    let md_styles = markdown_styling::style_line(line);
+    let md_styles = markdown_styling::style_line_with_context(line, false);
 
     // Resolve with palette A
     let resolved_a: Vec<_> = md_styles.iter().map(|s| s.resolve(&palette_a)).collect();
@@ -129,7 +129,7 @@ fn styling_preserves_raw_buffer_content() {
 
     // Markdown styling does NOT modify the buffer
     let line = buffer.line(0).to_string();
-    let styles = markdown_styling::style_line(&line);
+    let styles = markdown_styling::style_line_with_context(&line, false);
     // styles is per-character metadata, not a modified string
     assert_eq!(styles.len(), line.chars().count(), "style count should match char count");
 
