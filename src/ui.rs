@@ -63,7 +63,8 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
 
     // Settings Layer overlay (Invariant 1: only visible when summoned)
     if app.settings.visible {
-        draw_settings_layer(frame, app, area);
+        let vm = app.settings_view_model();
+        draw_settings_layer(frame, &vm, &app.palette, area);
     }
 
     // Find overlay bar at top of screen
@@ -140,6 +141,25 @@ fn draw_find_bar(
     frame.render_widget(paragraph, bar_area);
 }
 
+/// All data needed to render the settings overlay, decoupled from App.
+pub(crate) struct SettingsViewModel {
+    pub overlay_opacity: f64,
+    pub editing_mode: EditingMode,
+    pub vim_mode: Mode,
+    pub palette_name: &'static str,
+    pub focus_mode: FocusMode,
+    pub scroll_mode: ScrollMode,
+    pub column_width: u16,
+    pub file_display: String,
+    pub save_error: Option<String>,
+    pub load_error: Option<String>,
+    pub is_dirty: bool,
+    pub settings_cursor: usize,
+    pub rename_active: bool,
+    pub rename_buf: String,
+    pub rename_cursor: usize,
+}
+
 /// A row in the settings overlay, optionally selectable.
 struct SettingsRow {
     text: String,
@@ -151,8 +171,7 @@ struct SettingsRow {
 }
 
 /// Render the Settings Layer overlay centered on screen.
-fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
-    let opacity = app.animations.overlay_progress().unwrap_or(1.0);
+fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palette: &Palette, area: Rect) {
     let overlay_width = 48u16.min(area.width);
     let all_palettes = Palette::all();
     let items = SettingsItem::all();
@@ -187,14 +206,14 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     EditingMode::Vim => "Vim",
                     EditingMode::Standard => "Standard",
                 };
-                let marker = if *mode == app.editor.editing_mode { ">" } else { " " };
+                let marker = if *mode == vm.editing_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::Palette(idx) => {
-                let palette = &all_palettes[*idx];
-                let marker = if palette.name == app.palette.name { ">" } else { " " };
+                let p = &all_palettes[*idx];
+                let marker = if p.name == vm.palette_name { ">" } else { " " };
                 // Pad name to 14 chars so swatches align across palette rows
-                format!("  {} {:<14}", marker, palette.name)
+                format!("  {} {:<14}", marker, p.name)
             }
             SettingsItem::FocusMode(mode) => {
                 let label = match mode {
@@ -202,7 +221,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     FocusMode::Sentence => "Sentence",
                     FocusMode::Paragraph => "Paragraph",
                 };
-                let marker = if *mode == app.dimming.focus_mode { ">" } else { " " };
+                let marker = if *mode == vm.focus_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::ScrollMode(mode) => {
@@ -210,19 +229,14 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                     ScrollMode::Edge => "Edge",
                     ScrollMode::Typewriter => "Typewriter",
                 };
-                let marker = if *mode == app.viewport.scroll_mode { ">" } else { " " };
+                let marker = if *mode == vm.scroll_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
             SettingsItem::ColumnWidth => {
-                format!("  Column      {}", app.viewport.column_width)
+                format!("  Column      {}", vm.column_width)
             }
             SettingsItem::File => {
-                let file_str = app
-                    .persistence.file_path
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("[scratch]");
+                let file_str = &vm.file_display;
                 let prefix = "  File        ";
                 let avail = (overlay_width as usize).saturating_sub(2 + prefix.len());
                 if file_str.len() <= avail {
@@ -251,19 +265,19 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     }
 
     // Status information (not selectable)
-    let mode_str = if app.editor.editing_mode == EditingMode::Standard {
+    let mode_str = if vm.editing_mode == EditingMode::Standard {
         "STANDARD"
     } else {
-        match app.editor.vim_mode {
+        match vm.vim_mode {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
         }
     };
-    let dirty_str = if app.editor.dirty { " [+]" } else { "" };
-    let error_str = if let Some(ref err) = app.persistence.save_error {
+    let dirty_str = if vm.is_dirty { " [+]" } else { "" };
+    let error_str = if let Some(ref err) = vm.save_error {
         format!("  Save failed: {}", err)
-    } else if let Some(ref err) = app.persistence.load_error {
+    } else if let Some(ref err) = vm.load_error {
         format!("  Load failed: {}", err)
     } else {
         String::new()
@@ -276,23 +290,23 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     });
 
     // Determine preview palette: if cursor is on a palette row, preview those colors
-    let preview_palette = match SettingsItem::at(app.settings.cursor) {
+    let preview_palette = match SettingsItem::at(vm.settings_cursor) {
         Some(SettingsItem::Palette(idx)) => {
-            all_palettes.get(idx).copied().unwrap_or(app.palette)
+            all_palettes.get(idx).copied().unwrap_or(*palette)
         }
-        _ => app.palette,
+        _ => *palette,
     };
 
     // Interpolate colors from background toward full foreground based on opacity.
     // At opacity 1.0 (animation complete or no animation) colors are unchanged.
     let effective_fg = crate::palette::interpolate(
-        &preview_palette.background, &preview_palette.foreground, opacity,
+        &preview_palette.background, &preview_palette.foreground, vm.overlay_opacity,
     );
     let effective_dim = crate::palette::interpolate(
-        &preview_palette.background, &preview_palette.dimmed_foreground, opacity,
+        &preview_palette.background, &preview_palette.dimmed_foreground, vm.overlay_opacity,
     );
     let effective_accent = crate::palette::interpolate(
-        &preview_palette.background, &preview_palette.accent_heading, opacity,
+        &preview_palette.background, &preview_palette.accent_heading, vm.overlay_opacity,
     );
 
     // Styles use the preview palette so colors update as the cursor moves
@@ -316,10 +330,10 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
             let is_file_row = row.cursor_index
                 .and_then(SettingsItem::at)
                 .is_some_and(|item| item == SettingsItem::File);
-            if app.rename.active && is_file_row {
+            if vm.rename_active && is_file_row {
                 let prefix = "  File        ";
-                let buf = &app.rename.buf;
-                let cursor_pos = app.rename.cursor;
+                let buf = &vm.rename_buf;
+                let cursor_pos = vm.rename_cursor;
                 let chars: Vec<char> = buf.chars().collect();
 
                 // Available width for filename inside overlay (border + prefix)
@@ -376,7 +390,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
                 return Line::from(spans);
             }
 
-            let style = if row.cursor_index == Some(app.settings.cursor) {
+            let style = if row.cursor_index == Some(vm.settings_cursor) {
                 cursor_style
             } else if row.is_heading {
                 Style::default()
