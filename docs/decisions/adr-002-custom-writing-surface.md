@@ -1,6 +1,6 @@
 # ADR-002: Custom Writing Surface on Ratatui's Cell Buffer
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

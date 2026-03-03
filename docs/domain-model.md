@@ -53,8 +53,8 @@
 | **Dismiss** | Writer | Settings Layer / Chrome | Hide summoned UI elements, returning to the bare writing state. |
 | **Detect** | Zani | Color Profile / Terminal | Identify terminal emulator and color capabilities at startup. |
 | **Degrade** | Zani | Palette | Fall back from True Color to 256-color to basic ANSI based on the detected Color Profile. |
-| **Ingest** | Writer (via Zani) | Document / Selection | Send writing to Plexus for knowledge graph ingestion. On-save or on-demand, not real-time. Semantics are extracted automatically by Plexus. |
-| **Invoke Ensemble** | Writer (via Zani) | Document / Selection | Trigger an llm-orc ensemble against the current text for analysis, critique, or research. A pull interaction. |
+| **Ingest** | Writer (via Zani) | Document / Selection | _(Planned, not yet implemented.)_ Send writing to Plexus for knowledge graph ingestion. On-save or on-demand, not real-time. Semantics are extracted automatically by Plexus. |
+| **Invoke Ensemble** | Writer (via Zani) | Document / Selection | _(Planned, not yet implemented.)_ Trigger an llm-orc ensemble against the current text for analysis, critique, or research. A pull interaction. |
 
 ## Relationships
 
@@ -72,8 +72,8 @@
 - **Markdown Styling** is applied by the **Writing Surface** during **Render** — it reads syntax from the **Buffer** but does not modify it
 - **Markdown Styling** uses **Dimming** on syntax characters and applies text attributes (bold, italic, color) to the modified text
 - **Smart Typography** transforms characters within the **Buffer** during **Write**
-- **Ingest** sends **Document** content to Plexus (external)
-- **Invoke Ensemble** sends **Document** content to llm-orc (external)
+- **Ingest** sends **Document** content to Plexus (external) _(planned, not yet implemented)_
+- **Invoke Ensemble** sends **Document** content to llm-orc (external) _(planned, not yet implemented)_
 
 ## Invariants
 
@@ -91,7 +91,7 @@
 
 7. **Markdown is the native format.** Documents are plain markdown files on disk. No proprietary format, no database, no intermediate representation. What git sees is what the writer wrote.
 
-8. **External integrations are pull-only.** Plexus ingest and llm-orc ensemble invocations happen only when the writer explicitly requests them. Nothing runs in the background during writing.
+8. **External integrations are pull-only.** _(Planned, not yet implemented.)_ Plexus ingest and llm-orc ensemble invocations happen only when the writer explicitly requests them. Nothing runs in the background during writing.
 
 9. **The Writing Window is opt-in.** When launched with `--window`, Zani spawns a dedicated terminal window with writing-optimized settings. Without `--window`, Zani runs inline in the current terminal. The writer's development terminal is unchanged.
 

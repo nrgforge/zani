@@ -1,6 +1,6 @@
 # ADR-005: Styled Markdown with Dimmed Syntax Characters
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

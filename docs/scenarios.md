@@ -43,12 +43,6 @@
 **And** adjacent paragraphs render at a dimmed foreground color
 **And** paragraphs further away render at a more dimmed foreground color
 
-### Scenario: Typewriter Mode keeps cursor vertically centered
-**Given** Focus Mode is set to Typewriter
-**When** the writer types new text at the end of the Document
-**Then** the cursor remains at the vertical center of the terminal
-**And** the text above scrolls upward as new lines are added
-
 ### Scenario: Focus Mode off shows all text at full brightness
 **Given** Focus Mode is Off
 **When** the Writing Surface renders
@@ -58,7 +52,7 @@
 ### Scenario: Focus Mode toggle
 **Given** the writer is in any Focus Mode (or Off)
 **When** the writer invokes the Focus Mode toggle
-**Then** the Focus Mode cycles to the next variant (Off → Sentence → Paragraph → Typewriter → Off)
+**Then** the Focus Mode cycles to the next variant (Off → Sentence → Paragraph → Off)
 **And** the Writing Surface re-renders immediately with the new Dimming
 
 ---
@@ -149,7 +143,7 @@
 ### Scenario: Settings Layer shows Focus Mode selection
 **Given** the Settings Layer is visible
 **When** the writer views the Focus Mode section
-**Then** the Focus Mode options (Off, Sentence, Paragraph, Typewriter) are listed
+**Then** the Focus Mode options (Off, Sentence, Paragraph) are listed
 **And** the currently active Focus Mode is indicated
 
 ### Scenario: Settings Layer is dismissed

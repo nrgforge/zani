@@ -1,6 +1,6 @@
 # ADR-006: Curated Palette Collection
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

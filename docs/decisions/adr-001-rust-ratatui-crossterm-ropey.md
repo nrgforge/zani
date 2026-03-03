@@ -1,6 +1,6 @@
 # ADR-001: Rust with Ratatui, Crossterm, and Ropey
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

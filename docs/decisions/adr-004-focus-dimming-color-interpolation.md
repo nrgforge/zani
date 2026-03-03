@@ -18,7 +18,7 @@ Example interpolation for the default Palette:
 - 2+ paragraphs away: `rgb(100, 97, 92)` — ~30% brightness
 - Background: `rgb(40, 38, 35)` — warm dark gray
 
-The interpolation curve, number of gradient steps, and distance metric (sentence, paragraph, or fixed line from cursor in Typewriter Mode) vary by the active Focus Mode variant.
+The interpolation curve, number of gradient steps, and distance metric (sentence or paragraph) vary by the active Focus Mode variant.
 
 ## Consequences
 
