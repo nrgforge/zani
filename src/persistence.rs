@@ -9,6 +9,7 @@ pub struct Persistence {
     pub file_path: Option<PathBuf>,
     pub is_scratch: bool,
     pub save_error: Option<String>,
+    pub load_error: Option<String>,
     pub last_save: Option<Instant>,
     pub autosave_interval: Duration,
 }
@@ -19,6 +20,7 @@ impl Persistence {
             file_path: None,
             is_scratch: false,
             save_error: None,
+            load_error: None,
             last_save: None,
             autosave_interval: Duration::from_secs(3),
         }

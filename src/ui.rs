@@ -263,6 +263,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     let dirty_str = if app.editor.dirty { " [+]" } else { "" };
     let error_str = if let Some(ref err) = app.persistence.save_error {
         format!("  Save failed: {}", err)
+    } else if let Some(ref err) = app.persistence.load_error {
+        format!("  Load failed: {}", err)
     } else {
         String::new()
     };

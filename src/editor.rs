@@ -34,6 +34,8 @@ pub struct Editor {
     pub yank_register: Option<String>,
     pub undo_history: UndoHistory,
     pub dirty: bool,
+    /// Column width used for wrapping when moving cursor up/down.
+    pub column_width: u16,
     paragraph_cache: Option<ParagraphBoundsCache>,
     sentence_cache: Option<SentenceBoundsCache>,
 }
@@ -57,6 +59,7 @@ impl Editor {
             yank_register: None,
             undo_history: UndoHistory::new(),
             dirty: false,
+            column_width: 60,
             paragraph_cache: None,
             sentence_cache: None,
         }
@@ -302,17 +305,23 @@ impl Editor {
             Action::OpenLineBelow => {
                 let line_len = self.buffer.line(self.cursor_line).len_chars();
                 let line_end_idx = self.line_start_char_index() + line_len.saturating_sub(1);
+                self.undo_history.commit_group();
+                self.undo_history.record_insert(line_end_idx, "\n");
                 self.buffer.insert(line_end_idx, "\n");
                 self.cursor_line += 1;
                 self.cursor_col = 0;
                 self.dirty = true;
+                self.undo_history.commit_group();
                 self.vim_mode = Mode::Insert;
             }
             Action::OpenLineAbove => {
                 let line_start = self.line_start_char_index();
+                self.undo_history.commit_group();
+                self.undo_history.record_insert(line_start, "\n");
                 self.buffer.insert(line_start, "\n");
                 self.cursor_col = 0;
                 self.dirty = true;
+                self.undo_history.commit_group();
                 self.vim_mode = Mode::Insert;
             }
             Action::EnterVisual => {
@@ -542,9 +551,9 @@ impl Editor {
     }
 
     /// Move cursor in the given direction.
-    /// For Up/Down, computes visual lines using the given column width.
+    /// For Up/Down, computes visual lines using the editor's column width.
     pub fn move_cursor(&mut self, dir: Direction) {
-        self.move_cursor_with_width(dir, 60);
+        self.move_cursor_with_width(dir, self.column_width);
     }
 
     /// Move cursor in the given direction using the specified column width for wrapping.
@@ -1638,5 +1647,31 @@ mod tests {
         let pb2 = editor.paragraph_bounds_cached();
         // After merging, paragraph should now span more lines
         assert_ne!(pb1, pb2);
+    }
+
+    // === o/O undo regression ===
+
+    #[test]
+    fn o_then_undo_restores_original() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\n");
+        editor.cursor_line = 0;
+        let original = editor.buffer.to_string();
+        editor.handle_char('o');
+        assert_ne!(editor.buffer.to_string(), original);
+        editor.apply_action(Action::Undo);
+        assert_eq!(editor.buffer.to_string(), original);
+    }
+
+    #[test]
+    fn big_o_then_undo_restores_original() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\n");
+        editor.cursor_line = 1;
+        let original = editor.buffer.to_string();
+        editor.handle_char('O');
+        assert_ne!(editor.buffer.to_string(), original);
+        editor.apply_action(Action::Undo);
+        assert_eq!(editor.buffer.to_string(), original);
     }
 }

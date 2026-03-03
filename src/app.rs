@@ -79,13 +79,21 @@ impl App {
         app.dimming.focus_mode = config.focus_mode;
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
+        app.editor.column_width = config.column_width;
         app.editor.editing_mode = config.editing_mode;
         if config.editing_mode == EditingMode::Standard {
             app.editor.vim_mode = Mode::Insert;
         }
         if let Some(ref path) = file_path {
-            let content = std::fs::read_to_string(path).unwrap_or_default();
-            app = app.with_file(path.clone(), &content);
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    app = app.with_file(path.clone(), &content);
+                }
+                Err(e) => {
+                    app.persistence.load_error = Some(e.to_string());
+                    app = app.with_file(path.clone(), "");
+                }
+            }
         } else {
             app = app.with_scratch_name();
         }
@@ -167,7 +175,9 @@ impl App {
     /// Adjust column width by delta, clamped to 20–120.
     pub fn settings_adjust_column(&mut self, delta: i16) {
         let new = self.viewport.column_width as i16 + delta;
-        self.viewport.column_width = new.clamp(20, 120) as u16;
+        let clamped = new.clamp(20, 120) as u16;
+        self.viewport.column_width = clamped;
+        self.editor.column_width = clamped;
     }
 
     /// Persist current settings to config file (best-effort, errors silently ignored).
