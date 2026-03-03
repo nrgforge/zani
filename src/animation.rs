@@ -126,7 +126,7 @@ impl Easing {
 #[derive(Debug, Clone)]
 pub enum TransitionKind {
     Palette { from: Box<Palette>, to: Box<Palette> },
-    OverlayOpacity { appearing: bool },
+    OverlayOpacity,
 }
 
 impl TransitionKind {
@@ -210,14 +210,8 @@ impl AnimationManager {
     pub fn overlay_progress(&self) -> Option<f64> {
         self.transitions
             .iter()
-            .find(|t| matches!(t.kind, TransitionKind::OverlayOpacity { .. }))
-            .and_then(|t| match &t.kind {
-                TransitionKind::OverlayOpacity { appearing } => {
-                    let p = t.progress();
-                    Some(if *appearing { p } else { 1.0 - p })
-                }
-                _ => None,
-            })
+            .find(|t| matches!(t.kind, TransitionKind::OverlayOpacity))
+            .map(|t| t.progress())
     }
 }
 
@@ -275,7 +269,7 @@ mod tests {
     #[test]
     fn transition_created_now_has_progress_near_zero() {
         let t = Transition::new(
-            TransitionKind::OverlayOpacity { appearing: true },
+            TransitionKind::OverlayOpacity,
             Duration::from_secs(1),
             Easing::EaseOut,
         );
@@ -286,7 +280,7 @@ mod tests {
     fn transition_in_the_past_is_complete() {
         let past_start = Instant::now() - Duration::from_secs(5);
         let t = Transition {
-            kind: TransitionKind::OverlayOpacity { appearing: true },
+            kind: TransitionKind::OverlayOpacity,
             start: past_start,
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
@@ -298,7 +292,7 @@ mod tests {
     fn transition_in_the_past_has_progress_near_one() {
         let past_start = Instant::now() - Duration::from_secs(5);
         let t = Transition {
-            kind: TransitionKind::OverlayOpacity { appearing: true },
+            kind: TransitionKind::OverlayOpacity,
             start: past_start,
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
@@ -308,8 +302,8 @@ mod tests {
 
     #[test]
     fn same_kind_matches_overlay_with_overlay() {
-        let a = TransitionKind::OverlayOpacity { appearing: true };
-        let b = TransitionKind::OverlayOpacity { appearing: false };
+        let a = TransitionKind::OverlayOpacity;
+        let b = TransitionKind::OverlayOpacity;
         assert!(a.same_kind(&b));
     }
 
@@ -317,7 +311,7 @@ mod tests {
     fn same_kind_does_not_match_palette_with_overlay() {
         let p = Palette::default_palette();
         let a = TransitionKind::Palette { from: Box::new(p), to: Box::new(p) };
-        let b = TransitionKind::OverlayOpacity { appearing: true };
+        let b = TransitionKind::OverlayOpacity;
         assert!(!a.same_kind(&b));
     }
 
@@ -333,7 +327,7 @@ mod tests {
     fn manager_tracks_started_transition() {
         let mut mgr = AnimationManager::new();
         mgr.start(
-            TransitionKind::OverlayOpacity { appearing: true },
+            TransitionKind::OverlayOpacity,
             Duration::from_secs(1),
             Easing::EaseOut,
         );
@@ -345,19 +339,19 @@ mod tests {
     fn manager_replaces_same_kind() {
         let mut mgr = AnimationManager::new();
         mgr.start(
-            TransitionKind::OverlayOpacity { appearing: true },
+            TransitionKind::OverlayOpacity,
             Duration::from_secs(1),
             Easing::EaseOut,
         );
         mgr.start(
-            TransitionKind::OverlayOpacity { appearing: false },
+            TransitionKind::OverlayOpacity,
             Duration::from_secs(1),
             Easing::EaseOut,
         );
         let overlay_count = mgr
             .transitions
             .iter()
-            .filter(|t| matches!(t.kind, TransitionKind::OverlayOpacity { .. }))
+            .filter(|t| matches!(t.kind, TransitionKind::OverlayOpacity))
             .count();
         assert_eq!(overlay_count, 1, "Expected 1 overlay transition after replacing, got {overlay_count}");
     }
@@ -366,7 +360,7 @@ mod tests {
     fn manager_tick_removes_completed() {
         let mut mgr = AnimationManager::new();
         mgr.transitions.push(Transition {
-            kind: TransitionKind::OverlayOpacity { appearing: true },
+            kind: TransitionKind::OverlayOpacity,
             start: Instant::now() - Duration::from_secs(5),
             duration: Duration::from_secs(1),
             easing: Easing::EaseOut,
@@ -387,7 +381,7 @@ mod tests {
             Easing::EaseInOut,
         );
         m.start(
-            TransitionKind::OverlayOpacity { appearing: true },
+            TransitionKind::OverlayOpacity,
             Duration::from_millis(150),
             Easing::EaseOut,
         );

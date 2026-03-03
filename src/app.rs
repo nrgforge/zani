@@ -118,7 +118,7 @@ impl App {
         if self.settings.visible {
             use crate::animation::{Easing, TransitionKind};
             self.animations.start(
-                TransitionKind::OverlayOpacity { appearing: true },
+                TransitionKind::OverlayOpacity,
                 Duration::from_millis(150),
                 Easing::EaseOut,
             );
@@ -315,7 +315,7 @@ impl App {
                         self.editor.cursor_col,
                     ));
                     self.animations.start(
-                        crate::animation::TransitionKind::OverlayOpacity { appearing: true },
+                        crate::animation::TransitionKind::OverlayOpacity,
                         Duration::from_millis(150),
                         crate::animation::Easing::EaseOut,
                     );
@@ -554,6 +554,14 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    /// Look up the cursor index for a given SettingsItem.
+    fn item_pos(target: SettingsItem) -> usize {
+        SettingsItem::all()
+            .iter()
+            .position(|i| *i == target)
+            .unwrap_or_else(|| panic!("SettingsItem {:?} not found", target))
+    }
+
     // === Unit test: SettingsItem::all() matches expected count ===
 
     #[test]
@@ -677,45 +685,45 @@ mod tests {
         let mut app = App::new();
         app.palette = Palette::inkwell();
         app.toggle_settings();
-        assert_eq!(app.settings.cursor, 3); // Inkwell is at position 3 (2 editing modes + Ember + Inkwell)
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(1)));
     }
 
     #[test]
     fn settings_nav_down_wraps() {
         let mut app = App::new();
-        app.settings.cursor = 11;
+        app.settings.cursor = SettingsItem::all().len() - 1;
         app.settings.nav_down();
-        assert_eq!(app.settings.cursor, 0, "nav down from last item should wrap to 0");
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::EditingMode(EditingMode::Vim)), "nav down from last item should wrap to first");
     }
 
     #[test]
     fn settings_nav_up_wraps() {
         let mut app = App::new();
-        app.settings.cursor = 0;
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Vim));
         app.settings.nav_up();
-        assert_eq!(app.settings.cursor, 11, "nav up from 0 should wrap to last item");
+        assert_eq!(app.settings.cursor, SettingsItem::all().len() - 1, "nav up from 0 should wrap to last item");
     }
 
     #[test]
     fn settings_nav_down_increments() {
         let mut app = App::new();
-        app.settings.cursor = 2;
+        app.settings.cursor = item_pos(SettingsItem::Palette(0));
         app.settings.nav_down();
-        assert_eq!(app.settings.cursor, 3);
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(1)));
     }
 
     #[test]
     fn settings_nav_up_decrements() {
         let mut app = App::new();
-        app.settings.cursor = 5;
+        app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Off));
         app.settings.nav_up();
-        assert_eq!(app.settings.cursor, 4);
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(2)));
     }
 
     #[test]
     fn settings_apply_palette() {
         let mut app = App::new();
-        app.settings.cursor = 3; // Inkwell (2 editing modes + Ember=2, Inkwell=3)
+        app.settings.cursor = item_pos(SettingsItem::Palette(1)); // Inkwell
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
     }
@@ -723,31 +731,31 @@ mod tests {
     #[test]
     fn settings_apply_focus_mode() {
         let mut app = App::new();
-        app.settings.cursor = 6; // Sentence
+        app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Sentence));
         app.settings_apply();
-        assert_eq!(app.dimming.focus_mode, FocusMode::Sentence, "cursor 6 should select Sentence focus");
+        assert_eq!(app.dimming.focus_mode, FocusMode::Sentence);
 
-        app.settings.cursor = 7; // Paragraph
+        app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Paragraph));
         app.settings_apply();
-        assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph, "cursor 7 should select Paragraph focus");
+        assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph);
     }
 
     #[test]
     fn settings_apply_scroll_mode() {
         let mut app = App::new();
-        app.settings.cursor = 9; // ScrollMode::Typewriter
+        app.settings.cursor = item_pos(SettingsItem::ScrollMode(ScrollMode::Typewriter));
         app.settings_apply();
-        assert_eq!(app.viewport.scroll_mode, ScrollMode::Typewriter, "cursor 9 should select Typewriter scroll");
+        assert_eq!(app.viewport.scroll_mode, ScrollMode::Typewriter);
 
-        app.settings.cursor = 8; // ScrollMode::Edge
+        app.settings.cursor = item_pos(SettingsItem::ScrollMode(ScrollMode::Edge));
         app.settings_apply();
-        assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge, "cursor 8 should select Edge scroll");
+        assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge);
     }
 
     #[test]
     fn settings_apply_column_is_noop() {
         let mut app = App::new();
-        app.settings.cursor = 10; // ColumnWidth
+        app.settings.cursor = item_pos(SettingsItem::ColumnWidth);
         let before = app.viewport.column_width;
         app.settings_apply();
         assert_eq!(app.viewport.column_width, before, "ColumnWidth row should not change width on Enter");
@@ -960,7 +968,7 @@ mod tests {
     fn settings_apply_file_opens_rename() {
         let mut app = App::new();
         app.persistence.file_path = Some(PathBuf::from("/tmp/draft.md"));
-        app.settings.cursor = 11; // File
+        app.settings.cursor = item_pos(SettingsItem::File);
         app.settings_apply();
         assert!(app.rename.active);
         assert_eq!(app.rename.buf, "draft.md");
@@ -990,7 +998,7 @@ mod tests {
     #[test]
     fn settings_apply_switches_to_standard_mode() {
         let mut app = App::new();
-        app.settings.cursor = 1; // Standard
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Standard));
         app.settings_apply();
         assert_eq!(app.editor.editing_mode, EditingMode::Standard);
         assert_eq!(app.editor.vim_mode, Mode::Insert);
@@ -1001,7 +1009,7 @@ mod tests {
         let mut app = App::new();
         app.editor.editing_mode = EditingMode::Standard;
         app.editor.vim_mode = Mode::Insert;
-        app.settings.cursor = 0; // Vim
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Vim));
         app.settings_apply();
         assert_eq!(app.editor.editing_mode, EditingMode::Vim);
         assert_eq!(app.editor.vim_mode, Mode::Normal);
@@ -1011,7 +1019,7 @@ mod tests {
     fn switching_to_standard_clears_pending_normal_key() {
         let mut app = App::new();
         app.editor.pending_normal_key = Some('g');
-        app.settings.cursor = 1; // Standard
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Standard));
         app.settings_apply();
         assert_eq!(app.editor.pending_normal_key, None);
     }
@@ -1022,7 +1030,7 @@ mod tests {
     fn standard_mode_full_round_trip() {
         let mut app = App::new();
         // Switch to Standard mode
-        app.settings.cursor = 1;
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Standard));
         app.settings_apply();
         assert_eq!(app.editor.editing_mode, EditingMode::Standard);
         assert_eq!(app.editor.vim_mode, Mode::Insert);
@@ -1061,7 +1069,7 @@ mod tests {
         assert_eq!(app.editor.buffer.to_string(), "hihi\n");
 
         // Switch back to Vim mode
-        app.settings.cursor = 0;
+        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Vim));
         app.settings_apply();
         assert_eq!(app.editor.editing_mode, EditingMode::Vim);
         assert_eq!(app.editor.vim_mode, Mode::Normal);
@@ -1128,7 +1136,7 @@ mod tests {
     fn palette_animation_starts_on_switch() {
         let mut app = App::new();
         app.toggle_settings();
-        app.settings.cursor = 3; // Inkwell palette index
+        app.settings.cursor = item_pos(SettingsItem::Palette(1)); // Inkwell
         app.settings_apply();
         assert_eq!(app.palette.name, "Inkwell");
         assert!(app.animations.is_active());
@@ -1521,5 +1529,26 @@ mod tests {
         assert_eq!(app.editor.column_width, 80);
         assert_eq!(app.editor.editing_mode, EditingMode::Standard);
         assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge);
+    }
+
+    #[test]
+    fn save_config_round_trip() {
+        use crate::config::Config;
+        let original = Config {
+            palette: "Parchment".to_string(),
+            focus_mode: FocusMode::Sentence,
+            column_width: 72,
+            editing_mode: EditingMode::Standard,
+            scroll_mode: ScrollMode::Typewriter,
+        };
+        let app = App::from_config(&original, ColorProfile::TrueColor, None);
+        let recovered = Config {
+            palette: app.palette().name.to_string(),
+            focus_mode: app.focus_mode(),
+            column_width: app.column_width(),
+            editing_mode: app.editing_mode(),
+            scroll_mode: app.scroll_mode(),
+        };
+        assert_eq!(recovered, original);
     }
 }
