@@ -12,7 +12,7 @@ use crate::dimming::DimmingState;
 use crate::editing_mode::EditingMode;
 use crate::editor::Editor;
 use crate::find::FindState;
-use crate::focus_mode::FocusMode;
+use crate::focus_mode::{self, FocusMode};
 use crate::markdown_styling::CharStyle;
 use crate::palette::Palette;
 use crate::persistence::Persistence;
@@ -22,6 +22,12 @@ use crate::vim_bindings::{Action, CursorShape, Mode};
 use crate::viewport::Viewport;
 use crate::wrap::VisualLine;
 use crate::writing_surface::RenderCache;
+
+/// Cached sentence bounds, keyed on (buffer_version, cursor_line, cursor_col).
+struct SentenceBoundsCache {
+    key: (u64, usize, usize),
+    bounds: Option<(usize, usize)>,
+}
 
 /// Per-frame state update output, consumed by the draw call.
 pub struct TickOutput {
@@ -44,6 +50,7 @@ pub struct App {
     pub(crate) find_state: Option<FindState>,
     pub(crate) animations: AnimationManager,
     pub(crate) render_cache: RenderCache,
+    sentence_cache: Option<SentenceBoundsCache>,
     /// Whether the next frame requires a full redraw.
     pub(crate) needs_redraw: bool,
 }
@@ -69,6 +76,7 @@ impl App {
             find_state: None,
             animations: AnimationManager::new(),
             render_cache: RenderCache::new(),
+            sentence_cache: None,
             needs_redraw: true,
         }
     }
@@ -417,6 +425,26 @@ impl App {
     }
 
     /// Run one frame of state updates: visual lines, scroll, dimming, render cache, animations.
+    /// Cached sentence bounds — recomputes only when cursor or buffer changes.
+    pub(crate) fn sentence_bounds_cached(&mut self) -> Option<(usize, usize)> {
+        let key = (
+            self.editor.buffer.version(),
+            self.editor.cursor_line,
+            self.editor.cursor_col,
+        );
+        if let Some(ref cache) = self.sentence_cache {
+            if cache.key == key {
+                return cache.bounds;
+            }
+        }
+        let bounds = focus_mode::sentence_bounds_in_buffer(
+            &self.editor.buffer,
+            self.editor.cursor_char_index(),
+        );
+        self.sentence_cache = Some(SentenceBoundsCache { key, bounds });
+        bounds
+    }
+
     /// Returns None when no redraw is needed.
     pub fn tick(&mut self, surface_height: u16) -> Option<TickOutput> {
         let should_draw = self.needs_redraw || self.any_animation_active();
@@ -434,7 +462,7 @@ impl App {
         );
 
         let pb = self.editor.paragraph_bounds_cached();
-        let sb = self.editor.sentence_bounds_cached();
+        let sb = self.sentence_bounds_cached();
         self.dimming.update(self.editor.buffer.len_lines(), pb, sb);
 
         self.render_cache.refresh(&self.editor.buffer);
@@ -553,6 +581,11 @@ mod tests {
     use crate::vim_bindings::{self, CursorShape};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Compute sentence bounds for the current cursor without caching (test helper).
+    fn sentence_bounds(app: &App) -> Option<(usize, usize)> {
+        focus_mode::sentence_bounds_in_buffer(&app.editor.buffer, app.editor.cursor_char_index())
+    }
 
     /// Look up the cursor index for a given SettingsItem.
     fn item_pos(target: SettingsItem) -> usize {
@@ -1170,7 +1203,7 @@ mod tests {
         app.editor.buffer = Buffer::from_text("Line 1\n\nLine 3\nLine 4");
         app.dimming.focus_mode = FocusMode::Paragraph;
         app.editor.cursor_line = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         let opacities = app.dimming.paragraph_line_opacities();
         assert_eq!(opacities.len(), 4);
         assert!((opacities[0] - 1.0).abs() < f64::EPSILON, "Cursor line should be bright");
@@ -1186,7 +1219,7 @@ mod tests {
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
 
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         // No fades in progress initially
         assert!(app.dimming.sentence_fades_is_empty());
@@ -1194,7 +1227,7 @@ mod tests {
         // Move cursor to line 1 (second sentence)
         app.editor.cursor_line = 1;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         // One fade should be queued for the old sentence
         assert_eq!(app.dimming.sentence_fades_len(), 1, "should have one fading sentence");
@@ -1208,7 +1241,7 @@ mod tests {
         let mut app = App::new();
         app.editor.buffer = Buffer::from_text("Line 1\nLine 2\nLine 3");
         app.dimming.focus_mode = FocusMode::Off;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         let opacities = app.dimming.paragraph_line_opacities();
         for (i, &o) in opacities.iter().enumerate() {
             assert!((o - 1.0).abs() < f64::EPSILON, "Line {} should be bright in Off mode", i);
@@ -1226,20 +1259,20 @@ mod tests {
         app.editor.buffer = Buffer::from_text("Hello world.");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 5;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert!(app.dimming.sentence_fades_is_empty(), "No fades initially");
 
         // Simulate typing space after period: "Hello world. "
         app.editor.buffer = Buffer::from_text("Hello world. ");
         app.editor.cursor_col = 12;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert_eq!(app.dimming.sentence_fades_len(), 1, "One fade after leaving sentence");
         let original_start = app.dimming.sentence_fade_start(0);
 
         // Simulate typing 'T': "Hello world. T"
         app.editor.buffer = Buffer::from_text("Hello world. T");
         app.editor.cursor_col = 13;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         // The original "Hello world." fade must survive the second sentence change
         assert!(
@@ -1257,18 +1290,18 @@ mod tests {
         // Start in first sentence
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         // Move to second sentence
         app.editor.cursor_line = 2;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert_eq!(app.dimming.sentence_fades_len(), 1);
 
         // Move to third sentence
         app.editor.cursor_line = 4;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert_eq!(app.dimming.sentence_fades_len(), 2, "Two sentences should be fading simultaneously");
 
         // Both should have high opacity (just started or recently started)
@@ -1285,19 +1318,19 @@ mod tests {
 
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         // Move to second — first starts fading toward 0.6
         app.editor.cursor_line = 2;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert_eq!(app.dimming.sentence_fades_len(), 1);
         assert!((app.dimming.sentence_fade_target(0) - 0.6).abs() < f64::EPSILON);
 
         // Return to first — should reverse that entry toward 1.0
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert!((app.dimming.sentence_fade_target(0) - 1.0).abs() < f64::EPSILON, "Should reverse to 1.0");
     }
 
@@ -1309,18 +1342,18 @@ mod tests {
 
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         app.editor.cursor_line = 2;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert_eq!(app.dimming.sentence_fades_len(), 1);
 
         // Backdate the animation past its 1800ms duration
         app.dimming.backdate_sentence_fade(0, Duration::from_millis(2000));
 
         // Next update should prune the completed entry
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert!(app.dimming.sentence_fades_is_empty(), "Completed fade should be pruned");
     }
 
@@ -1332,16 +1365,16 @@ mod tests {
 
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
 
         app.editor.cursor_line = 2;
         app.editor.cursor_col = 0;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert!(!app.dimming.sentence_fades_is_empty());
 
         // Switch to Off
         app.dimming.focus_mode = FocusMode::Off;
-        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
+        app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), sentence_bounds(&app));
         assert!(app.dimming.sentence_fades_is_empty(), "Off mode should clear all fades");
     }
 

@@ -3,7 +3,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crate::buffer::Buffer;
 use crate::clipboard;
 use crate::editing_mode::EditingMode;
-use crate::focus_mode;
 use crate::smart_typography;
 use crate::undo::UndoHistory;
 use crate::vim_bindings::{self, Action, CursorShape, Direction, Mode};
@@ -13,12 +12,6 @@ use crate::wrap::{self, VisualLine};
 /// Horizontal cursor movement does not invalidate paragraph bounds.
 struct ParagraphBoundsCache {
     key: (u64, usize), // (buffer_version, cursor_line)
-    bounds: Option<(usize, usize)>,
-}
-
-/// Cached sentence bounds, keyed on (buffer_version, cursor_line, cursor_col).
-struct SentenceBoundsCache {
-    key: (u64, usize, usize), // (buffer_version, cursor_line, cursor_col)
     bounds: Option<(usize, usize)>,
 }
 
@@ -37,7 +30,6 @@ pub struct Editor {
     /// Column width used for wrapping when moving cursor up/down.
     pub column_width: u16,
     paragraph_cache: Option<ParagraphBoundsCache>,
-    sentence_cache: Option<SentenceBoundsCache>,
 }
 
 impl Default for Editor {
@@ -61,7 +53,6 @@ impl Editor {
             dirty: false,
             column_width: 60,
             paragraph_cache: None,
-            sentence_cache: None,
         }
     }
 
@@ -793,28 +784,10 @@ impl Editor {
         self.paragraph_cache = Some(ParagraphBoundsCache { key, bounds });
     }
 
-    /// Ensure sentence bounds cache is fresh. Depends on buffer version, cursor line, and col.
-    fn ensure_sentence_cached(&mut self) {
-        let key = (self.buffer.version(), self.cursor_line, self.cursor_col);
-        if let Some(ref cache) = self.sentence_cache {
-            if cache.key == key {
-                return;
-            }
-        }
-        let bounds = self.sentence_bounds();
-        self.sentence_cache = Some(SentenceBoundsCache { key, bounds });
-    }
-
     /// Cached paragraph bounds — recomputes only when cursor line or buffer changes.
     pub fn paragraph_bounds_cached(&mut self) -> Option<(usize, usize)> {
         self.ensure_paragraph_cached();
         self.paragraph_cache.as_ref().unwrap().bounds
-    }
-
-    /// Cached sentence bounds — recomputes only when cursor position or buffer changes.
-    pub fn sentence_bounds_cached(&mut self) -> Option<(usize, usize)> {
-        self.ensure_sentence_cached();
-        self.sentence_cache.as_ref().unwrap().bounds
     }
 
     /// Returns the normalized selection range (start_line, start_col, end_line, end_col).
@@ -838,11 +811,6 @@ impl Editor {
             return None;
         }
         Some(self.buffer.slice_to_string(start_idx, end_idx))
-    }
-
-    /// Find the sentence boundaries containing the cursor.
-    pub fn sentence_bounds(&self) -> Option<(usize, usize)> {
-        focus_mode::sentence_bounds_in_buffer(&self.buffer, self.cursor_char_index())
     }
 }
 
@@ -1605,14 +1573,11 @@ mod tests {
         editor.cursor_col = 5;
 
         let pb1 = editor.paragraph_bounds_cached();
-        let sb1 = editor.sentence_bounds_cached();
 
         // Second call should hit cache (same result)
         let pb2 = editor.paragraph_bounds_cached();
-        let sb2 = editor.sentence_bounds_cached();
 
         assert_eq!(pb1, pb2);
-        assert_eq!(sb1, sb2);
     }
 
     #[test]
