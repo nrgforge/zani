@@ -1,6 +1,98 @@
+//! Animation primitives shared across subsystems.
+//!
+//! `AnimatedValue` is the shared primitive: a single f64 that chases a target
+//! using configurable easing and duration (Invariant 14: no visual discontinuity
+//! when interrupted mid-animation).
+//!
+//! `AnimationManager` owns overlay/palette transitions (0-1 per kind, pruned on
+//! completion, returns normalized progress). `DimLayer` (in focus_mode.rs) owns
+//! N animated values (one per line, never pruned, uses chase semantics). Both
+//! build on `AnimatedValue` as the underlying primitive.
+
 use std::time::{Duration, Instant};
 
 use crate::palette::Palette;
+
+/// Configuration pairing duration and easing curve for animated transitions.
+#[derive(Debug, Clone, Copy)]
+pub struct FadeConfig {
+    pub duration: Duration,
+    pub easing: Easing,
+}
+
+impl Default for FadeConfig {
+    fn default() -> Self {
+        Self {
+            duration: Duration::from_millis(150),
+            easing: Easing::EaseOut,
+        }
+    }
+}
+
+/// A single f64 value that animates toward a target using chase semantics.
+/// Interrupting mid-animation starts a new transition from the current visual value,
+/// guaranteeing smooth, discontinuity-free transitions (Invariant 14).
+#[derive(Debug, Clone)]
+pub struct AnimatedValue {
+    pub target: f64,
+    pub start_value: f64,
+    pub start_time: Option<Instant>,
+    fade_config: FadeConfig,
+}
+
+impl AnimatedValue {
+    /// Create an AnimatedValue already at `value` with no animation in flight.
+    pub fn new(value: f64) -> Self {
+        Self {
+            target: value,
+            start_value: value,
+            start_time: None,
+            fade_config: FadeConfig::default(),
+        }
+    }
+
+    /// Set a new target. Captures the current visual state as `start_value`
+    /// so the animation chases from the current position.
+    /// No-ops if the target hasn't changed (within epsilon).
+    /// Returns true if a new animation was started.
+    pub fn set_target(&mut self, new_target: f64, config: FadeConfig) -> bool {
+        if (new_target - self.target).abs() < f64::EPSILON {
+            return false;
+        }
+        self.start_value = self.current();
+        self.target = new_target;
+        self.start_time = Some(Instant::now());
+        self.fade_config = config;
+        true
+    }
+
+    /// Returns the current visual value accounting for animation progress.
+    /// Returns `target` if no animation is in flight or the animation is complete.
+    pub fn current(&self) -> f64 {
+        let start_time = match self.start_time {
+            Some(t) => t,
+            None => return self.target,
+        };
+
+        let total = self.fade_config.duration.as_secs_f64();
+        if total <= 0.0 {
+            return self.target;
+        }
+
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let t = (elapsed / total).min(1.0);
+        let eased = self.fade_config.easing.apply(t);
+        self.start_value + (self.target - self.start_value) * eased
+    }
+
+    /// Returns true if an animation is still in flight.
+    pub fn is_animating(&self) -> bool {
+        match self.start_time {
+            None => false,
+            Some(t) => t.elapsed() < self.fade_config.duration,
+        }
+    }
+}
 
 /// Easing curve selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

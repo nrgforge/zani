@@ -1,9 +1,10 @@
-use std::time::{Duration, Instant};
-
 use ratatui::style::Color;
 
-use crate::animation::Easing;
+use crate::animation::{AnimatedValue, FadeConfig};
 use crate::palette::{self, Palette};
+
+/// Type alias: `LineOpacity` is an `AnimatedValue` used for per-line dimming.
+pub type LineOpacity = AnimatedValue;
 
 /// Paragraph-distance dimming: 1–3 lines away from the active paragraph.
 pub const OPACITY_NEAR: f64 = 0.6;
@@ -90,90 +91,6 @@ fn is_sentence_end(ch: char) -> bool {
     matches!(ch, '.' | '!' | '?')
 }
 
-/// Configuration pairing duration and easing curve for dimming transitions.
-#[derive(Debug, Clone, Copy)]
-pub struct FadeConfig {
-    pub duration: Duration,
-    pub easing: Easing,
-}
-
-impl Default for FadeConfig {
-    fn default() -> Self {
-        Self {
-            duration: Duration::from_millis(150),
-            easing: Easing::EaseOut,
-        }
-    }
-}
-
-/// Animated opacity for a single logical line within a dimming layer.
-///
-/// Implements chase-based animation: when the target changes, the current
-/// visual state is captured as the start value and animation begins from
-/// there. This guarantees no visual discontinuity when interrupted mid-animation
-/// (Invariant 14).
-#[derive(Debug, Clone)]
-pub struct LineOpacity {
-    pub target: f64,
-    pub start_value: f64,
-    pub start_time: Option<Instant>,
-    fade_config: FadeConfig,
-}
-
-impl LineOpacity {
-    /// Create a LineOpacity already at `value` with no animation in flight.
-    pub fn new(value: f64) -> Self {
-        Self {
-            target: value,
-            start_value: value,
-            start_time: None,
-            fade_config: FadeConfig::default(),
-        }
-    }
-
-    /// Set a new target opacity. Captures the current visual state as
-    /// `start_value` so the animation chases from the current position.
-    /// No-ops if the target hasn't changed (within epsilon).
-    /// Returns true if a new animation was started.
-    pub fn set_target(&mut self, new_target: f64, config: FadeConfig) -> bool {
-        if (new_target - self.target).abs() < f64::EPSILON {
-            return false;
-        }
-        self.start_value = self.current_opacity();
-        self.target = new_target;
-        self.start_time = Some(Instant::now());
-        self.fade_config = config;
-        true
-    }
-
-    /// Returns the current visual opacity accounting for animation progress.
-    /// Returns `target` if no animation is in flight or the animation is complete.
-    pub fn current_opacity(&self) -> f64 {
-        let start_time = match self.start_time {
-            Some(t) => t,
-            None => return self.target,
-        };
-
-        let total = self.fade_config.duration.as_secs_f64();
-        if total <= 0.0 {
-            return self.target;
-        }
-
-        let elapsed = start_time.elapsed().as_secs_f64();
-        let t = (elapsed / total).min(1.0);
-        let eased = self.fade_config.easing.apply(t);
-        self.start_value + (self.target - self.start_value) * eased
-    }
-
-    /// Returns true if an animation is still in flight.
-    pub fn is_animating(&self) -> bool {
-        match self.start_time {
-            None => false,
-            Some(t) => t.elapsed() < self.fade_config.duration,
-        }
-    }
-}
-
 /// Compute target opacities for the paragraph dimming layer.
 /// `line_count` is the total number of logical lines.
 /// `paragraph_bounds` is (start_line, end_line) inclusive.
@@ -257,7 +174,7 @@ impl DimLayer {
         self.lines.truncate(targets.len());
         // Update existing lines
         for (i, &target) in targets.iter().enumerate() {
-            let current = self.lines[i].current_opacity();
+            let current = self.lines[i].current();
             let config = if target > current {
                 self.fade_in
             } else {
@@ -271,7 +188,7 @@ impl DimLayer {
 
     /// Return the current animated opacity for a line, or 1.0 if out of bounds.
     pub fn opacity(&self, line: usize) -> f64 {
-        self.lines.get(line).map_or(1.0, |lo| lo.current_opacity())
+        self.lines.get(line).map_or(1.0, |lo| lo.current())
     }
 
     /// Set all lines to the same target value, resizing as needed.
@@ -282,7 +199,7 @@ impl DimLayer {
         }
         self.lines.truncate(line_count);
         for lo in &mut self.lines {
-            let current = lo.current_opacity();
+            let current = lo.current();
             let config = if value > current {
                 self.fade_in
             } else {
@@ -312,6 +229,7 @@ impl DimLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
     use crate::buffer::Buffer;
 
     // === Acceptance test: Sentence boundary parsing (production path) ===
@@ -373,7 +291,7 @@ mod tests {
     #[test]
     fn line_opacity_at_target_returns_target() {
         let lo = LineOpacity::new(0.75);
-        assert!((lo.current_opacity() - 0.75).abs() < f64::EPSILON);
+        assert!((lo.current() - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -382,7 +300,7 @@ mod tests {
         lo.set_target(0.0, FadeConfig::default());
         // Simulate animation completion by backdating start_time past the duration
         lo.start_time = Some(Instant::now() - Duration::from_millis(500));
-        let opacity = lo.current_opacity();
+        let opacity = lo.current();
         assert!(
             (opacity - 0.0).abs() < 1e-9,
             "Expected opacity near 0.0 after animation completes, got {opacity}"
@@ -397,13 +315,13 @@ mod tests {
         // Simulate being halfway through the 150ms animation (75ms elapsed)
         lo.start_time = Some(Instant::now() - Duration::from_millis(75));
         // Verify we are genuinely mid-animation before interrupting
-        let pre_interrupt_opacity = lo.current_opacity();
+        let pre_interrupt_opacity = lo.current();
         assert!(
             pre_interrupt_opacity > 0.0 && pre_interrupt_opacity < 1.0,
             "Expected mid-animation opacity between 0 and 1, got {pre_interrupt_opacity}"
         );
         // Now interrupt: set a new target back to 1.0.
-        // set_target captures current_opacity() as the new start_value internally.
+        // set_target captures current() as the new start_value internally.
         lo.set_target(1.0, FadeConfig::default());
         // The new start_value must be between 0 and 1 (it captured the mid-animation state)
         assert!(

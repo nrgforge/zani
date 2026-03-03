@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use crate::animation::Easing;
-use crate::focus_mode::{DimLayer, FadeConfig, FocusMode, LineOpacity, fill_paragraph_target_opacities};
+use crate::animation::{Easing, FadeConfig};
+use crate::focus_mode::{DimLayer, FocusMode, LineOpacity, fill_paragraph_target_opacities};
 
 /// Focus mode and dimming animation state.
 ///
@@ -145,7 +145,7 @@ impl DimmingState {
 
         self.sentence_fades_buf.clear();
         for (s, e, o) in &self.sentence_fades {
-            self.sentence_fades_buf.push((*s, *e, o.current_opacity()));
+            self.sentence_fades_buf.push((*s, *e, o.current()));
         }
 
         // Settle: reconcile animating counts and track for next frame's early return

@@ -113,7 +113,7 @@ fn run(
         }
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
-        let poll_timeout = if app.animations.is_active() || app.dimming.dim_animating() {
+        let poll_timeout = if app.any_animation_active() {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(250)

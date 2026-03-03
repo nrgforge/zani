@@ -415,9 +415,7 @@ impl App {
     /// Run one frame of state updates: visual lines, scroll, dimming, render cache, animations.
     /// Returns None when no redraw is needed.
     pub fn tick(&mut self, surface_height: u16) -> Option<TickOutput> {
-        let should_draw = self.needs_redraw
-            || self.animations.is_active()
-            || self.dimming.dim_animating();
+        let should_draw = self.needs_redraw || self.any_animation_active();
 
         if !should_draw {
             return None;
@@ -440,6 +438,11 @@ impl App {
         self.needs_redraw = false;
 
         Some(TickOutput { visual_lines, sentence_bounds: sb })
+    }
+
+    /// Whether any animation subsystem is still active (palette/overlay transitions or dimming).
+    pub fn any_animation_active(&self) -> bool {
+        self.animations.is_active() || self.dimming.dim_animating()
     }
 
     /// Returns the effective palette, accounting for any active crossfade animation.
