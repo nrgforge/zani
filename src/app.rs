@@ -1,20 +1,24 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::animation::AnimationManager;
+use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::color_profile::ColorProfile;
 use crate::dimming::DimmingState;
 use crate::editing_mode::EditingMode;
 use crate::editor::Editor;
 use crate::find::FindState;
+use crate::focus_mode::FocusMode;
+use crate::markdown_styling::CharStyle;
 use crate::palette::Palette;
 use crate::persistence::Persistence;
+use crate::scroll_mode::ScrollMode;
 use crate::settings::{RenameState, SettingsItem, SettingsState};
-use crate::vim_bindings::{Action, Mode};
+use crate::vim_bindings::{Action, CursorShape, Mode};
 use crate::viewport::Viewport;
 use crate::wrap::VisualLine;
 use crate::writing_surface::RenderCache;
@@ -27,21 +31,21 @@ pub struct TickOutput {
 
 /// Thin coordinator that owns subsystems and routes input between them.
 pub struct App {
-    pub editor: Editor,
-    pub viewport: Viewport,
-    pub palette: Palette,
-    pub dimming: DimmingState,
-    pub color_profile: ColorProfile,
-    pub settings: SettingsState,
-    pub should_quit: bool,
-    pub persistence: Persistence,
-    pub rename: RenameState,
+    pub(crate) editor: Editor,
+    pub(crate) viewport: Viewport,
+    pub(crate) palette: Palette,
+    pub(crate) dimming: DimmingState,
+    pub(crate) color_profile: ColorProfile,
+    pub(crate) settings: SettingsState,
+    should_quit: bool,
+    pub(crate) persistence: Persistence,
+    pub(crate) rename: RenameState,
     /// Find overlay state (None when find is not active).
-    pub find_state: Option<FindState>,
-    pub animations: AnimationManager,
-    pub render_cache: RenderCache,
+    pub(crate) find_state: Option<FindState>,
+    pub(crate) animations: AnimationManager,
+    pub(crate) render_cache: RenderCache,
     /// Whether the next frame requires a full redraw.
-    pub needs_redraw: bool,
+    pub(crate) needs_redraw: bool,
 }
 
 impl Default for App {
@@ -443,6 +447,67 @@ impl App {
     /// Whether any animation subsystem is still active (palette/overlay transitions or dimming).
     pub fn any_animation_active(&self) -> bool {
         self.animations.is_active() || self.dimming.dim_animating()
+    }
+
+    // --- Public accessors for external callers (main.rs, alloc_bench.rs) ---
+
+    pub fn should_quit(&self) -> bool { self.should_quit }
+    pub fn mark_needs_redraw(&mut self) { self.needs_redraw = true; }
+    pub fn cursor_shape(&self) -> CursorShape { self.editor.cursor_shape() }
+
+    pub fn should_autosave(&self) -> bool {
+        self.persistence.should_autosave(self.editor.dirty)
+    }
+
+    pub fn autosave(&mut self) {
+        self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
+    }
+
+    // --- Read-only accessors for draw callers (ui.rs, alloc_bench.rs) ---
+
+    pub fn buffer(&self) -> &Buffer { &self.editor.buffer }
+    pub fn palette(&self) -> Palette { self.palette }
+    pub fn color_profile(&self) -> ColorProfile { self.color_profile }
+    pub fn focus_mode(&self) -> FocusMode { self.dimming.focus_mode }
+    pub fn column_width(&self) -> u16 { self.viewport.column_width }
+    pub fn scroll_offset(&self) -> usize { self.viewport.scroll_offset }
+    pub fn scroll_mode(&self) -> ScrollMode { self.viewport.scroll_mode }
+    pub fn typewriter_vertical_offset(&self) -> u16 { self.viewport.typewriter_vertical_offset }
+    pub fn cursor_position(&self) -> (usize, usize) { (self.editor.cursor_line, self.editor.cursor_col) }
+    pub fn editing_mode(&self) -> EditingMode { self.editor.editing_mode }
+    pub fn vim_mode(&self) -> Mode { self.editor.vim_mode }
+    pub fn is_dirty(&self) -> bool { self.editor.dirty }
+    pub fn selection_range(&self) -> Option<(usize, usize, usize, usize)> { self.editor.selection_range() }
+
+    pub fn find_state(&self) -> Option<&FindState> { self.find_state.as_ref() }
+    pub fn settings_visible(&self) -> bool { self.settings.visible }
+    pub fn settings_cursor(&self) -> usize { self.settings.cursor }
+    pub fn overlay_progress(&self) -> Option<f64> { self.animations.overlay_progress() }
+
+    pub fn file_path(&self) -> Option<&Path> { self.persistence.file_path.as_deref() }
+    pub fn save_error(&self) -> Option<&str> { self.persistence.save_error.as_deref() }
+    pub fn load_error(&self) -> Option<&str> { self.persistence.load_error.as_deref() }
+
+    pub fn rename_active(&self) -> bool { self.rename.active }
+    pub fn rename_buf(&self) -> &str { &self.rename.buf }
+    pub fn rename_cursor(&self) -> usize { self.rename.cursor }
+
+    pub fn sentence_fade_snapshot(&self) -> &[(usize, usize, f64)] { self.dimming.sentence_fade_snapshot() }
+    pub fn paragraph_line_opacities(&self) -> &[f64] { self.dimming.paragraph_line_opacities() }
+
+    pub fn code_block_state(&self) -> &[bool] { self.render_cache.code_block_state() }
+    pub fn line_char_offsets(&self) -> &[usize] { self.render_cache.line_char_offsets() }
+    pub fn md_styles(&self) -> &[Vec<CharStyle>] { self.render_cache.md_styles() }
+    pub fn line_texts(&self) -> &[String] { self.render_cache.line_texts() }
+    pub fn line_chars(&self) -> &[Vec<char>] { self.render_cache.line_chars() }
+
+    // --- Setup methods for external callers (tests, benchmarks) ---
+
+    pub fn set_buffer(&mut self, buffer: Buffer) { self.editor.buffer = buffer; }
+    pub fn set_focus_mode(&mut self, mode: FocusMode) { self.dimming.focus_mode = mode; }
+    pub fn set_cursor(&mut self, line: usize, col: usize) {
+        self.editor.cursor_line = line;
+        self.editor.cursor_col = col;
     }
 
     /// Returns the effective palette, accounting for any active crossfade animation.

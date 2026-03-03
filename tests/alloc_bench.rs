@@ -70,29 +70,30 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
     use ratatui::widgets::Widget;
 
     // tick() performs all pre-draw state updates
-    app.needs_redraw = true;
+    app.mark_needs_redraw();
     let out = app.tick(area.height).expect("should need redraw");
 
     // Build and render WritingSurface (the heaviest part)
     let sb = out.sentence_bounds;
     let palette = app.effective_palette();
-    let surface = zani::writing_surface::WritingSurface::new(&app.editor.buffer, &palette)
-        .column_width(app.viewport.column_width)
-        .scroll_offset(app.viewport.scroll_offset)
-        .cursor(app.editor.cursor_line, app.editor.cursor_col)
-        .focus_mode(app.dimming.focus_mode)
+    let (cursor_line, cursor_col) = app.cursor_position();
+    let surface = zani::writing_surface::WritingSurface::new(app.buffer(), &palette)
+        .column_width(app.column_width())
+        .scroll_offset(app.scroll_offset())
+        .cursor(cursor_line, cursor_col)
+        .focus_mode(app.focus_mode())
         .sentence_bounds(sb)
-        .sentence_fades(app.dimming.sentence_fade_snapshot())
-        .color_profile(app.color_profile)
-        .vertical_offset(app.viewport.typewriter_vertical_offset)
-        .selection(app.editor.selection_range())
-        .line_opacities(app.dimming.paragraph_line_opacities())
+        .sentence_fades(app.sentence_fade_snapshot())
+        .color_profile(app.color_profile())
+        .vertical_offset(app.typewriter_vertical_offset())
+        .selection(app.selection_range())
+        .line_opacities(app.paragraph_line_opacities())
         .precomputed_visual_lines(&out.visual_lines)
-        .code_block_state(app.render_cache.code_block_state())
-        .line_char_offsets(app.render_cache.line_char_offsets())
-        .md_styles(app.render_cache.md_styles())
-        .precomputed_line_texts(app.render_cache.line_texts())
-        .precomputed_line_chars(app.render_cache.line_chars());
+        .code_block_state(app.code_block_state())
+        .line_char_offsets(app.line_char_offsets())
+        .md_styles(app.md_styles())
+        .precomputed_line_texts(app.line_texts())
+        .precomputed_line_chars(app.line_chars());
 
     buf.reset();
     surface.render(area, buf);
@@ -121,10 +122,9 @@ fn measure_allocations_per_frame() {
         ("Sentence", FocusMode::Sentence),
     ] {
         let mut app = zani::app::App::new();
-        app.editor.buffer = zani::buffer::Buffer::from_text(&doc);
-        app.dimming.focus_mode = mode;
-        app.editor.cursor_line = 30; // Middle of document
-        app.editor.cursor_col = 10;
+        app.set_buffer(zani::buffer::Buffer::from_text(&doc));
+        app.set_focus_mode(mode);
+        app.set_cursor(30, 10); // Middle of document
 
         // Warm up: first frame populates all caches
         simulate_frame(&mut app, area, &mut render_buf);
@@ -150,10 +150,9 @@ fn measure_allocations_per_frame() {
     // Cold frame (first render) for comparison
     {
         let mut app = zani::app::App::new();
-        app.editor.buffer = zani::buffer::Buffer::from_text(&doc);
-        app.dimming.focus_mode = FocusMode::Paragraph;
-        app.editor.cursor_line = 30;
-        app.editor.cursor_col = 10;
+        app.set_buffer(zani::buffer::Buffer::from_text(&doc));
+        app.set_focus_mode(FocusMode::Paragraph);
+        app.set_cursor(30, 10);
 
         start_counting();
         simulate_frame(&mut app, area, &mut render_buf);

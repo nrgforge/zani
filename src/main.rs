@@ -101,7 +101,7 @@ fn run(
             })?;
 
             // Set cursor shape based on vim mode (only emit when changed)
-            let shape = app.editor.cursor_shape();
+            let shape = app.cursor_shape();
             if last_cursor_shape != Some(shape) {
                 last_cursor_shape = Some(shape);
                 let cursor_style = match shape {
@@ -124,19 +124,19 @@ fn run(
                     app.handle_key(key.code, key.modifiers);
                 }
                 Event::Resize(_, _) => {
-                    app.needs_redraw = true;
+                    app.mark_needs_redraw();
                 }
                 _ => {}
             }
         }
 
         // Autosave on idle
-        if app.persistence.should_autosave(app.editor.dirty) {
-            app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
+        if app.should_autosave() {
+            app.autosave();
         }
 
-        if app.should_quit {
-            app.persistence.autosave(&app.editor.buffer, &mut app.editor.dirty);
+        if app.should_quit() {
+            app.autosave();
             break;
         }
     }
