@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -15,7 +16,14 @@ use crate::persistence::Persistence;
 use crate::settings::{RenameState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, Mode};
 use crate::viewport::Viewport;
+use crate::wrap::VisualLine;
 use crate::writing_surface::RenderCache;
+
+/// Per-frame state update output, consumed by the draw call.
+pub struct TickOutput {
+    pub visual_lines: Rc<[VisualLine]>,
+    pub sentence_bounds: Option<(usize, usize)>,
+}
 
 /// Thin coordinator that owns subsystems and routes input between them.
 pub struct App {
@@ -402,6 +410,36 @@ impl App {
             }
             _ => {} // swallow all other keys
         }
+    }
+
+    /// Run one frame of state updates: visual lines, scroll, dimming, render cache, animations.
+    /// Returns None when no redraw is needed.
+    pub fn tick(&mut self, surface_height: u16) -> Option<TickOutput> {
+        let should_draw = self.needs_redraw
+            || self.animations.is_active()
+            || self.dimming.dim_animating();
+
+        if !should_draw {
+            return None;
+        }
+
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+        self.viewport.ensure_cursor_visible(
+            self.editor.cursor_line,
+            self.editor.cursor_col,
+            &visual_lines,
+            surface_height,
+        );
+
+        let pb = self.editor.paragraph_bounds_cached();
+        let sb = self.editor.sentence_bounds_cached();
+        self.dimming.update(self.editor.buffer.len_lines(), pb, sb);
+
+        self.render_cache.refresh(&self.editor.buffer);
+        self.animations.tick();
+        self.needs_redraw = false;
+
+        Some(TickOutput { visual_lines, sentence_bounds: sb })
     }
 
     /// Returns the effective palette, accounting for any active crossfade animation.

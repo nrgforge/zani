@@ -69,26 +69,12 @@ fn sample_document() -> String {
 fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
     use ratatui::widgets::Widget;
 
-    // 1. Compute visual lines (Rc clone on cache hit)
-    let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
+    // tick() performs all pre-draw state updates
+    app.needs_redraw = true;
+    let out = app.tick(area.height).expect("should need redraw");
 
-    // 2. Ensure cursor visible
-    app.viewport.ensure_cursor_visible(
-        app.editor.cursor_line,
-        app.editor.cursor_col,
-        &visual_lines,
-        area.height,
-    );
-
-    // 3. Update dimming (populates output buffers)
-    let pb = app.editor.paragraph_bounds_cached();
-    let sb = app.editor.sentence_bounds_cached();
-    app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
-
-    // 4. Refresh render cache (reuses Vec capacity across frames)
-    app.render_cache.refresh(&app.editor.buffer);
-
-    // 5. Build and render WritingSurface (the heaviest part)
+    // Build and render WritingSurface (the heaviest part)
+    let sb = out.sentence_bounds;
     let palette = app.effective_palette();
     let surface = zani::writing_surface::WritingSurface::new(&app.editor.buffer, &palette)
         .column_width(app.viewport.column_width)
@@ -101,7 +87,7 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
         .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
         .line_opacities(app.dimming.paragraph_line_opacities())
-        .precomputed_visual_lines(&visual_lines)
+        .precomputed_visual_lines(&out.visual_lines)
         .code_block_state(app.render_cache.code_block_state())
         .line_char_offsets(app.render_cache.line_char_offsets())
         .md_styles(app.render_cache.md_styles())

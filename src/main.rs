@@ -95,31 +95,10 @@ fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_cursor_shape: Option<CursorShape> = None;
     loop {
-        // Only run the draw pipeline when something has changed
-        let should_draw = app.needs_redraw
-            || app.animations.is_active()
-            || app.dimming.dim_animating();
-
-        if should_draw {
-            // Adjust scroll to keep cursor visible
-            let size = terminal.size()?;
-            let surface_height = size.height; // full height — no Chrome by default
-            let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-            app.viewport.ensure_cursor_visible(app.editor.cursor_line, app.editor.cursor_col, &visual_lines, surface_height);
-
-            // Update dimming layer targets before draw so output buffers are fresh
-            let pb = app.editor.paragraph_bounds_cached();
-            let sb = app.editor.sentence_bounds_cached();
-            app.dimming.update(app.editor.buffer.len_lines(), pb, sb);
-
-            // Refresh render cache (reuses Vec capacity across frames)
-            app.render_cache.refresh(&app.editor.buffer);
-
-            // Draw — reuse visual_lines computed above for ensure_cursor_visible
+        if let Some(out) = app.tick(terminal.size()?.height) {
             terminal.draw(|frame| {
-                zani::ui::draw(frame, app, &visual_lines, sb);
+                zani::ui::draw(frame, app, &out.visual_lines, out.sentence_bounds);
             })?;
-            app.animations.tick();
 
             // Set cursor shape based on vim mode (only emit when changed)
             let shape = app.editor.cursor_shape();
@@ -131,8 +110,6 @@ fn run(
                 };
                 crossterm::execute!(terminal.backend_mut(), cursor_style)?;
             }
-
-            app.needs_redraw = false;
         }
 
         // Poll for input: 16ms when animating (≈60fps), 250ms otherwise
