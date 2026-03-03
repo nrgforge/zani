@@ -5,6 +5,13 @@ use ratatui::style::Color;
 use crate::animation::Easing;
 use crate::palette::{self, Palette};
 
+/// Paragraph-distance dimming: 1–3 lines away from the active paragraph.
+pub const OPACITY_NEAR: f64 = 0.6;
+/// Paragraph-distance dimming: 4–6 lines away.
+pub const OPACITY_MID: f64 = 0.35;
+/// Paragraph-distance dimming: 7+ lines away.
+pub const OPACITY_FAR: f64 = 0.2;
+
 /// Focus Mode variants that control which text is dimmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusMode {
@@ -205,9 +212,9 @@ pub fn fill_paragraph_target_opacities(
                 i - para_end
             };
             buf.push(match dist {
-                1..=3 => 0.6,
-                4..=6 => 0.35,
-                _ => 0.2,
+                1..=3 => OPACITY_NEAR,
+                4..=6 => OPACITY_MID,
+                _ => OPACITY_FAR,
             });
         }
     }

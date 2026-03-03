@@ -1766,7 +1766,7 @@ mod tests {
         app.dimming.focus_mode = FocusMode::Paragraph;
         app.editor.cursor_line = 0;
         app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
-        let opacities = app.dimming.line_opacities();
+        let opacities = app.dimming.paragraph_line_opacities();
         assert_eq!(opacities.len(), 4);
         assert!((opacities[0] - 1.0).abs() < f64::EPSILON, "Cursor line should be bright");
         assert!(opacities[2] < 1.0, "Other paragraph should be dimmed");
@@ -1804,7 +1804,7 @@ mod tests {
         app.editor.buffer = Buffer::from_text("Line 1\nLine 2\nLine 3");
         app.dimming.focus_mode = FocusMode::Off;
         app.dimming.update(app.editor.buffer.len_lines(), app.editor.paragraph_bounds(), app.editor.sentence_bounds());
-        let opacities = app.dimming.line_opacities();
+        let opacities = app.dimming.paragraph_line_opacities();
         for (i, &o) in opacities.iter().enumerate() {
             assert!((o - 1.0).abs() < f64::EPSILON, "Line {} should be bright in Off mode", i);
         }

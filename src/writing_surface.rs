@@ -5,7 +5,7 @@ use ratatui::widgets::Widget;
 
 use crate::buffer::Buffer;
 use crate::color_profile::ColorProfile;
-use crate::focus_mode::{self, FocusMode};
+use crate::focus_mode::{self, FocusMode, OPACITY_NEAR};
 use crate::markdown_styling;
 use crate::palette::Palette;
 use crate::wrap::{self, VisualLine};
@@ -543,7 +543,7 @@ impl Widget for WritingSurface<'_> {
                             if in_current {
                                 line_opacity
                             } else {
-                                line_opacity * 0.6
+                                line_opacity * OPACITY_NEAR
                             }
                         }
                     } else {

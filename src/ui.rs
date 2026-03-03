@@ -46,7 +46,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
         .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
         .find_matches(find_ranges, find_current)
-        .line_opacities(app.dimming.line_opacities())
+        .line_opacities(app.dimming.paragraph_line_opacities())
         .precomputed_visual_lines(visual_lines)
         .code_block_state(app.render_cache.code_block_state())
         .line_char_offsets(app.render_cache.line_char_offsets())

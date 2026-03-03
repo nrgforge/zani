@@ -100,7 +100,7 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
         .color_profile(app.color_profile)
         .vertical_offset(app.viewport.typewriter_vertical_offset)
         .selection(app.editor.selection_range())
-        .line_opacities(app.dimming.line_opacities())
+        .line_opacities(app.dimming.paragraph_line_opacities())
         .precomputed_visual_lines(&visual_lines)
         .code_block_state(app.render_cache.code_block_state())
         .line_char_offsets(app.render_cache.line_char_offsets())

@@ -156,8 +156,8 @@ impl DimmingState {
         self.settled = !self.dim_animating();
     }
 
-    /// Pre-populated per-line opacities for the renderer.
-    pub fn line_opacities(&self) -> &[f64] {
+    /// Pre-populated per-line paragraph opacities for the renderer.
+    pub fn paragraph_line_opacities(&self) -> &[f64] {
         &self.line_opacities_buf
     }
 }
