@@ -147,8 +147,8 @@ impl App {
                         use std::time::Duration;
                         self.animations.start(
                             TransitionKind::Palette {
-                                from: Box::new(self.palette.clone()),
-                                to: Box::new(p.clone()),
+                                from: Box::new(self.palette),
+                                to: Box::new(p),
                             },
                             Duration::from_millis(300),
                             Easing::EaseInOut,
@@ -420,7 +420,7 @@ impl App {
                 accent_code: interpolate(&from.accent_code, &self.palette.accent_code, progress),
             }
         } else {
-            self.palette.clone()
+            self.palette
         }
     }
 }

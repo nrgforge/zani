@@ -469,8 +469,8 @@ impl Widget for WritingSurface<'_> {
         let mut fallback_line_text = String::new();
         let mut fallback_chars: Vec<char> = Vec::new();
         let mut active_chars: &[char] = &[];
-        let mut computed_md_styles = Vec::<markdown_styling::CharStyle>::new();
-        let mut active_md_styles: &[markdown_styling::CharStyle] = &computed_md_styles;
+        let mut computed_md_styles;
+        let mut active_md_styles: &[markdown_styling::CharStyle] = &[];
         let mut line_opacity: f64 = 1.0;
         let mut abs_line_start: usize = 0;
 

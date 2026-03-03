@@ -37,7 +37,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
     // Build Writing Surface
     let surface = WritingSurface::new(&app.editor.buffer, &effective)
         .column_width(app.viewport.column_width)
-        .scroll_offset(app.viewport.scroll_display.round() as usize)
+        .scroll_offset(app.viewport.scroll_offset)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)
         .sentence_bounds(sentence_bounds)
@@ -79,7 +79,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
         frame.set_cursor_position((cursor_x, area.y));
     } else if let Some((vl_idx, col)) = cursor_pos {
-        let screen_row = vl_idx.saturating_sub(app.viewport.scroll_display.round() as usize);
+        let screen_row = vl_idx.saturating_sub(app.viewport.scroll_offset);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
             let y = surface_area.y + app.viewport.typewriter_vertical_offset + screen_row as u16;
@@ -276,9 +276,9 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, app: &App, area: Rect) {
     // Determine preview palette: if cursor is on a palette row, preview those colors
     let preview_palette = match SettingsItem::at(app.settings.cursor) {
         Some(SettingsItem::Palette(idx)) => {
-            all_palettes.get(idx).cloned().unwrap_or_else(|| app.palette.clone())
+            all_palettes.get(idx).copied().unwrap_or(app.palette)
         }
-        _ => app.palette.clone(),
+        _ => app.palette,
     };
 
     // Interpolate colors from background toward full foreground based on opacity.

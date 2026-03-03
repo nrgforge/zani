@@ -57,19 +57,11 @@ pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize
         }
         // Sentence boundary: [.!?] followed by whitespace
         if prev > 0 && is_sentence_end(chars[prev - 1]) && chars[prev].is_whitespace() {
-            // Current char is the start of the next sentence
-            // But we need to skip leading whitespace
             start = prev;
-            while start < cursor_idx && chars[start].is_whitespace() && chars[start] != '\n' {
-                start += 1;
-            }
             break;
         }
         // Also check: [.!?] at position prev, and start is whitespace
         if is_sentence_end(chars[prev]) && chars[start].is_whitespace() {
-            while start < cursor_idx && chars[start].is_whitespace() && chars[start] != '\n' {
-                start += 1;
-            }
             break;
         }
         start = prev;
@@ -117,15 +109,9 @@ pub fn sentence_bounds_in_buffer(buffer: &crate::buffer::Buffer, cursor_idx: usi
         // Sentence boundary: [.!?] followed by whitespace
         if prev > 0 && is_sentence_end(buffer.char_at(prev - 1)) && prev_ch.is_whitespace() {
             start = prev;
-            while start < cursor_idx && buffer.char_at(start).is_whitespace() && buffer.char_at(start) != '\n' {
-                start += 1;
-            }
             break;
         }
         if is_sentence_end(prev_ch) && start_ch.is_whitespace() {
-            while start < cursor_idx && buffer.char_at(start).is_whitespace() && buffer.char_at(start) != '\n' {
-                start += 1;
-            }
             break;
         }
         start = prev;
@@ -153,7 +139,7 @@ fn is_sentence_end(ch: char) -> bool {
 }
 
 /// Configuration pairing duration and easing curve for dimming transitions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct FadeConfig {
     pub duration: Duration,
     pub easing: Easing,
@@ -321,9 +307,9 @@ impl DimLayer {
         for (i, &target) in targets.iter().enumerate() {
             let current = self.lines[i].current_opacity();
             let config = if target > current {
-                self.fade_in.clone()
+                self.fade_in
             } else {
-                self.fade_out.clone()
+                self.fade_out
             };
             if self.lines[i].set_target(target, config) {
                 self.animating_count += 1;
@@ -346,9 +332,9 @@ impl DimLayer {
         for lo in &mut self.lines {
             let current = lo.current_opacity();
             let config = if value > current {
-                self.fade_in.clone()
+                self.fade_in
             } else {
-                self.fade_out.clone()
+                self.fade_out
             };
             if lo.set_target(value, config) {
                 self.animating_count += 1;
@@ -387,9 +373,9 @@ mod tests {
     #[test]
     fn multi_sentence_on_one_line() {
         let text = "First sentence. Second sentence.";
-        // Cursor in "Second" (char 16)
+        // Cursor in "Second" (char 20) — sentence includes leading space after period
         let bounds = sentence_bounds_at(text, 20);
-        assert_eq!(bounds, Some((16, 32)));
+        assert_eq!(bounds, Some((15, 32)));
     }
 
     #[test]

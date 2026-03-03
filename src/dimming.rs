@@ -18,6 +18,8 @@ pub struct DimmingState {
     /// Pre-populated output buffers, reused across frames.
     line_opacities_buf: Vec<f64>,
     sentence_fades_buf: Vec<(usize, usize, f64)>,
+    /// Number of sentence fades currently animating (avoids per-entry syscall in dim_animating).
+    sentence_animating_count: usize,
     /// True when output buffers are valid and no animations are running.
     settled: bool,
     /// Last inputs for change detection (enables early return when settled).
@@ -36,6 +38,7 @@ impl DimmingState {
             ),
             last_sentence_bounds: None,
             sentence_fades: Vec::new(),
+            sentence_animating_count: 0,
             paragraph_targets_buf: Vec::new(),
             line_opacities_buf: Vec::new(),
             sentence_fades_buf: Vec::new(),
@@ -54,7 +57,7 @@ impl DimmingState {
     /// Whether any dimming layer is still animating.
     pub fn dim_animating(&self) -> bool {
         self.paragraph_dim.is_animating()
-            || self.sentence_fades.iter().any(|(_, _, o)| o.is_animating())
+            || self.sentence_animating_count > 0
     }
 
     /// Recompute dimming layer targets based on current focus mode and cursor position.
@@ -82,12 +85,14 @@ impl DimmingState {
                 self.paragraph_dim.set_all_to(1.0, line_count);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
+                self.sentence_animating_count = 0;
             }
             FocusMode::Paragraph => {
                 fill_paragraph_target_opacities(&mut self.paragraph_targets_buf, line_count, paragraph_bounds);
                 self.paragraph_dim.update_targets(&self.paragraph_targets_buf);
                 self.last_sentence_bounds = None;
                 self.sentence_fades.clear();
+                self.sentence_animating_count = 0;
             }
             FocusMode::Sentence => {
                 fill_paragraph_target_opacities(&mut self.paragraph_targets_buf, line_count, paragraph_bounds);
@@ -102,13 +107,15 @@ impl DimmingState {
                     });
 
                     if let Some(idx) = returning_idx {
-                        self.sentence_fades[idx].2.set_target(
+                        if self.sentence_fades[idx].2.set_target(
                             1.0,
                             FadeConfig {
                                 duration: Duration::from_millis(150),
                                 easing: Easing::EaseOut,
                             },
-                        );
+                        ) {
+                            self.sentence_animating_count += 1;
+                        }
                     } else if let Some((old_start, old_end)) = self.last_sentence_bounds {
                         let mut opacity = LineOpacity::new(1.0);
                         opacity.set_target(
@@ -119,11 +126,13 @@ impl DimmingState {
                             },
                         );
                         self.sentence_fades.push((old_start, old_end, opacity));
+                        self.sentence_animating_count += 1;
                     }
                 }
                 self.last_sentence_bounds = sentence_bounds;
 
                 self.sentence_fades.retain(|(_, _, o)| o.is_animating());
+                self.sentence_animating_count = self.sentence_fades.len();
             }
         }
 

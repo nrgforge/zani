@@ -2,7 +2,7 @@ use ratatui::style::Color;
 
 /// A named, curated color system defining foreground, background,
 /// dimming endpoints, and accent colors for the Writing Surface.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub name: &'static str,
     pub foreground: Color,

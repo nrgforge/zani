@@ -65,8 +65,8 @@ fn sample_document() -> String {
 }
 
 /// Simulate one frame of the rendering pipeline, matching the main loop's hot path.
-fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect) {
-    use ratatui::buffer::Buffer as RatatuiBuffer;
+/// Takes a reusable ratatui buffer to avoid counting test-harness allocations.
+fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
     use ratatui::widgets::Widget;
 
     // 1. Compute visual lines (Rc clone on cache hit)
@@ -109,8 +109,8 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect) {
         .precomputed_line_texts(app.render_cache.line_texts())
         .precomputed_line_chars(app.render_cache.line_chars());
 
-    let mut buf = RatatuiBuffer::empty(area);
-    surface.render(area, &mut buf);
+    buf.reset();
+    surface.render(area, buf);
 }
 
 /// Single test to avoid global-counter races between parallel tests.
@@ -124,6 +124,9 @@ fn measure_allocations_per_frame() {
 
     eprintln!("\n  === Allocation benchmark ({} logical lines, {}x{} terminal) ===\n",
         doc.lines().count(), area.width, area.height);
+
+    // Reusable ratatui buffer — allocated once, reused across all frames
+    let mut render_buf = ratatui::buffer::Buffer::empty(area);
 
     // Test each focus mode
     let mut paragraph_per_frame = 0;
@@ -139,12 +142,12 @@ fn measure_allocations_per_frame() {
         app.editor.cursor_col = 10;
 
         // Warm up: first frame populates all caches
-        simulate_frame(&mut app, area);
+        simulate_frame(&mut app, area, &mut render_buf);
 
         // Measure: steady-state frames (cursor hasn't moved, buffer unchanged)
         start_counting();
         for _ in 0..num_frames {
-            simulate_frame(&mut app, area);
+            simulate_frame(&mut app, area, &mut render_buf);
         }
         let total_allocs = stop_counting();
         let per_frame = total_allocs / num_frames;
@@ -168,7 +171,7 @@ fn measure_allocations_per_frame() {
         app.editor.cursor_col = 10;
 
         start_counting();
-        simulate_frame(&mut app, area);
+        simulate_frame(&mut app, area, &mut render_buf);
         let cold_allocs = stop_counting();
 
         eprintln!("  Cold frame (first render):  {} allocs", cold_allocs);
@@ -176,10 +179,10 @@ fn measure_allocations_per_frame() {
 
     eprintln!();
 
-    // Threshold assertion — tightened after Steps 1-5
+    // Threshold assertion — 0 allocs/frame after wave 3 optimizations
     assert!(
-        paragraph_per_frame < 100,
-        "Steady-state allocations per frame ({paragraph_per_frame}) should be under 100 \
-         (original baseline was ~440, current target is <100)"
+        paragraph_per_frame == 0,
+        "Steady-state allocations per frame ({paragraph_per_frame}) should be 0 \
+         (original baseline was ~440)"
     );
 }

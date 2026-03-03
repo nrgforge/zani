@@ -96,9 +96,12 @@ pub fn wrap_all(lines: &[String], width: usize) -> Vec<VisualLine> {
 /// Shared between WritingSurface rendering and cursor visibility scrolling.
 pub fn visual_lines_for_buffer(buffer: &crate::buffer::Buffer, column_width: u16) -> Vec<VisualLine> {
     let mut all = Vec::new();
+    let mut line_buf = String::new();
     for i in 0..buffer.len_lines() {
-        let line_text = buffer.line(i).to_string();
-        let wrapped = wrap_line(&line_text, column_width as usize, i);
+        line_buf.clear();
+        use std::fmt::Write;
+        let _ = write!(line_buf, "{}", buffer.line(i));
+        let wrapped = wrap_line(&line_buf, column_width as usize, i);
         all.extend(wrapped);
     }
     all
