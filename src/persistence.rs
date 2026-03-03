@@ -78,3 +78,27 @@ impl Default for Persistence {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_dirty_returns_false() {
+        let p = Persistence::new();
+        assert!(!p.should_autosave(false));
+    }
+
+    #[test]
+    fn no_previous_save_returns_true() {
+        let p = Persistence::new();
+        assert!(p.should_autosave(true));
+    }
+
+    #[test]
+    fn recent_save_returns_false() {
+        let mut p = Persistence::new();
+        p.last_save = Some(Instant::now());
+        assert!(!p.should_autosave(true));
+    }
+}

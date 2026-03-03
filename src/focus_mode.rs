@@ -30,61 +30,6 @@ pub fn apply_dimming_with_opacity(base_fg: &Color, palette: &Palette, opacity: f
     palette::interpolate(base_fg, &palette.background, 1.0 - opacity)
 }
 
-/// Find the sentence boundaries containing the cursor position.
-///
-/// A sentence ends at [.!?] followed by whitespace, newline, or EOF.
-/// Empty lines are hard boundaries. Returns the start (inclusive) and
-/// end (exclusive) char indices of the active sentence.
-///
-/// `text` is the full buffer text, `cursor_idx` is the char index of the cursor.
-pub fn sentence_bounds_at(text: &str, cursor_idx: usize) -> Option<(usize, usize)> {
-    if text.is_empty() {
-        return None;
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let cursor_idx = cursor_idx.min(len.saturating_sub(1));
-
-    // Find sentence start: scan backward from cursor
-    let mut start = cursor_idx;
-    while start > 0 {
-        let prev = start - 1;
-        // Hard boundary: double newline (empty line)
-        if chars[prev] == '\n' && start < len && chars[start] == '\n' {
-            start += 1; // start after the empty line
-            break;
-        }
-        // Sentence boundary: [.!?] followed by whitespace
-        if prev > 0 && is_sentence_end(chars[prev - 1]) && chars[prev].is_whitespace() {
-            start = prev;
-            break;
-        }
-        // Also check: [.!?] at position prev, and start is whitespace
-        if is_sentence_end(chars[prev]) && chars[start].is_whitespace() {
-            break;
-        }
-        start = prev;
-    }
-
-    // Find sentence end: scan forward from cursor
-    let mut end = cursor_idx;
-    while end < len {
-        if is_sentence_end(chars[end]) {
-            // Include the sentence-ending punctuation
-            end += 1;
-            break;
-        }
-        // Hard boundary: double newline
-        if chars[end] == '\n' && end + 1 < len && chars[end + 1] == '\n' {
-            break;
-        }
-        end += 1;
-    }
-
-    Some((start, end))
-}
-
 /// Find sentence boundaries using Buffer's O(log n) char access instead of
 /// allocating a full String + Vec<char>.
 pub fn sentence_bounds_in_buffer(buffer: &crate::buffer::Buffer, cursor_idx: usize) -> Option<(usize, usize)> {
@@ -360,45 +305,42 @@ impl DimLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buffer;
 
-    // === Acceptance test: Sentence boundary parsing ===
+    // === Acceptance test: Sentence boundary parsing (production path) ===
 
     #[test]
     fn single_sentence() {
-        let text = "Hello world.";
-        let bounds = sentence_bounds_at(text, 5);
-        assert_eq!(bounds, Some((0, 12))); // entire text is one sentence
+        let buf = Buffer::from_text("Hello world.");
+        let bounds = sentence_bounds_in_buffer(&buf, 5);
+        assert_eq!(bounds, Some((0, 12)));
     }
 
     #[test]
     fn multi_sentence_on_one_line() {
-        let text = "First sentence. Second sentence.";
-        // Cursor in "Second" (char 20) — sentence includes leading space after period
-        let bounds = sentence_bounds_at(text, 20);
+        let buf = Buffer::from_text("First sentence. Second sentence.");
+        let bounds = sentence_bounds_in_buffer(&buf, 20);
         assert_eq!(bounds, Some((15, 32)));
     }
 
     #[test]
     fn cursor_in_first_of_two_sentences() {
-        let text = "First sentence. Second sentence.";
-        // Cursor in "First" (char 3)
-        let bounds = sentence_bounds_at(text, 3);
+        let buf = Buffer::from_text("First sentence. Second sentence.");
+        let bounds = sentence_bounds_in_buffer(&buf, 3);
         assert_eq!(bounds, Some((0, 15)));
     }
 
     #[test]
     fn sentence_spanning_lines() {
-        let text = "This is a sentence\nthat spans lines.";
-        // Cursor at char 5 ("is")
-        let bounds = sentence_bounds_at(text, 5);
-        assert_eq!(bounds, Some((0, 36))); // entire text is one sentence
+        let buf = Buffer::from_text("This is a sentence\nthat spans lines.");
+        let bounds = sentence_bounds_in_buffer(&buf, 5);
+        assert_eq!(bounds, Some((0, 36)));
     }
 
     #[test]
     fn empty_line_is_hard_boundary() {
-        let text = "Paragraph one.\n\nParagraph two.";
-        // Cursor in "two" (char 20)
-        let bounds = sentence_bounds_at(text, 20);
+        let buf = Buffer::from_text("Paragraph one.\n\nParagraph two.");
+        let bounds = sentence_bounds_in_buffer(&buf, 20);
         assert!(bounds.is_some(), "should find sentence bounds in second paragraph");
         let (start, end) = bounds.unwrap();
         assert!(start >= 16, "Should not cross empty line boundary, got start={}", start);
@@ -407,7 +349,8 @@ mod tests {
 
     #[test]
     fn empty_text_returns_none() {
-        assert_eq!(sentence_bounds_at("", 0), None);
+        let buf = Buffer::from_text("");
+        assert_eq!(sentence_bounds_in_buffer(&buf, 0), None);
     }
 
     // === Acceptance test: Focus Mode toggle ===

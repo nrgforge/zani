@@ -119,6 +119,7 @@ impl App {
 
     /// Switch to a different Palette.
     pub fn set_palette(&mut self, palette: Palette) {
+        debug_assert!(palette.validate().is_ok(), "Palette {:?} failed validation", palette.name);
         self.palette = palette;
     }
 
@@ -2183,5 +2184,26 @@ mod tests {
         assert_eq!(app.editor.buffer.to_string(), "hello world", "text should be pasted after cursor");
         app.editor.apply_action(Action::Undo);
         assert_eq!(app.editor.buffer.to_string(), "hello", "undo should remove pasted text");
+    }
+
+    // === Config round-trip through App ===
+
+    #[test]
+    fn from_config_round_trip() {
+        use crate::config::Config;
+        let config = Config {
+            palette: "Inkwell".to_string(),
+            focus_mode: FocusMode::Paragraph,
+            column_width: 80,
+            editing_mode: EditingMode::Standard,
+            scroll_mode: ScrollMode::Edge,
+        };
+        let app = App::from_config(&config, ColorProfile::TrueColor, None);
+        assert_eq!(app.palette.name, "Inkwell");
+        assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph);
+        assert_eq!(app.viewport.column_width, 80);
+        assert_eq!(app.editor.column_width, 80);
+        assert_eq!(app.editor.editing_mode, EditingMode::Standard);
+        assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge);
     }
 }
