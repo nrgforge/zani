@@ -1,7 +1,14 @@
 use std::time::Duration;
 
 use crate::animation::{Easing, FadeConfig};
-use crate::focus_mode::{DimLayer, FocusMode, LineOpacity, fill_paragraph_target_opacities};
+use crate::buffer::Buffer;
+use crate::focus_mode::{self, DimLayer, FocusMode, LineOpacity, fill_paragraph_target_opacities};
+
+/// Cached sentence bounds, keyed on (buffer_version, cursor_pos).
+struct SentenceBoundsCache {
+    key: (u64, usize),
+    bounds: Option<(usize, usize)>,
+}
 
 /// Focus mode and dimming animation state.
 ///
@@ -26,6 +33,8 @@ pub struct DimmingState {
     last_line_count: usize,
     last_focus_mode: FocusMode,
     last_paragraph_bounds: Option<(usize, usize)>,
+    /// Cached sentence bounds computation.
+    sentence_cache: Option<SentenceBoundsCache>,
 }
 
 impl DimmingState {
@@ -46,6 +55,7 @@ impl DimmingState {
             last_line_count: 0,
             last_focus_mode: FocusMode::Off,
             last_paragraph_bounds: None,
+            sentence_cache: None,
         }
     }
 
@@ -60,15 +70,35 @@ impl DimmingState {
             || self.sentence_animating_count > 0
     }
 
+    /// Compute sentence bounds with caching.
+    fn sentence_bounds_cached(&mut self, buffer: &Buffer, cursor_pos: usize) -> Option<(usize, usize)> {
+        let key = (buffer.version(), cursor_pos);
+        if let Some(ref cache) = self.sentence_cache {
+            if cache.key == key {
+                return cache.bounds;
+            }
+        }
+        let bounds = focus_mode::sentence_bounds_in_buffer(buffer, cursor_pos);
+        self.sentence_cache = Some(SentenceBoundsCache { key, bounds });
+        bounds
+    }
+
+    /// The most recently computed sentence bounds.
+    pub fn sentence_bounds(&self) -> Option<(usize, usize)> {
+        self.sentence_cache.as_ref().and_then(|c| c.bounds)
+    }
+
     /// Recompute dimming layer targets based on current focus mode and cursor position.
     /// Also populates the output buffers for line_opacities and sentence_fade_snapshot.
     /// Short-circuits when inputs haven't changed and all animations have settled.
     pub fn update(
         &mut self,
+        buffer: &Buffer,
+        cursor_pos: usize,
         line_count: usize,
         paragraph_bounds: Option<(usize, usize)>,
-        sentence_bounds: Option<(usize, usize)>,
     ) {
+        let sentence_bounds = self.sentence_bounds_cached(buffer, cursor_pos);
         // Early return when settled and inputs unchanged — output buffers are still valid
         if self.settled
             && line_count == self.last_line_count

@@ -449,7 +449,7 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
-        let sentence_bounds = app.sentence_bounds_cached();
+        let sentence_bounds = app.dimming.sentence_bounds();
         app.render_cache.refresh(&app.editor.buffer);
         terminal
             .draw(|frame| {
