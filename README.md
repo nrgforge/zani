@@ -118,6 +118,8 @@ Built in Rust for predictable latency — zero GC means no pauses during sustain
 
 The **Writing Surface** is a custom widget that renders directly to ratatui's cell buffer, bypassing the Paragraph widget. This gives full control over soft-wrapping, scroll positioning, and per-character styling — composing markdown formatting with focus dimming in a single render pass.
 
+The **animation subsystem** drives all visual transitions — palette crossfades, overlay fade-ins, and per-line focus dimming. All dimming uses opacity-based color interpolation (foreground blended toward background), not distance-based falloff. Two layers: `AnimationManager` for global discrete transitions, `DimLayer`/`AnimatedValue` for per-line chase-to-target dimming. Zero steady-state allocations after first frame.
+
 ```
 Ropey buffer → Writing Surface → ratatui cell buffer → Crossterm → terminal
 ```
@@ -125,7 +127,7 @@ Ropey buffer → Writing Surface → ratatui cell buffer → Crossterm → termi
 ## Development
 
 ```
-cargo test       # 404 unit + 1 integration test
+cargo test       # 354 unit + 3 integration + 1 alloc bench
 cargo clippy     # Lint
 cargo run        # Run in development
 ```

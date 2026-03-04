@@ -8,6 +8,17 @@
 //! completion, returns normalized progress). `DimLayer` (in focus_mode.rs) owns
 //! N animated values (one per line, never pruned, uses chase semantics). Both
 //! build on `AnimatedValue` as the underlying primitive.
+//!
+//! ## Decision rule: which subsystem to use
+//!
+//! - **`AnimationManager`** — global, discrete transitions with a start and end.
+//!   Use for palette crossfades, overlay opacity fade-in, or any effect that runs
+//!   once to completion then is pruned. Finite count (0-1 per `TransitionKind`).
+//!
+//! - **`AnimatedValue` / `DimLayer`** — per-line, chase-to-target values that
+//!   persist across frames. Use for paragraph and sentence dimming where each line
+//!   independently tracks a target opacity. Pre-allocated, zero steady-state allocs.
+//!   All dimming uses opacity-based color interpolation, not distance-based.
 
 use std::time::{Duration, Instant};
 
