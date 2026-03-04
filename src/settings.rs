@@ -1,11 +1,10 @@
 use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
-use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
 
 /// A selectable item in the Settings Layer.
 /// Defines the logical meaning of each row, replacing magic indices.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsItem {
     /// An editing mode choice (Vim or Standard).
     EditingMode(EditingMode),
@@ -21,28 +20,30 @@ pub enum SettingsItem {
     File,
 }
 
+const ALL_ITEMS: [SettingsItem; 12] = [
+    SettingsItem::EditingMode(EditingMode::Vim),
+    SettingsItem::EditingMode(EditingMode::Standard),
+    SettingsItem::Palette(0),
+    SettingsItem::Palette(1),
+    SettingsItem::Palette(2),
+    SettingsItem::FocusMode(FocusMode::Off),
+    SettingsItem::FocusMode(FocusMode::Sentence),
+    SettingsItem::FocusMode(FocusMode::Paragraph),
+    SettingsItem::ScrollMode(ScrollMode::Edge),
+    SettingsItem::ScrollMode(ScrollMode::Typewriter),
+    SettingsItem::ColumnWidth,
+    SettingsItem::File,
+];
+
 impl SettingsItem {
     /// Returns the ordered list of all selectable settings items.
-    pub fn all() -> Vec<SettingsItem> {
-        let mut items = Vec::new();
-        items.push(SettingsItem::EditingMode(EditingMode::Vim));
-        items.push(SettingsItem::EditingMode(EditingMode::Standard));
-        for i in 0..Palette::all().len() {
-            items.push(SettingsItem::Palette(i));
-        }
-        items.push(SettingsItem::FocusMode(FocusMode::Off));
-        items.push(SettingsItem::FocusMode(FocusMode::Sentence));
-        items.push(SettingsItem::FocusMode(FocusMode::Paragraph));
-        items.push(SettingsItem::ScrollMode(ScrollMode::Edge));
-        items.push(SettingsItem::ScrollMode(ScrollMode::Typewriter));
-        items.push(SettingsItem::ColumnWidth);
-        items.push(SettingsItem::File);
-        items
+    pub fn all() -> &'static [SettingsItem] {
+        &ALL_ITEMS
     }
 
     /// Look up the item at a given cursor index.
     pub fn at(index: usize) -> Option<SettingsItem> {
-        Self::all().into_iter().nth(index)
+        Self::all().get(index).copied()
     }
 }
 
