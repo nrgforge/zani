@@ -99,8 +99,9 @@ fn run(
     loop {
         let size = terminal.size()?;
         if let Some(out) = app.tick(size.width, size.height) {
+            let ctx = zani::ui::DrawContext::new(app, &out.visual_lines, out.sentence_bounds);
             terminal.draw(|frame| {
-                zani::ui::draw(frame, app, &out.visual_lines, out.sentence_bounds);
+                zani::ui::draw(frame, &ctx);
             })?;
 
             // Set cursor shape based on vim mode (only emit when changed)

@@ -4,17 +4,21 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::app::App;
-use crate::settings::SettingsItem;
+use crate::buffer::Buffer;
+use crate::color_profile::ColorProfile;
 use crate::editing_mode::EditingMode;
+use crate::find::FindState;
 use crate::focus_mode::FocusMode;
+use crate::markdown_styling::CharStyle;
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
+use crate::settings::SettingsItem;
 use crate::vim_bindings::Mode;
 use crate::wrap::VisualLine;
 use crate::writing_surface::WritingSurface;
 
 /// Render the application state to a frame.
-pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], sentence_bounds: Option<(usize, usize)>) {
+pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     let area = frame.area();
     if area.height < 1 {
         return; // terminal too small
@@ -23,67 +27,63 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
     // Full area for the Writing Surface — no Chrome by default (Invariant 1)
     let surface_area = area;
 
-    // Compute the effective palette (mid-crossfade interpolation when animating).
-    let effective = app.effective_palette();
-
     // Get find match ranges for the writing surface (cached in FindState)
     let empty_ranges: &[(usize, usize, usize)] = &[];
-    let (find_ranges, find_current) = if let Some(ref fs) = app.find_state {
+    let (find_ranges, find_current) = if let Some(fs) = ctx.find_state {
         (fs.match_ranges(), if fs.matches.is_empty() { None } else { Some(fs.current_match) })
     } else {
         (empty_ranges, None)
     };
 
     // Build Writing Surface
-    let surface = WritingSurface::new(&app.editor.buffer, &effective)
-        .column_width(app.viewport.effective_column_width)
-        .scroll_offset(app.viewport.scroll_offset)
-        .cursor(app.editor.cursor_line, app.editor.cursor_col)
-        .focus_mode(app.dimming.focus_mode)
-        .sentence_bounds(sentence_bounds)
-        .sentence_fades(app.dimming.sentence_fade_snapshot())
-        .color_profile(app.color_profile)
-        .vertical_offset(app.viewport.typewriter_vertical_offset)
-        .selection(app.editor.selection_range())
+    let surface = WritingSurface::new(ctx.buffer, &ctx.effective_palette)
+        .column_width(ctx.column_width)
+        .scroll_offset(ctx.scroll_offset)
+        .cursor(ctx.cursor_line, ctx.cursor_col)
+        .focus_mode(ctx.focus_mode)
+        .sentence_bounds(ctx.sentence_bounds)
+        .sentence_fades(ctx.sentence_fades)
+        .color_profile(ctx.color_profile)
+        .vertical_offset(ctx.vertical_offset)
+        .selection(ctx.selection)
         .find_matches(find_ranges, find_current)
-        .line_opacities(app.dimming.paragraph_line_opacities())
-        .precomputed_visual_lines(visual_lines)
-        .code_block_state(app.render_cache.code_block_state())
-        .line_char_offsets(app.render_cache.line_char_offsets())
-        .md_styles(app.render_cache.md_styles())
-        .precomputed_line_texts(app.render_cache.line_texts())
-        .precomputed_line_chars(app.render_cache.line_chars());
+        .line_opacities(ctx.line_opacities)
+        .precomputed_visual_lines(ctx.visual_lines)
+        .code_block_state(ctx.code_block_state)
+        .line_char_offsets(ctx.line_char_offsets)
+        .md_styles(ctx.md_styles)
+        .precomputed_line_texts(ctx.line_texts)
+        .precomputed_line_chars(ctx.line_chars);
 
     // Compute cursor position before render consumes the surface
-    let cursor_pos = surface.cursor_visual_position(visual_lines);
+    let cursor_pos = surface.cursor_visual_position(ctx.visual_lines);
     let x_offset = surface.center_offset(surface_area.width);
 
     // Render surface
     frame.render_widget(surface, surface_area);
 
     // Settings Layer overlay (Invariant 1: only visible when summoned)
-    if app.settings.visible {
-        let vm = SettingsViewModel::new(app);
-        draw_settings_layer(frame, &vm, &app.palette, area);
+    if let Some(ref vm) = ctx.settings_vm {
+        draw_settings_layer(frame, vm, ctx.base_palette, area);
     }
 
     // Find overlay bar at top of screen
-    if let Some(ref fs) = app.find_state {
-        let find_opacity = app.animations.overlay_progress().unwrap_or(1.0);
-        draw_find_bar(frame, fs, &effective, area, find_opacity);
+    if let Some(fs) = ctx.find_state {
+        let find_opacity = ctx.find_opacity.unwrap_or(1.0);
+        draw_find_bar(frame, fs, &ctx.effective_palette, area, find_opacity);
     }
 
     // Position cursor
-    if let Some(ref fs) = app.find_state {
+    if let Some(fs) = ctx.find_state {
         // Place cursor in the find bar
         let find_prefix_len = 6u16; // "Find: "
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
         frame.set_cursor_position((cursor_x, area.y));
     } else if let Some((vl_idx, col)) = cursor_pos {
-        let screen_row = vl_idx.saturating_sub(app.viewport.scroll_offset);
+        let screen_row = vl_idx.saturating_sub(ctx.scroll_offset);
         if screen_row < surface_area.height as usize {
             let x = surface_area.x + x_offset + col;
-            let y = surface_area.y + app.viewport.typewriter_vertical_offset + screen_row as u16;
+            let y = surface_area.y + ctx.vertical_offset + screen_row as u16;
             frame.set_cursor_position((x, y));
         }
     }
@@ -142,7 +142,7 @@ fn draw_find_bar(
 }
 
 /// All data needed to render the settings overlay, decoupled from App.
-pub(crate) struct SettingsViewModel {
+pub struct SettingsViewModel {
     pub overlay_opacity: f64,
     pub editing_mode: EditingMode,
     pub vim_mode: Mode,
@@ -162,7 +162,7 @@ pub(crate) struct SettingsViewModel {
 
 impl SettingsViewModel {
     /// Build from the current App state (read-only).
-    pub(crate) fn new(app: &App) -> Self {
+    pub fn new(app: &App) -> Self {
         let file_display = app
             .persistence.file_path
             .as_ref()
@@ -186,6 +186,82 @@ impl SettingsViewModel {
             rename_active: app.rename.active,
             rename_buf: app.rename.buf.clone(),
             rename_cursor: app.rename.cursor,
+        }
+    }
+}
+
+/// All data needed to render a frame, decoupled from App.
+/// One constructor extracts everything from App's subsystems;
+/// draw() sees only these fields.
+pub struct DrawContext<'a> {
+    // Editor
+    pub buffer: &'a Buffer,
+    pub cursor_line: usize,
+    pub cursor_col: usize,
+    pub selection: Option<(usize, usize, usize, usize)>,
+    // Palette
+    pub effective_palette: Palette,
+    pub base_palette: &'a Palette,
+    // Viewport
+    pub column_width: u16,
+    pub scroll_offset: usize,
+    pub vertical_offset: u16,
+    // Dimming
+    pub focus_mode: FocusMode,
+    pub sentence_fades: &'a [(usize, usize, f64)],
+    pub line_opacities: &'a [f64],
+    // Color
+    pub color_profile: ColorProfile,
+    // RenderCache
+    pub code_block_state: &'a [bool],
+    pub line_char_offsets: &'a [usize],
+    pub md_styles: &'a [Vec<CharStyle>],
+    pub line_texts: &'a [String],
+    pub line_chars: &'a [Vec<char>],
+    // TickOutput data
+    pub visual_lines: &'a [VisualLine],
+    pub sentence_bounds: Option<(usize, usize)>,
+    // Find
+    pub find_state: Option<&'a FindState>,
+    pub find_opacity: Option<f64>,
+    // Settings
+    pub settings_visible: bool,
+    pub settings_vm: Option<SettingsViewModel>,
+}
+
+impl<'a> DrawContext<'a> {
+    /// Build from the current App state plus pre-computed tick output.
+    pub fn new(app: &'a App, visual_lines: &'a [VisualLine], sentence_bounds: Option<(usize, usize)>) -> Self {
+        let settings_vm = if app.settings.visible {
+            Some(SettingsViewModel::new(app))
+        } else {
+            None
+        };
+        Self {
+            buffer: &app.editor.buffer,
+            cursor_line: app.editor.cursor_line,
+            cursor_col: app.editor.cursor_col,
+            selection: app.editor.selection_range(),
+            effective_palette: app.effective_palette(),
+            base_palette: &app.palette,
+            column_width: app.viewport.effective_column_width,
+            scroll_offset: app.viewport.scroll_offset,
+            vertical_offset: app.viewport.typewriter_vertical_offset,
+            focus_mode: app.dimming.focus_mode,
+            sentence_fades: app.dimming.sentence_fade_snapshot(),
+            line_opacities: app.dimming.paragraph_line_opacities(),
+            color_profile: app.color_profile,
+            code_block_state: app.render_cache.code_block_state(),
+            line_char_offsets: app.render_cache.line_char_offsets(),
+            md_styles: app.render_cache.md_styles(),
+            line_texts: app.render_cache.line_texts(),
+            line_chars: app.render_cache.line_chars(),
+            visual_lines,
+            sentence_bounds,
+            find_state: app.find_state.as_ref(),
+            find_opacity: app.animations.overlay_progress(),
+            settings_visible: app.settings.visible,
+            settings_vm,
         }
     }
 }
@@ -481,9 +557,10 @@ mod tests {
         let visual_lines = app.viewport.visual_lines(&app.editor.buffer);
         let sentence_bounds = app.dimming.sentence_bounds();
         app.render_cache.refresh(&app.editor.buffer);
+        let ctx = DrawContext::new(app, &visual_lines, sentence_bounds);
         terminal
             .draw(|frame| {
-                draw(frame, &app, &visual_lines, sentence_bounds);
+                draw(frame, &ctx);
             })
             .unwrap();
         terminal.backend().buffer().clone()
