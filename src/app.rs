@@ -18,7 +18,6 @@ use crate::palette::Palette;
 use crate::persistence::Persistence;
 use crate::scroll_mode::ScrollMode;
 use crate::settings::{RenameState, SettingsItem, SettingsState};
-use crate::ui::SettingsViewModel;
 use crate::vim_bindings::{Action, CursorShape, Mode};
 use crate::viewport::Viewport;
 use crate::wrap::VisualLine;
@@ -497,34 +496,6 @@ impl App {
     pub fn md_styles(&self) -> &[Vec<CharStyle>] { self.render_cache.md_styles() }
     pub fn line_texts(&self) -> &[String] { self.render_cache.line_texts() }
     pub fn line_chars(&self) -> &[Vec<char>] { self.render_cache.line_chars() }
-
-    /// Build a SettingsViewModel from current state for draw_settings_layer.
-    pub(crate) fn settings_view_model(&self) -> SettingsViewModel {
-        let file_display = self
-            .persistence.file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("[scratch]")
-            .to_string();
-        SettingsViewModel {
-            overlay_opacity: self.animations.overlay_progress().unwrap_or(1.0),
-            editing_mode: self.editor.editing_mode,
-            vim_mode: self.editor.vim_mode,
-            palette_name: self.palette.name,
-            focus_mode: self.dimming.focus_mode,
-            scroll_mode: self.viewport.scroll_mode,
-            column_width: self.viewport.column_width,
-            file_display,
-            save_error: self.persistence.save_error.clone(),
-            load_error: self.persistence.load_error.clone(),
-            is_dirty: self.editor.dirty,
-            settings_cursor: self.settings.cursor,
-            rename_active: self.rename.active,
-            rename_buf: self.rename.buf.clone(),
-            rename_cursor: self.rename.cursor,
-        }
-    }
 
     // --- Setup methods for external callers (tests, benchmarks) ---
 

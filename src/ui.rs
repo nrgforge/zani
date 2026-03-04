@@ -63,7 +63,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
 
     // Settings Layer overlay (Invariant 1: only visible when summoned)
     if app.settings.visible {
-        let vm = app.settings_view_model();
+        let vm = SettingsViewModel::new(app);
         draw_settings_layer(frame, &vm, &app.palette, area);
     }
 
@@ -158,6 +158,36 @@ pub(crate) struct SettingsViewModel {
     pub rename_active: bool,
     pub rename_buf: String,
     pub rename_cursor: usize,
+}
+
+impl SettingsViewModel {
+    /// Build from the current App state (read-only).
+    pub(crate) fn new(app: &App) -> Self {
+        let file_display = app
+            .persistence.file_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[scratch]")
+            .to_string();
+        Self {
+            overlay_opacity: app.animations.overlay_progress().unwrap_or(1.0),
+            editing_mode: app.editor.editing_mode,
+            vim_mode: app.editor.vim_mode,
+            palette_name: app.palette.name,
+            focus_mode: app.dimming.focus_mode,
+            scroll_mode: app.viewport.scroll_mode,
+            column_width: app.viewport.column_width,
+            file_display,
+            save_error: app.persistence.save_error.clone(),
+            load_error: app.persistence.load_error.clone(),
+            is_dirty: app.editor.dirty,
+            settings_cursor: app.settings.cursor,
+            rename_active: app.rename.active,
+            rename_buf: app.rename.buf.clone(),
+            rename_cursor: app.rename.cursor,
+        }
+    }
 }
 
 /// A row in the settings overlay, optionally selectable.
