@@ -607,7 +607,7 @@ mod tests {
     use crate::focus_mode::FocusMode;
     use crate::scroll_mode::ScrollMode;
     use crate::settings::SettingsItem;
-    use crate::vim_bindings::{self, CursorShape};
+    use crate::vim_bindings;
     use std::io::Write;
     use tempfile::NamedTempFile;
 

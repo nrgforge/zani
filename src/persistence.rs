@@ -27,8 +27,10 @@ impl Persistence {
     }
 
     /// Check if autosave should trigger (dirty + enough time elapsed).
+    /// Returns false when load_error is set to prevent overwriting files
+    /// that failed to load correctly.
     pub fn should_autosave(&self, dirty: bool) -> bool {
-        if !dirty {
+        if !dirty || self.load_error.is_some() {
             return false;
         }
         match self.last_save {
@@ -99,6 +101,20 @@ mod tests {
     fn recent_save_returns_false() {
         let mut p = Persistence::new();
         p.last_save = Some(Instant::now());
+        assert!(!p.should_autosave(true));
+    }
+
+    #[test]
+    fn elapsed_past_interval_returns_true() {
+        let mut p = Persistence::new();
+        p.last_save = Some(Instant::now() - Duration::from_secs(5));
+        assert!(p.should_autosave(true));
+    }
+
+    #[test]
+    fn load_error_suppresses_autosave() {
+        let mut p = Persistence::new();
+        p.load_error = Some("corrupt file".into());
         assert!(!p.should_autosave(true));
     }
 }
