@@ -27,8 +27,6 @@ pub struct Editor {
     pub yank_register: Option<String>,
     pub undo_history: UndoHistory,
     pub dirty: bool,
-    /// Column width used for wrapping when moving cursor up/down.
-    pub column_width: u16,
     paragraph_cache: Option<ParagraphBoundsCache>,
 }
 
@@ -51,7 +49,6 @@ impl Editor {
             yank_register: None,
             undo_history: UndoHistory::new(),
             dirty: false,
-            column_width: 60,
             paragraph_cache: None,
         }
     }
@@ -66,7 +63,7 @@ impl Editor {
 
     /// Handle a key press for editor-level input (not overlays or Ctrl combos).
     /// Returns true if the app should quit.
-    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, column_width: u16) -> bool {
         let is_standard = self.editing_mode == EditingMode::Standard;
 
         // Shift+Arrow/Home/End extends selection
@@ -74,7 +71,7 @@ impl Editor {
             match code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
                 | KeyCode::Home | KeyCode::End => {
-                    self.extend_selection(code);
+                    self.extend_selection(code, column_width);
                     return false;
                 }
                 _ => {}
@@ -122,25 +119,25 @@ impl Editor {
                 if is_standard {
                     self.selection_anchor = None;
                 }
-                self.apply_action(Action::MoveCursor(Direction::Left));
+                self.move_cursor_with_width(Direction::Left, column_width);
             }
             KeyCode::Right => {
                 if is_standard {
                     self.selection_anchor = None;
                 }
-                self.apply_action(Action::MoveCursor(Direction::Right));
+                self.move_cursor_with_width(Direction::Right, column_width);
             }
             KeyCode::Up => {
                 if is_standard {
                     self.selection_anchor = None;
                 }
-                self.apply_action(Action::MoveCursor(Direction::Up));
+                self.move_cursor_with_width(Direction::Up, column_width);
             }
             KeyCode::Down => {
                 if is_standard {
                     self.selection_anchor = None;
                 }
-                self.apply_action(Action::MoveCursor(Direction::Down));
+                self.move_cursor_with_width(Direction::Down, column_width);
             }
             _ => {}
         }
@@ -260,7 +257,10 @@ impl Editor {
                 }
             }
             Action::MoveCursor(dir) => {
-                self.move_cursor(dir);
+                // Left/Right don't need column_width; Up/Down use a default.
+                // From App, vertical moves are handled via move_cursor_visual
+                // with the real column_width before reaching apply_action.
+                self.move_cursor_with_width(dir, 60);
             }
             Action::LineStart => {
                 self.cursor_col = 0;
@@ -562,12 +562,6 @@ impl Editor {
             .rposition(|vl| vl.logical_line == self.cursor_line)
     }
 
-    /// Move cursor in the given direction.
-    /// For Up/Down, computes visual lines using the editor's column width.
-    pub fn move_cursor(&mut self, dir: Direction) {
-        self.move_cursor_with_width(dir, self.column_width);
-    }
-
     /// Move cursor in the given direction using the specified column width for wrapping.
     pub fn move_cursor_with_width(&mut self, dir: Direction, column_width: u16) {
         match dir {
@@ -709,16 +703,16 @@ impl Editor {
     }
 
     /// Extend selection by moving the cursor while keeping (or setting) the anchor.
-    pub fn extend_selection(&mut self, code: KeyCode) {
+    pub fn extend_selection(&mut self, code: KeyCode, column_width: u16) {
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some((self.cursor_line, self.cursor_col));
         }
 
         match code {
-            KeyCode::Left => self.move_cursor(Direction::Left),
-            KeyCode::Right => self.move_cursor(Direction::Right),
-            KeyCode::Up => self.move_cursor(Direction::Up),
-            KeyCode::Down => self.move_cursor(Direction::Down),
+            KeyCode::Left => self.move_cursor_with_width(Direction::Left, column_width),
+            KeyCode::Right => self.move_cursor_with_width(Direction::Right, column_width),
+            KeyCode::Up => self.move_cursor_with_width(Direction::Up, column_width),
+            KeyCode::Down => self.move_cursor_with_width(Direction::Down, column_width),
             KeyCode::Home => self.cursor_col = 0,
             KeyCode::End => {
                 self.cursor_col = self.line_content_len(self.cursor_line);
@@ -1232,7 +1226,7 @@ mod tests {
         editor.vim_mode = Mode::Insert;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 0;
-        editor.extend_selection(KeyCode::Right);
+        editor.extend_selection(KeyCode::Right, 60);
         assert_eq!(editor.selection_anchor, Some((0, 0)));
         assert_eq!(editor.cursor_col, 1);
     }
@@ -1244,7 +1238,7 @@ mod tests {
         editor.vim_mode = Mode::Insert;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 3;
-        editor.extend_selection(KeyCode::Left);
+        editor.extend_selection(KeyCode::Left, 60);
         assert_eq!(editor.selection_anchor, Some((0, 3)));
         assert_eq!(editor.cursor_col, 2);
     }
@@ -1256,7 +1250,7 @@ mod tests {
         editor.vim_mode = Mode::Insert;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 3;
-        editor.extend_selection(KeyCode::Home);
+        editor.extend_selection(KeyCode::Home, 60);
         assert_eq!(editor.selection_anchor, Some((0, 3)));
         assert_eq!(editor.cursor_col, 0);
     }
@@ -1268,7 +1262,7 @@ mod tests {
         editor.vim_mode = Mode::Insert;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 0;
-        editor.extend_selection(KeyCode::End);
+        editor.extend_selection(KeyCode::End, 60);
         assert_eq!(editor.selection_anchor, Some((0, 0)));
         assert_eq!(editor.cursor_col, 5);
     }
@@ -1280,9 +1274,9 @@ mod tests {
         editor.vim_mode = Mode::Insert;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 0;
-        editor.extend_selection(KeyCode::Right);
-        editor.extend_selection(KeyCode::Right);
-        editor.extend_selection(KeyCode::Right);
+        editor.extend_selection(KeyCode::Right, 60);
+        editor.extend_selection(KeyCode::Right, 60);
+        editor.extend_selection(KeyCode::Right, 60);
         assert_eq!(editor.selection_anchor, Some((0, 0)));
         assert_eq!(editor.cursor_col, 3);
     }
@@ -1294,7 +1288,7 @@ mod tests {
         editor.vim_mode = Mode::Normal;
         editor.buffer = Buffer::from_text("hello\n");
         editor.cursor_col = 0;
-        editor.extend_selection(KeyCode::Right);
+        editor.extend_selection(KeyCode::Right, 60);
         assert_eq!(editor.vim_mode, Mode::Visual);
         assert_eq!(editor.selection_anchor, Some((0, 0)));
     }
@@ -1550,7 +1544,7 @@ mod tests {
         editor.cursor_line = 0;
         editor.cursor_col = 0;
         for _ in 0..5 {
-            editor.move_cursor(Direction::Right);
+            editor.move_cursor_with_width(Direction::Right, 60);
         }
         assert_eq!(editor.cursor_col, 5);
     }

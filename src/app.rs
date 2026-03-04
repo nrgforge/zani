@@ -100,7 +100,6 @@ impl App {
         app.dimming.focus_mode = config.focus_mode;
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
-        app.editor.column_width = config.column_width;
         app.editor.editing_mode = config.editing_mode;
         if config.editing_mode == EditingMode::Standard {
             app.editor.vim_mode = Mode::Insert;
@@ -199,7 +198,6 @@ impl App {
         let new = self.viewport.column_width as i16 + delta;
         let clamped = new.clamp(20, 120) as u16;
         self.viewport.column_width = clamped;
-        self.editor.column_width = clamped;
     }
 
     /// Persist current settings to config file (best-effort, errors silently ignored).
@@ -248,7 +246,7 @@ impl App {
         }
 
         // Route to editor for text editing keys
-        if self.editor.handle_key(code, modifiers) {
+        if self.editor.handle_key(code, modifiers, self.viewport.column_width) {
             self.should_quit = true;
         }
     }
@@ -1078,8 +1076,8 @@ mod tests {
         // Select with shift+arrow (via extend_selection)
         use crossterm::event::KeyCode;
         app.editor.cursor_col = 0;
-        app.editor.extend_selection(KeyCode::Right);
-        app.editor.extend_selection(KeyCode::Right);
+        app.editor.extend_selection(KeyCode::Right, 60);
+        app.editor.extend_selection(KeyCode::Right, 60);
         assert_eq!(app.editor.selection_anchor, Some((0, 0)));
         assert_eq!(app.editor.cursor_col, 2);
 
@@ -1150,7 +1148,7 @@ mod tests {
         app.editor.buffer = Buffer::from_text("hello\nworld\n");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 2;
-        app.editor.extend_selection(KeyCode::Down);
+        app.editor.extend_selection(KeyCode::Down, 60);
         assert_eq!(app.editor.selection_anchor, Some((0, 2)));
         assert_eq!(app.editor.cursor_line, 1);
     }
@@ -1559,7 +1557,6 @@ mod tests {
         assert_eq!(app.palette.name, "Inkwell");
         assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph);
         assert_eq!(app.viewport.column_width, 80);
-        assert_eq!(app.editor.column_width, 80);
         assert_eq!(app.editor.editing_mode, EditingMode::Standard);
         assert_eq!(app.viewport.scroll_mode, ScrollMode::Edge);
     }
