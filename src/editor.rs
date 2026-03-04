@@ -1025,20 +1025,43 @@ mod tests {
     // === Cursor movement ===
 
     #[test]
-    fn hjkl_moves_cursor() {
+    fn h_moves_cursor_left() {
         let mut editor = Editor::new();
         editor.buffer = Buffer::from_text("line one\nline two\nline three");
         editor.cursor_line = 1;
         editor.cursor_col = 3;
-
         editor.handle_char('h');
-        assert_eq!(editor.cursor_col, 2);
+        assert_eq!(editor.cursor_col, 2, "h should move cursor left by one column");
+    }
+
+    #[test]
+    fn l_moves_cursor_right() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("line one\nline two\nline three");
+        editor.cursor_line = 1;
+        editor.cursor_col = 3;
         editor.handle_char('l');
-        assert_eq!(editor.cursor_col, 3);
+        assert_eq!(editor.cursor_col, 4, "l should move cursor right by one column");
+    }
+
+    #[test]
+    fn k_moves_cursor_up() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("line one\nline two\nline three");
+        editor.cursor_line = 1;
+        editor.cursor_col = 3;
         editor.handle_char('k');
-        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_line, 0, "k should move cursor up by one line");
+    }
+
+    #[test]
+    fn j_moves_cursor_down() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("line one\nline two\nline three");
+        editor.cursor_line = 1;
+        editor.cursor_col = 3;
         editor.handle_char('j');
-        assert_eq!(editor.cursor_line, 1);
+        assert_eq!(editor.cursor_line, 2, "j should move cursor down by one line");
     }
 
     // === Standard mode tests ===

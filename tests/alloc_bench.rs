@@ -73,27 +73,27 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
     app.mark_needs_redraw();
     let out = app.tick(area.width, area.height).expect("should need redraw");
 
+    // Build DrawContext — same extraction path as the real render loop
+    let ctx = zani::ui::DrawContext::new(app, &out.visual_lines, out.sentence_bounds);
+
     // Build and render WritingSurface (the heaviest part)
-    let sb = out.sentence_bounds;
-    let palette = app.effective_palette();
-    let (cursor_line, cursor_col) = app.cursor_position();
-    let surface = zani::writing_surface::WritingSurface::new(app.buffer(), &palette)
-        .column_width(app.column_width())
-        .scroll_offset(app.scroll_offset())
-        .cursor(cursor_line, cursor_col)
-        .focus_mode(app.focus_mode())
-        .sentence_bounds(sb)
-        .sentence_fades(app.sentence_fade_snapshot())
-        .color_profile(app.color_profile())
-        .vertical_offset(app.typewriter_vertical_offset())
-        .selection(app.selection_range())
-        .line_opacities(app.paragraph_line_opacities())
-        .precomputed_visual_lines(&out.visual_lines)
-        .code_block_state(app.code_block_state())
-        .line_char_offsets(app.line_char_offsets())
-        .md_styles(app.md_styles())
-        .precomputed_line_texts(app.line_texts())
-        .precomputed_line_chars(app.line_chars());
+    let surface = zani::writing_surface::WritingSurface::new(ctx.buffer, &ctx.effective_palette)
+        .column_width(ctx.column_width)
+        .scroll_offset(ctx.scroll_offset)
+        .cursor(ctx.cursor_line, ctx.cursor_col)
+        .focus_mode(ctx.focus_mode)
+        .sentence_bounds(ctx.sentence_bounds)
+        .sentence_fades(ctx.sentence_fades)
+        .color_profile(ctx.color_profile)
+        .vertical_offset(ctx.vertical_offset)
+        .selection(ctx.selection)
+        .line_opacities(ctx.line_opacities)
+        .precomputed_visual_lines(ctx.visual_lines)
+        .code_block_state(ctx.code_block_state)
+        .line_char_offsets(ctx.line_char_offsets)
+        .md_styles(ctx.md_styles)
+        .precomputed_line_texts(ctx.line_texts)
+        .precomputed_line_chars(ctx.line_chars);
 
     buf.reset();
     surface.render(area, buf);
@@ -114,8 +114,10 @@ fn measure_allocations_per_frame() {
     // Reusable ratatui buffer — allocated once, reused across all frames
     let mut render_buf = ratatui::buffer::Buffer::empty(area);
 
-    // Test each focus mode
+    // Test each focus mode, collecting per-frame allocation counts
+    let mut off_per_frame = 0;
     let mut paragraph_per_frame = 0;
+    let mut sentence_per_frame = 0;
     for (mode_name, mode) in [
         ("Off", FocusMode::Off),
         ("Paragraph", FocusMode::Paragraph),
@@ -137,8 +139,10 @@ fn measure_allocations_per_frame() {
         let total_allocs = stop_counting();
         let per_frame = total_allocs / num_frames;
 
-        if mode == FocusMode::Paragraph {
-            paragraph_per_frame = per_frame;
+        match mode {
+            FocusMode::Off => off_per_frame = per_frame,
+            FocusMode::Paragraph => paragraph_per_frame = per_frame,
+            FocusMode::Sentence => sentence_per_frame = per_frame,
         }
 
         eprintln!(
@@ -163,10 +167,17 @@ fn measure_allocations_per_frame() {
 
     eprintln!();
 
-    // Threshold assertion — 0 allocs/frame after wave 3 optimizations
+    // Threshold assertion — 0 allocs/frame for all focus modes
+    assert!(
+        off_per_frame == 0,
+        "FocusMode::Off steady-state allocations ({off_per_frame}) should be 0"
+    );
     assert!(
         paragraph_per_frame == 0,
-        "Steady-state allocations per frame ({paragraph_per_frame}) should be 0 \
-         (original baseline was ~440)"
+        "FocusMode::Paragraph steady-state allocations ({paragraph_per_frame}) should be 0"
+    );
+    assert!(
+        sentence_per_frame == 0,
+        "FocusMode::Sentence steady-state allocations ({sentence_per_frame}) should be 0"
     );
 }

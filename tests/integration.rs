@@ -11,7 +11,7 @@ use zani::palette::Palette;
 /// and syntax characters are further dimmed. Both dimming layers
 /// compose correctly.
 #[test]
-fn focus_dimming_and_markdown_styling_compose() {
+fn focus_dimming_and_markdown_colors_compose() {
     let palette = Palette::default_palette();
     let text = "## Heading\n\nSome **bold** text in the body paragraph.\n\nAnother paragraph here.";
     let buffer = Buffer::from_text(text);
