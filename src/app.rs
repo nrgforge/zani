@@ -299,14 +299,7 @@ impl App {
                 self.editor.apply_action(Action::PasteAtCursor);
             }
             KeyCode::Char('a') => {
-                let total_chars = self.editor.buffer.len_chars();
-                self.editor.selection_anchor = Some((0, 0));
-                if total_chars > 0 {
-                    self.editor.set_cursor_from_char_index(total_chars.saturating_sub(1));
-                }
-                if self.editor.editing_mode == EditingMode::Vim {
-                    self.editor.vim_mode = Mode::Visual;
-                }
+                self.editor.apply_action(Action::SelectAll);
             }
             KeyCode::Char('q') => {
                 self.should_quit = true;

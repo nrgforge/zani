@@ -80,6 +80,8 @@ pub enum Action {
     Undo,
     /// Redo the last undone change.
     Redo,
+    /// Select all text in the buffer.
+    SelectAll,
     /// No action (key not handled).
     None,
 }

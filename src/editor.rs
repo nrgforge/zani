@@ -405,6 +405,16 @@ impl Editor {
                     self.dirty = true;
                 }
             }
+            Action::SelectAll => {
+                let total_chars = self.buffer.len_chars();
+                self.selection_anchor = Some((0, 0));
+                if total_chars > 0 {
+                    self.set_cursor_from_char_index(total_chars.saturating_sub(1));
+                }
+                if self.editing_mode == EditingMode::Vim {
+                    self.vim_mode = Mode::Visual;
+                }
+            }
             Action::Undo => {
                 self.undo_history.commit_group();
                 if let Some(ops) = self.undo_history.undo() {
