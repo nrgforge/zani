@@ -14,13 +14,19 @@ pub enum Terminal {
 pub struct WindowConfig {
     pub font_family: String,
     pub font_size: u16,
+    pub title: String,
+    pub padding_x: u16,
+    pub padding_y: u16,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            font_family: "iA Writer Duo".to_string(),
-            font_size: 16,
+            font_family: "PT Mono".to_string(),
+            font_size: 24,
+            title: "Zani".to_string(),
+            padding_x: 20,
+            padding_y: 20,
         }
     }
 }
@@ -63,25 +69,24 @@ pub fn spawn_command(
 
     match terminal {
         Terminal::Ghostty => {
-            let mut cmd = if cfg!(target_os = "macos") {
-                // macOS: use `open -na` to launch a new Ghostty instance
-                vec![
-                    "open".to_string(),
-                    "-na".to_string(),
-                    "Ghostty".to_string(),
-                    "--args".to_string(),
-                    format!("--font-family={}", config.font_family),
-                    format!("--font-size={}", config.font_size),
-                    "-e".to_string(),
-                ]
+            // macOS: use the app bundle binary directly — `open -na` doesn't
+            // forward config flags, and the homebrew `ghostty` shim doesn't
+            // open windows.
+            let ghostty_bin = if cfg!(target_os = "macos") {
+                "/Applications/Ghostty.app/Contents/MacOS/ghostty".to_string()
             } else {
-                vec![
-                    "ghostty".to_string(),
-                    format!("--font-family={}", config.font_family),
-                    format!("--font-size={}", config.font_size),
-                    "-e".to_string(),
-                ]
+                "ghostty".to_string()
             };
+            let mut cmd = vec![
+                ghostty_bin,
+                format!("--font-family={}", config.font_family),
+                format!("--font-size={}", config.font_size),
+                format!("--title={}", config.title),
+                format!("--window-padding-x={}", config.padding_x),
+                format!("--window-padding-y={}", config.padding_y),
+                "--window-padding-balance=true".to_string(),
+                "-e".to_string(),
+            ];
             cmd.extend(inline_args);
             Some(cmd)
         }
@@ -185,9 +190,7 @@ mod tests {
         assert!(cmd.contains(&"draft.md".to_string()));
         assert!(cmd.iter().any(|s| s.contains("font-family")));
         if cfg!(target_os = "macos") {
-            assert_eq!(cmd[0], "open");
-            assert!(cmd.contains(&"-na".to_string()));
-            assert!(cmd.contains(&"Ghostty".to_string()));
+            assert!(cmd[0].contains("Ghostty.app"));
         } else {
             assert_eq!(cmd[0], "ghostty");
         }

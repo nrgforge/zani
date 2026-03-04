@@ -42,6 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match std::process::Command::new(&cmd[0])
                 .args(&cmd[1..])
                 .env("ZANI_WINDOW", "1")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
             {
                 Ok(_) => std::process::exit(0),
