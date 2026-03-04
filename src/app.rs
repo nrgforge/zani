@@ -46,6 +46,14 @@ pub struct App {
     pub(crate) render_cache: RenderCache,
     /// Whether the next frame requires a full redraw.
     pub(crate) needs_redraw: bool,
+    /// True when the file was modified externally while the buffer is dirty.
+    external_change_pending: bool,
+    /// Whether the scratch quit prompt is showing.
+    scratch_quit_active: bool,
+    /// Selected choice in scratch quit prompt: 0=Save, 1=Rename, 2=Discard.
+    scratch_quit_selected: u8,
+    /// Quit after the rename completes (set when scratch quit → Rename).
+    pending_quit_after_rename: bool,
 }
 
 impl Default for App {
@@ -70,6 +78,10 @@ impl App {
             animations: AnimationManager::new(),
             render_cache: RenderCache::new(),
             needs_redraw: true,
+            external_change_pending: false,
+            scratch_quit_active: false,
+            scratch_quit_selected: 0,
+            pending_quit_after_rename: false,
         }
     }
 
@@ -213,6 +225,28 @@ impl App {
             return;
         }
 
+        // Conflict bar — swallow all keys except Ctrl (handled above)
+        if self.external_change_pending {
+            match code {
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    self.external_change_pending = false;
+                    self.reload_from_disk();
+                }
+                KeyCode::Char('k') | KeyCode::Char('K') => {
+                    self.external_change_pending = false;
+                    self.persistence.record_mtime();
+                }
+                _ => {} // swallow other keys
+            }
+            return;
+        }
+
+        // Scratch quit prompt — swallow all keys when active
+        if self.scratch_quit_active {
+            self.handle_scratch_quit_key(code);
+            return;
+        }
+
         // Find overlay — swallow all keys when active
         if self.find_state.is_some() {
             self.handle_find_key(code);
@@ -291,7 +325,23 @@ impl App {
                 self.editor.apply_action(Action::SelectAll);
             }
             KeyCode::Char('q') => {
-                self.should_quit = true;
+                if self.persistence.is_scratch && self.editor.dirty {
+                    self.scratch_quit_active = true;
+                    self.scratch_quit_selected = 0;
+                    self.animations.start(
+                        crate::animation::TransitionKind::ScratchQuitOverlay,
+                        Duration::from_millis(150),
+                        crate::animation::Easing::EaseOut,
+                    );
+                } else if self.persistence.is_scratch && !self.editor.dirty {
+                    // Clean scratch: delete draft file, quit silently
+                    if let Some(ref path) = self.persistence.file_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    self.should_quit = true;
+                } else {
+                    self.should_quit = true;
+                }
             }
             KeyCode::Char('p') => {
                 self.toggle_settings();
@@ -371,12 +421,75 @@ impl App {
     /// Handle key input while the inline rename is active.
     fn handle_rename_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Esc => self.rename.cancel(),
-            KeyCode::Enter => self.rename.confirm(&mut self.persistence.file_path, &mut self.persistence.is_scratch),
+            KeyCode::Esc => {
+                self.rename.cancel();
+                self.pending_quit_after_rename = false;
+            }
+            KeyCode::Enter => {
+                self.rename.confirm(&mut self.persistence.file_path, &mut self.persistence.is_scratch);
+                if !self.rename.active && self.pending_quit_after_rename {
+                    self.pending_quit_after_rename = false;
+                    self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
+                    self.should_quit = true;
+                }
+            }
             KeyCode::Backspace => self.rename.backspace(),
             KeyCode::Left => self.rename.cursor_left(),
             KeyCode::Right => self.rename.cursor_right(),
             KeyCode::Char(c) => self.rename.insert(c),
+            _ => {}
+        }
+    }
+
+    /// Handle key input while the scratch quit prompt is active.
+    fn handle_scratch_quit_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
+                self.scratch_quit_selected = if self.scratch_quit_selected == 0 { 2 } else { self.scratch_quit_selected - 1 };
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Down | KeyCode::Char('j') => {
+                self.scratch_quit_selected = if self.scratch_quit_selected == 2 { 0 } else { self.scratch_quit_selected + 1 };
+            }
+            KeyCode::Esc => {
+                self.scratch_quit_active = false;
+            }
+            KeyCode::Enter => {
+                self.apply_scratch_quit_choice(self.scratch_quit_selected);
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.apply_scratch_quit_choice(0);
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.apply_scratch_quit_choice(1);
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.apply_scratch_quit_choice(2);
+            }
+            _ => {} // swallow other keys
+        }
+    }
+
+    /// Execute a scratch quit choice: 0=Save, 1=Rename, 2=Discard.
+    fn apply_scratch_quit_choice(&mut self, choice: u8) {
+        self.scratch_quit_active = false;
+        match choice {
+            0 => {
+                // Save: autosave to the generated scratch name and quit
+                self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
+                self.should_quit = true;
+            }
+            1 => {
+                // Rename: open rename prompt, quit after confirm
+                self.rename.open(self.persistence.file_path.as_deref());
+                self.pending_quit_after_rename = true;
+            }
+            2 => {
+                // Discard: delete the draft file and quit
+                if let Some(ref path) = self.persistence.file_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                self.should_quit = true;
+            }
             _ => {}
         }
     }
@@ -455,11 +568,50 @@ impl App {
     pub fn cursor_shape(&self) -> CursorShape { self.editor.cursor_shape() }
 
     pub fn should_autosave(&self) -> bool {
+        if self.external_change_pending {
+            return false;
+        }
         self.persistence.should_autosave(self.editor.dirty)
     }
 
     pub fn autosave(&mut self) {
         self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
+    }
+
+    /// Check if the file was modified externally. Auto-reloads clean buffers;
+    /// sets conflict flag for dirty ones.
+    pub fn check_external_change(&mut self) {
+        if !self.persistence.mtime_changed() {
+            return;
+        }
+        if !self.editor.dirty {
+            self.reload_from_disk();
+        } else {
+            self.external_change_pending = true;
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Replace the buffer with the file's current contents on disk.
+    fn reload_from_disk(&mut self) {
+        let Some(ref path) = self.persistence.file_path else {
+            return;
+        };
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                self.editor.buffer = Buffer::from_text(&content);
+                self.editor.dirty = false;
+                self.editor.cursor_line = 0;
+                self.editor.cursor_col = 0;
+                self.editor.undo_history = crate::undo::UndoHistory::new();
+                self.editor.selection_anchor = None;
+                self.persistence.record_mtime();
+                self.needs_redraw = true;
+            }
+            Err(e) => {
+                self.persistence.load_error = Some(e.to_string());
+            }
+        }
     }
 
     // --- Read-only accessors for draw callers (ui.rs, alloc_bench.rs) ---
@@ -483,6 +635,10 @@ impl App {
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn overlay_progress(&self) -> Option<f64> { self.animations.overlay_progress() }
 
+    pub fn external_change_pending(&self) -> bool { self.external_change_pending }
+    pub fn scratch_quit_active(&self) -> bool { self.scratch_quit_active }
+    pub fn scratch_quit_selected(&self) -> u8 { self.scratch_quit_selected }
+    pub fn scratch_quit_overlay_progress(&self) -> Option<f64> { self.animations.scratch_quit_overlay_progress() }
     pub fn file_path(&self) -> Option<&Path> { self.persistence.file_path.as_deref() }
     pub fn save_error(&self) -> Option<&str> { self.persistence.save_error.as_deref() }
     pub fn load_error(&self) -> Option<&str> { self.persistence.load_error.as_deref() }
@@ -1531,5 +1687,152 @@ mod tests {
             scroll_mode: app.scroll_mode(),
         };
         assert_eq!(recovered, original);
+    }
+
+    // === External change detection ===
+
+    #[test]
+    fn external_change_clean_auto_reloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut app = App::new().with_file(path.clone(), "original");
+        assert!(!app.editor.dirty);
+
+        // External write
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, "changed").unwrap();
+
+        app.check_external_change();
+        assert_eq!(app.editor.buffer.to_string(), "changed");
+        assert!(!app.external_change_pending);
+    }
+
+    #[test]
+    fn external_change_dirty_sets_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut app = App::new().with_file(path.clone(), "original");
+        app.editor.dirty = true;
+
+        // External write
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, "changed").unwrap();
+
+        app.check_external_change();
+        assert!(app.external_change_pending);
+        assert_eq!(app.editor.buffer.to_string(), "original", "buffer should not change");
+    }
+
+    #[test]
+    fn autosave_suppressed_during_conflict() {
+        let mut app = App::new();
+        app.external_change_pending = true;
+        app.editor.dirty = true;
+        assert!(!app.should_autosave());
+    }
+
+    #[test]
+    fn conflict_reload_clears_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut app = App::new().with_file(path.clone(), "original");
+        app.editor.dirty = true;
+        app.external_change_pending = true;
+
+        // Write new content for reload
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, "reloaded").unwrap();
+
+        app.handle_key(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert!(!app.external_change_pending);
+        assert_eq!(app.editor.buffer.to_string(), "reloaded");
+    }
+
+    #[test]
+    fn conflict_keep_resumes_autosave() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut app = App::new().with_file(path, "original");
+        app.editor.dirty = true;
+        app.external_change_pending = true;
+
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert!(!app.external_change_pending);
+        // Autosave should no longer be suppressed
+        assert!(app.should_autosave());
+    }
+
+    // === Scratch quit prompt ===
+
+    #[test]
+    fn scratch_clean_quits_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        app.persistence.file_path = Some(dir.path().join("draft.md"));
+        app.persistence.is_scratch = true;
+        app.editor.dirty = false;
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(app.should_quit);
+        assert!(!app.scratch_quit_active);
+    }
+
+    #[test]
+    fn scratch_dirty_opens_prompt() {
+        let mut app = App::new();
+        app.persistence.is_scratch = true;
+        app.editor.dirty = true;
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(!app.should_quit);
+        assert!(app.scratch_quit_active);
+    }
+
+    #[test]
+    fn scratch_save_choice_quits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        app.persistence.file_path = Some(dir.path().join("draft.md"));
+        app.persistence.is_scratch = true;
+        app.editor.dirty = true;
+        app.editor.buffer = Buffer::from_text("content");
+
+        app.apply_scratch_quit_choice(0); // Save
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn scratch_discard_choice_quits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("draft.md");
+        std::fs::write(&path, "content").unwrap();
+
+        let mut app = App::new();
+        app.persistence.file_path = Some(path.clone());
+        app.persistence.is_scratch = true;
+        app.editor.dirty = true;
+
+        app.apply_scratch_quit_choice(2); // Discard
+        assert!(app.should_quit);
+        assert!(!path.exists(), "draft file should be deleted");
+    }
+
+    #[test]
+    fn non_scratch_quit_unchanged() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut app = App::new().with_file(tmp.path().to_path_buf(), "hello");
+        assert!(!app.persistence.is_scratch);
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(app.should_quit);
+        assert!(!app.scratch_quit_active);
     }
 }

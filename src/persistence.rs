@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::buffer::Buffer;
 use crate::draft_name;
@@ -12,6 +12,7 @@ pub struct Persistence {
     pub load_error: Option<String>,
     pub last_save: Option<Instant>,
     pub autosave_interval: Duration,
+    last_known_mtime: Option<SystemTime>,
 }
 
 impl Persistence {
@@ -23,6 +24,7 @@ impl Persistence {
             load_error: None,
             last_save: None,
             autosave_interval: Duration::from_secs(3),
+            last_known_mtime: None,
         }
     }
 
@@ -52,6 +54,7 @@ impl Persistence {
                     *dirty = false;
                     self.last_save = Some(Instant::now());
                     self.save_error = None;
+                    self.record_mtime();
                     return true;
                 }
                 Err(e) => {
@@ -62,10 +65,36 @@ impl Persistence {
         false
     }
 
+    /// Stat the file on disk and return its modified time.
+    pub fn current_mtime(&self) -> Option<SystemTime> {
+        self.file_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok())
+    }
+
+    /// Snapshot the file's current mtime as our baseline.
+    pub fn record_mtime(&mut self) {
+        self.last_known_mtime = self.current_mtime();
+    }
+
+    /// True when the file on disk has a different mtime than our baseline.
+    /// Returns false if there is no file path or no baseline recorded yet.
+    pub fn mtime_changed(&self) -> bool {
+        let Some(baseline) = self.last_known_mtime else {
+            return false;
+        };
+        match self.current_mtime() {
+            Some(current) => current != baseline,
+            None => false,
+        }
+    }
+
     /// Set up with an existing file.
     pub fn with_file(&mut self, path: PathBuf, buffer: &mut Buffer, content: &str) {
         *buffer = Buffer::from_text(content);
         self.file_path = Some(path);
+        self.record_mtime();
     }
 
     /// Set up as a scratch buffer with a generated name.
@@ -116,5 +145,39 @@ mod tests {
         let mut p = Persistence::new();
         p.load_error = Some("corrupt file".into());
         assert!(!p.should_autosave(true));
+    }
+
+    #[test]
+    fn mtime_tracks_after_save() {
+        let dir = std::env::temp_dir().join("zani_test_mtime");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("mtime_test.md");
+        std::fs::write(&path, "initial").unwrap();
+
+        let mut p = Persistence::new();
+        let mut buffer = Buffer::from_text("initial");
+        p.with_file(path.clone(), &mut buffer, "initial");
+
+        // After with_file, mtime is recorded — no change detected
+        assert!(!p.mtime_changed());
+
+        // Autosave re-records mtime
+        let mut dirty = true;
+        let buffer = Buffer::from_text("updated");
+        p.autosave(&buffer, &mut dirty);
+        assert!(!p.mtime_changed());
+
+        // External write changes mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, "external").unwrap();
+        assert!(p.mtime_changed());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mtime_no_path_returns_false() {
+        let p = Persistence::new();
+        assert!(!p.mtime_changed());
     }
 }

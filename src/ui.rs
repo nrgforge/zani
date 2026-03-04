@@ -73,6 +73,17 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
         draw_find_bar(frame, fs, &ctx.effective_palette, area, find_opacity);
     }
 
+    // Conflict bar at bottom of screen
+    if ctx.external_change_pending {
+        draw_conflict_bar(frame, &ctx.effective_palette, area);
+    }
+
+    // Scratch quit overlay
+    if ctx.scratch_quit_active {
+        let opacity = ctx.scratch_quit_opacity.unwrap_or(1.0);
+        draw_scratch_quit_overlay(frame, &ctx.effective_palette, area, ctx.scratch_quit_selected, opacity);
+    }
+
     // Position cursor
     if let Some(fs) = ctx.find_state {
         // Place cursor in the find bar
@@ -139,6 +150,92 @@ fn draw_find_bar(
     let line = Line::from(spans);
     let paragraph = Paragraph::new(Text::from(vec![line])).style(bar_style);
     frame.render_widget(paragraph, bar_area);
+}
+
+/// Render the conflict bar at the bottom of the screen.
+fn draw_conflict_bar(frame: &mut ratatui::Frame, palette: &Palette, area: Rect) {
+    let bar_area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+    frame.render_widget(Clear, bar_area);
+
+    let bar_style = Style::default()
+        .fg(palette.foreground)
+        .bg(palette.background);
+    let accent_style = Style::default()
+        .fg(palette.accent_heading)
+        .bg(palette.background);
+
+    let mut spans = vec![
+        Span::styled(" File changed on disk. ", bar_style),
+        Span::styled("[R]", accent_style),
+        Span::styled(" Reload  ", bar_style),
+        Span::styled("[K]", accent_style),
+        Span::styled(" Keep mine", bar_style),
+    ];
+
+    let used: usize = spans.iter().map(|s| s.content.len()).sum();
+    if area.width as usize > used {
+        spans.push(Span::styled(
+            " ".repeat(area.width as usize - used),
+            bar_style,
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(Text::from(vec![line])).style(bar_style);
+    frame.render_widget(paragraph, bar_area);
+}
+
+/// Render the scratch quit overlay centered on screen.
+fn draw_scratch_quit_overlay(
+    frame: &mut ratatui::Frame,
+    palette: &Palette,
+    area: Rect,
+    selected: u8,
+    opacity: f64,
+) {
+    let overlay_width = 42u16.min(area.width);
+    let overlay_height = 5u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_area);
+
+    let effective_fg = crate::palette::interpolate(&palette.background, &palette.foreground, opacity);
+    let effective_accent = crate::palette::interpolate(&palette.background, &palette.accent_heading, opacity);
+
+    let normal_style = Style::default().fg(effective_fg).bg(palette.background);
+    let highlight_style = Style::default().fg(effective_accent).bg(palette.background);
+
+    let choices = ["[S] Save", "[R] Rename", "[D] Discard"];
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, label) in choices.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", normal_style));
+        }
+        let style = if i as u8 == selected { highlight_style } else { normal_style };
+        spans.push(Span::styled(*label, style));
+    }
+
+    let choices_line = Line::from(spans);
+    let text = Text::from(vec![
+        Line::from(""),
+        choices_line,
+        Line::from(""),
+    ]);
+
+    let effective_dim = crate::palette::interpolate(&palette.background, &palette.dimmed_foreground, opacity);
+    let block = Block::bordered()
+        .title(" Save draft? ")
+        .border_style(Style::default().fg(effective_dim))
+        .style(Style::default().bg(palette.background));
+
+    let paragraph = Paragraph::new(text)
+        .style(normal_style)
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(block);
+
+    frame.render_widget(paragraph, overlay_area);
 }
 
 /// All data needed to render the settings overlay, decoupled from App.
@@ -227,6 +324,12 @@ pub struct DrawContext<'a> {
     // Settings
     pub settings_visible: bool,
     pub settings_vm: Option<SettingsViewModel>,
+    // Conflict
+    pub external_change_pending: bool,
+    // Scratch quit prompt
+    pub scratch_quit_active: bool,
+    pub scratch_quit_selected: u8,
+    pub scratch_quit_opacity: Option<f64>,
 }
 
 impl<'a> DrawContext<'a> {
@@ -262,6 +365,10 @@ impl<'a> DrawContext<'a> {
             find_opacity: app.animations.overlay_progress(),
             settings_visible: app.settings.visible,
             settings_vm,
+            external_change_pending: app.external_change_pending(),
+            scratch_quit_active: app.scratch_quit_active(),
+            scratch_quit_selected: app.scratch_quit_selected(),
+            scratch_quit_opacity: app.scratch_quit_overlay_progress(),
         }
     }
 }

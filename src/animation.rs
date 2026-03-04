@@ -138,6 +138,7 @@ impl Easing {
 pub enum TransitionKind {
     Palette { from: Box<Palette>, to: Box<Palette> },
     OverlayOpacity,
+    ScratchQuitOverlay,
 }
 
 impl TransitionKind {
@@ -222,6 +223,13 @@ impl AnimationManager {
         self.transitions
             .iter()
             .find(|t| matches!(t.kind, TransitionKind::OverlayOpacity))
+            .map(|t| t.progress())
+    }
+
+    pub fn scratch_quit_overlay_progress(&self) -> Option<f64> {
+        self.transitions
+            .iter()
+            .find(|t| matches!(t.kind, TransitionKind::ScratchQuitOverlay))
             .map(|t| t.progress())
     }
 }

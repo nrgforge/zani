@@ -139,6 +139,9 @@ fn run(
             app.autosave();
         }
 
+        // Check for external file modifications
+        app.check_external_change();
+
         if app.should_quit() {
             app.autosave();
             break;
