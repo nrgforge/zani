@@ -36,7 +36,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &App, visual_lines: &[VisualLine], 
 
     // Build Writing Surface
     let surface = WritingSurface::new(&app.editor.buffer, &effective)
-        .column_width(app.viewport.column_width)
+        .column_width(app.viewport.effective_column_width)
         .scroll_offset(app.viewport.scroll_offset)
         .cursor(app.editor.cursor_line, app.editor.cursor_col)
         .focus_mode(app.dimming.focus_mode)

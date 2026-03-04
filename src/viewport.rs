@@ -10,6 +10,9 @@ pub struct Viewport {
     pub typewriter_vertical_offset: u16,
     pub scroll_mode: ScrollMode,
     pub column_width: u16,
+    /// Column width clamped to terminal width — used for wrapping and rendering.
+    /// Set by `App::tick()` each frame.
+    pub effective_column_width: u16,
     /// Cache for visual_lines: (buffer_version, column_width, result).
     visual_lines_cache: Option<(u64, u16, Rc<[VisualLine]>)>,
 }
@@ -27,6 +30,7 @@ impl Viewport {
             typewriter_vertical_offset: 0,
             scroll_mode: ScrollMode::Edge,
             column_width: 60,
+            effective_column_width: 60,
             visual_lines_cache: None,
         }
     }
@@ -36,13 +40,13 @@ impl Viewport {
     /// Rc::clone is O(1) — no heap allocation on cache hit.
     pub fn visual_lines(&mut self, buffer: &Buffer) -> Rc<[VisualLine]> {
         let ver = buffer.version();
-        let cw = self.column_width;
+        let cw = self.effective_column_width;
         if let Some((cv, ccw, ref cached)) = self.visual_lines_cache {
             if cv == ver && ccw == cw {
                 return Rc::clone(cached);
             }
         }
-        let result: Rc<[VisualLine]> = wrap::visual_lines_for_buffer(buffer, self.column_width).into();
+        let result: Rc<[VisualLine]> = wrap::visual_lines_for_buffer(buffer, cw).into();
         self.visual_lines_cache = Some((ver, cw, Rc::clone(&result)));
         result
     }

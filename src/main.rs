@@ -97,7 +97,8 @@ fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_cursor_shape: Option<CursorShape> = None;
     loop {
-        if let Some(out) = app.tick(terminal.size()?.height) {
+        let size = terminal.size()?;
+        if let Some(out) = app.tick(size.width, size.height) {
             terminal.draw(|frame| {
                 zani::ui::draw(frame, app, &out.visual_lines, out.sentence_bounds);
             })?;

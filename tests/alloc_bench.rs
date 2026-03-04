@@ -71,7 +71,7 @@ fn simulate_frame(app: &mut zani::app::App, area: ratatui::layout::Rect, buf: &m
 
     // tick() performs all pre-draw state updates
     app.mark_needs_redraw();
-    let out = app.tick(area.height).expect("should need redraw");
+    let out = app.tick(area.width, area.height).expect("should need redraw");
 
     // Build and render WritingSurface (the heaviest part)
     let sb = out.sentence_bounds;

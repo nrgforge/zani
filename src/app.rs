@@ -237,7 +237,7 @@ impl App {
         }
 
         // Route to editor for text editing keys
-        if self.editor.handle_key(code, modifiers, self.viewport.column_width) {
+        if self.editor.handle_key(code, modifiers, self.viewport.effective_column_width) {
             self.should_quit = true;
         }
     }
@@ -409,13 +409,16 @@ impl App {
 
     /// Run one frame of state updates: visual lines, scroll, dimming, render cache, animations.
     /// Returns None when no redraw is needed.
-    pub fn tick(&mut self, surface_height: u16) -> Option<TickOutput> {
+    pub fn tick(&mut self, surface_width: u16, surface_height: u16) -> Option<TickOutput> {
         let should_draw = self.needs_redraw || self.any_animation_active();
 
         if !should_draw {
             return None;
         }
 
+        // Clamp column width to available terminal width so text wraps
+        // instead of clipping when the window is narrower than column_width.
+        self.viewport.effective_column_width = self.viewport.column_width.min(surface_width);
         let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
         self.viewport.ensure_cursor_visible(
             self.editor.cursor_line,
