@@ -57,6 +57,20 @@ impl Palette {
         }
     }
 
+    /// Interpolate between two palettes. `progress` ranges from 0.0 (`from`) to 1.0 (`to`).
+    pub fn blend(from: &Palette, to: &Palette, progress: f64) -> Palette {
+        Palette {
+            name: to.name,
+            foreground: interpolate(&from.foreground, &to.foreground, progress),
+            background: interpolate(&from.background, &to.background, progress),
+            dimmed_foreground: interpolate(&from.dimmed_foreground, &to.dimmed_foreground, progress),
+            accent_heading: interpolate(&from.accent_heading, &to.accent_heading, progress),
+            accent_emphasis: interpolate(&from.accent_emphasis, &to.accent_emphasis, progress),
+            accent_link: interpolate(&from.accent_link, &to.accent_link, progress),
+            accent_code: interpolate(&from.accent_code, &to.accent_code, progress),
+        }
+    }
+
     /// Returns all built-in palettes.
     pub fn all() -> Vec<Self> {
         vec![Self::default_palette(), Self::inkwell(), Self::parchment()]

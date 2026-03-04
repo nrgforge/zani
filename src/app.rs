@@ -570,29 +570,7 @@ impl App {
     /// Returns the effective palette, accounting for any active crossfade animation.
     pub fn effective_palette(&self) -> Palette {
         if let Some((progress, from, _to)) = self.animations.palette_progress() {
-            use crate::palette::interpolate;
-            Palette {
-                name: self.palette.name,
-                foreground: interpolate(&from.foreground, &self.palette.foreground, progress),
-                background: interpolate(&from.background, &self.palette.background, progress),
-                dimmed_foreground: interpolate(
-                    &from.dimmed_foreground,
-                    &self.palette.dimmed_foreground,
-                    progress,
-                ),
-                accent_heading: interpolate(
-                    &from.accent_heading,
-                    &self.palette.accent_heading,
-                    progress,
-                ),
-                accent_emphasis: interpolate(
-                    &from.accent_emphasis,
-                    &self.palette.accent_emphasis,
-                    progress,
-                ),
-                accent_link: interpolate(&from.accent_link, &self.palette.accent_link, progress),
-                accent_code: interpolate(&from.accent_code, &self.palette.accent_code, progress),
-            }
+            Palette::blend(from, &self.palette, progress)
         } else {
             self.palette
         }
