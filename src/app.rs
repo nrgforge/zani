@@ -135,7 +135,7 @@ impl App {
             );
             // Find the index of the active palette in the full settings item list
             let items = SettingsItem::all();
-            let target = SettingsItem::Palette(self.active_palette_index());
+            let target = SettingsItem::Palette(self.palette.index_in_all());
             self.settings.cursor = items.iter().position(|i| *i == target).unwrap_or(0);
         }
     }
@@ -144,14 +144,6 @@ impl App {
     pub fn set_palette(&mut self, palette: Palette) {
         debug_assert!(palette.validate().is_ok(), "Palette {:?} failed validation", palette.name);
         self.palette = palette;
-    }
-
-    /// Find the current palette's position in Palette::all().
-    pub fn active_palette_index(&self) -> usize {
-        Palette::all()
-            .iter()
-            .position(|p| p.name == self.palette.name)
-            .unwrap_or(0)
     }
 
     /// Apply the currently selected settings item.
@@ -914,9 +906,9 @@ mod tests {
     }
 
     #[test]
-    fn active_palette_index_default_is_zero() {
+    fn palette_index_in_all_default_is_zero() {
         let app = App::new();
-        assert_eq!(app.active_palette_index(), 0);
+        assert_eq!(app.palette.index_in_all(), 0);
     }
 
     // === Scratch buffer ===

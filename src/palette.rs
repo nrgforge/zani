@@ -76,6 +76,14 @@ impl Palette {
         vec![Self::default_palette(), Self::inkwell(), Self::parchment()]
     }
 
+    /// Find this palette's position in `Palette::all()`.
+    pub fn index_in_all(&self) -> usize {
+        Self::all()
+            .iter()
+            .position(|p| p.name == self.name)
+            .unwrap_or(0)
+    }
+
     /// Validates that this palette satisfies Invariant 3:
     /// no pure black (#000000) or pure white (#FFFFFF).
     pub fn validate(&self) -> Result<(), PaletteError> {
@@ -319,5 +327,20 @@ mod tests {
         let b = Color::Rgb(200, 200, 200);
         assert_eq!(interpolate(&a, &b, -0.5), a, "negative t should clamp to first color");
         assert_eq!(interpolate(&a, &b, 1.5), b, "t > 1 should clamp to second color");
+    }
+
+    // === index_in_all ===
+
+    #[test]
+    fn index_in_all_finds_known_palette() {
+        let inkwell = Palette::inkwell();
+        assert_eq!(inkwell.index_in_all(), 1);
+    }
+
+    #[test]
+    fn index_in_all_unknown_returns_zero() {
+        let mut custom = Palette::default_palette();
+        custom.name = "Unknown";
+        assert_eq!(custom.index_in_all(), 0);
     }
 }
