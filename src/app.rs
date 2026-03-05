@@ -30,6 +30,15 @@ pub struct TickOutput {
 }
 
 /// Thin coordinator that owns subsystems and routes input between them.
+///
+/// ## Coordinator invariant
+///
+/// App must contain only routing (pure delegation) and coordination
+/// (orchestrating multiple subsystems). Domain logic — business rules,
+/// calculations, state machine transitions — belongs in the subsystem
+/// that owns the relevant state. When adding a method to App, ask:
+/// "Does this read/write state from only one subsystem?" If yes, it
+/// belongs on that subsystem, not here.
 pub struct App {
     pub(crate) editor: Editor,
     pub(crate) viewport: Viewport,
