@@ -107,6 +107,16 @@
 
 15. **Dimming effects compose by multiplication.** If multiple dimming sources exist, each produces an opacity factor in [0.0, 1.0]. The final opacity is their product. This ensures independent sources can never brighten text — they can only dim further.
 
+## Open Questions
+
+1. **Save error visibility.** Autosave failures are only visible in the Settings Layer. A writer whose document fails to save silently will not know unless they open settings. What is the right signal that preserves the "tool disappears" invariant? Options: brief auto-dismissing indicator on the Writing Surface, subtle color shift in the margin, or accept the current behavior as consistent with minimal chrome.
+
+2. **Focus mode cohesion.** Focus dimming logic spans four modules: `focus_mode.rs` (sentence parsing, opacity calculation), `dimming.rs` (orchestration), `writing_surface.rs` (per-character application), and `app.rs` (sentence bounds caching). Changing focus semantics requires edits across all four. Should all opacity computation consolidate into `DimmingState` so `WritingSurface` only applies pre-computed values?
+
+3. **WritingSurface builder contract.** WritingSurface has 11 `Option<>` fields that are always provided by the single production call site. The fallback paths (which allocate) only run in test helpers. Should these fields become required (pushing test helpers to supply minimal data), or is the current arrangement acceptable with comments on each fallback branch?
+
+4. **Integration test composition gap.** `focus_dimming_and_markdown_styling_compose` asserts that the result is `Color::Rgb` — a guarantee already provided by the type system for RGB inputs. It does not verify actual composed color values or rendering order. Should it render a real frame and assert specific cell colors, or be renamed to match what it actually verifies?
+
 ## Amendment Log
 
 | # | Date | Invariant | Change | Propagation |

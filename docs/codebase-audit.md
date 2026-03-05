@@ -1,9 +1,9 @@
 # Codebase Audit: Zani
 
-**Date:** 2026-03-04
+**Date:** 2026-03-04 (updated post-extraction)
 **Prior audits:** 2026-03-03, 2026-03-02 (post-extraction series)
 **Scope:** Whole codebase — all 27 source modules, integration tests, allocation benchmark, documentation, and configuration.
-**Coverage:** This analysis sampled strategically across all source files via ten independent analytical lenses operating across three levels (Macro, Meso, Micro). Deepest focus on `app.rs` (1,839 lines), `editor.rs` (1,681 lines), `ui.rs` (1,199 lines), `writing_surface.rs` (984 lines), `focus_mode.rs` (438 lines), `animation.rs` (437 lines), `persistence.rs` (202 lines), `main.rs`, `settings.rs`, `config.rs` (261 lines), all test modules, and documentation. Not covered: build artifacts, `.worktrees/` content, git object internals.
+**Coverage:** This analysis sampled strategically across all source files via ten independent analytical lenses operating across three levels (Macro, Meso, Micro). Deepest focus on `app.rs` (1,776 lines), `editor.rs`, `ui.rs`, `writing_surface.rs`, `focus_mode.rs`, `animation.rs`, `persistence.rs`, `main.rs`, `settings.rs`, `config.rs`, all test modules, and documentation. Not covered: build artifacts, `.worktrees/` content, git object internals.
 
 ## Executive Summary
 
@@ -13,9 +13,11 @@ Since the prior audit (2026-03-03), a focused series of changes has resolved 13 
 
 Two new features were added: (1) **external file change detection** with mtime tracking, auto-reload for clean buffers, and a conflict bar for dirty buffers; (2) **scratch quit prompt** giving users a Save/Rename/Discard choice when quitting a dirty scratch buffer. Both features use the new `DrawContext` and `ScratchQuitOverlay` animation infrastructure. A clipboard test isolation fix (`#[cfg(not(test))]` on `read_clipboard`) resolved 7 pre-existing test failures caused by system clipboard pollution.
 
-The remaining open findings are: (1) documentation drift — README test count is stale (says 354, actual is 368); (2) App continues to grow (now 1,839 lines) as the coordinator for new features (scratch quit, external change detection, conflict handling).
+A subsequent domain-logic extraction series removed 7 methods from App, moving them to the subsystems that own the relevant state: `Editor::reset_to_content()`, `Editor::can_vim_navigate()`, `Editor::set_editing_mode()`, `Palette::index_in_all()`, `Viewport::adjust_column_width()`, and `ScratchQuitState` (extracted to `settings.rs` with its own `handle_key` state machine). A coordinator invariant doc comment was added to App. App dropped from 1,839 to 1,776 lines. Three bug fixes followed: scratch quit now checks `buffer.has_content()` (not `dirty`), the dialog shows the generated filename, and rename renders as a standalone overlay outside settings.
 
-The codebase's strengths — domain modeling discipline, WCAG AA as a hard invariant, the pure vim state machine, version-keyed caching, the custom WritingSurface, and the `App::tick()` frame contract — remain intact and should be protected.
+The remaining open findings are: (1) documentation drift — README test count stale (says 354, actual is 380); (2) structural concerns — focus mode shotgun surgery (4 modules), WritingSurface builder speculative generality, integration test composition path gap; (3) product design decision — no user-visible save error indicator on the writing surface.
+
+The codebase's strengths — domain modeling discipline, WCAG AA as a hard invariant, the pure vim state machine, version-keyed caching, the custom WritingSurface, the `App::tick()` frame contract, and the coordinator invariant — remain intact and should be protected.
 
 ## Architectural Profile
 
@@ -23,7 +25,7 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 
 | Pattern | Confidence | Evidence |
 |---------|------------|----------|
-| **Coordinator-Subsystem** (App routes input to extracted subsystems) | High | `app.rs:L39` doc comment "thin coordinator"; 11 subsystems; `tick()` returns `TickOutput` |
+| **Coordinator-Subsystem** (App routes input to extracted subsystems) | High | `app.rs` coordinator invariant doc comment; 11 subsystems; 7 domain methods extracted to subsystems; `tick()` returns `TickOutput` |
 | **Immediate-Mode Game Loop** (tick → draw → poll → handle → repeat) | High | `main.rs:L92-145`; `App::tick()` returns `Option<TickOutput>` gating draw |
 | **Command Pattern (partial)** via `Action` enum | High | `vim_bindings.rs` pure `char → Action`; `editor.rs` `apply_action`; Standard mode partially bypasses |
 | **Builder Pattern with De Facto Required Arguments** on WritingSurface | Medium | 14 builder methods; single call site always invokes all 14; `Option<>` fields never `None` in production |
@@ -37,8 +39,8 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 |-----------|--------|
 | **Performance** | Prioritized by design (Rust, zero-GC, visual line cache, zero-allocation enforced via `alloc_bench.rs` across all focus modes). WritingSurface find-match O(matches) per character. `SettingsItem::all()` now returns `&'static [SettingsItem]`. |
 | **Usability** | Core strength — focus modes, curated palettes, WCAG AA enforcement, zero chrome, typewriter scrolling. New: scratch quit prompt (Save/Rename/Discard), external change conflict bar (Reload/Keep mine). |
-| **Modifiability** | Significantly improved — `DrawContext` decouples `draw()` from App internals; `column_width` duplication eliminated; animation decision rule documented. App still growing (1,839 lines). |
-| **Testability** | Strong — 368 unit tests, 3 integration, 1 alloc bench. Clipboard tests isolated via `#[cfg(not(test))]`. `hjkl` split into 4 tests. Autosave guard tested at both `should_autosave` and `autosave` layers. |
+| **Modifiability** | Significantly improved — `DrawContext` decouples `draw()` from App internals; `column_width` duplication eliminated; animation decision rule documented; 7 domain methods extracted from App to subsystems; coordinator invariant doc comment defines boundary rule. App at 1,776 lines (down from 1,839). |
+| **Testability** | Strong — 380 unit tests, 3 integration, 1 alloc bench. Clipboard tests isolated via `#[cfg(not(test))]`. `hjkl` split into 4 tests. Autosave guard tested at both layers. Config round-trip tests cover all 5 fields. ScratchQuitState has 5 dedicated tests. |
 | **Reliability** | Improved — `autosave()` now checks `load_error` directly (no bypass path). External file changes detected via mtime. Save errors visible in settings overlay. Scratch buffers get explicit quit prompt. |
 | **Operability** | Gap — no logging infrastructure; error handling uses three incompatible strategies (silent discard, field storage, propagation). |
 | **Accessibility** | Strong for active text (WCAG AA enforced in tests via `Palette::validate`); intentionally relaxed for dimmed text; interpolated dimming colors not validated. |
@@ -50,7 +52,7 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 3. **Vim as assumed user, Standard mode as accommodation** — Vim is `#[default]`, implemented first; Standard mode retrofitted. Settings layer uses hjkl unconditionally regardless of editing mode. (High confidence)
 4. **Composable dimming via flat data structures** — Two implementations explored; simpler flat `Vec<LineOpacity>` won over trait-based `LayerStack`. (High confidence)
 5. **OSC 52 clipboard write + subprocess clipboard read** — Writes via escape sequence (universal, zero-dependency); reads via platform-specific subprocesses with fallback to yank register. (High confidence)
-6. **Coordinator extraction via incremental refactoring** — Seven-commit series established the coordinator pattern. `App::tick()` consolidated frame logic. SettingsViewModel decoupled settings rendering. Ongoing. (High confidence)
+6. **Coordinator extraction via incremental refactoring** — Two extraction series: the first established `tick()` and SettingsViewModel; the second extracted 7 domain methods to subsystems and added a coordinator invariant doc comment. App dropped from ~3,300 to 1,776 lines. (High confidence)
 7. **Two animation systems for different scheduling semantics** — `AnimatedValue` provides chase-with-interruption for N simultaneous line opacities; `AnimationManager` provides discrete-with-prune for 2-3 global transitions (palette crossfade, overlay fade, scroll). Different domains, shared primitive. (Medium confidence — appears conscious but undocumented)
 
 ## Tradeoff Map
@@ -69,21 +71,19 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 
 ### Macro Level
 
-#### Finding: App — Coordinator Label vs. Reality
+#### Finding: App — Coordinator Label vs. Reality *(SIGNIFICANTLY IMPROVED)*
 
-**Observation:** App is documented as a "thin coordinator" but contains 1,616 lines including inline palette interpolation (`effective_palette`, L571-599), animation-start logic embedded in `settings_apply` (L128-133, L327-330), sentence-bounds caching, and six input-handler functions. The extraction series reduced App from 3,294 to 1,616 lines, but it remains the largest behavioral module.
-- `src/app.rs:L39` — doc comment says "Thin coordinator"
-- `src/app.rs:L156-195` — `settings_apply` encodes per-item dispatch logic including animation start, mode mutation, and delegation
-- `src/app.rs:L571-599` — palette interpolation implemented inline in App
-- `src/app.rs:L206-215` — `save_config` assembles Config from scattered subsystem fields
+**Update (2026-03-04):** A 7-commit extraction series removed domain logic methods from App and placed them in the subsystems that own the relevant state: `Editor::reset_to_content()`, `Editor::can_vim_navigate()`, `Editor::set_editing_mode()`, `Palette::index_in_all()`, `Viewport::adjust_column_width()`, and `ScratchQuitState` (full state machine extracted to `settings.rs`). A coordinator invariant doc comment was added to App defining the boundary rule: "Does this read/write state from only one subsystem? If yes, it belongs on that subsystem." App dropped from 1,839 to 1,776 lines.
 
-**Pattern:** God Object in Extraction. The App struct has accumulated responsibilities beyond routing — palette interpolation, animation lifecycle management, and settings semantics all live here. The "thin coordinator" label describes the aspiration, not the current state.
+**Remaining:** App still contains inline palette interpolation (`effective_palette`) and animation-start logic embedded in `settings_apply`. These are the most displaced concerns — both orchestrate multiple subsystems, making them borderline coordination vs. domain logic. `settings_apply` dispatches per-item logic including animation start, mode mutation, and delegation.
 
-**Tradeoff:** Optimizes for co-location of state (nothing requires indirection to reach) at the expense of modifiability. Adding a new feature requires understanding whether App is the right place, which it usually is, which grows App further.
+**Pattern:** God Object in Extraction — actively being addressed. The coordinator invariant comment now provides a decision rule for future developers.
 
-**Question:** What happens when two developers independently need to add a feature that both read and write through `settings_apply` — where is the boundary between their work?
+**Tradeoff:** Optimizes for co-location of state at the expense of modifiability. The extraction series materially reduced the problem; the remaining displaced logic is harder to extract because it genuinely coordinates multiple subsystems.
 
-**Stewardship:** The "thin coordinator" label is aspirational rather than descriptive. A good steward would treat it as a target. `effective_palette` computation and the animation-start logic in `settings_apply` are the most displaced — consider extracting them when the next feature in either area makes the current arrangement costly.
+**Question:** When the next feature touches `effective_palette` or `settings_apply`, does the coordinator invariant help the developer decide where the new code belongs?
+
+**Stewardship:** The extraction series and coordinator invariant are the right approach. Continue extracting when the next feature in either area makes the current arrangement costly. The remaining `effective_palette` and `settings_apply` logic are the next candidates.
 
 ---
 
@@ -107,20 +107,13 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 
 ---
 
-#### Finding: Configuration Scatter/Gather Without Full Round-Trip Verification
+#### Finding: Configuration Scatter/Gather Without Full Round-Trip Verification *(RESOLVED)*
 
-**Observation:** `App::from_config` distributes 5 config fields to 4 subsystems. `App::save_config` re-assembles them by reading from each subsystem. A round-trip test was added (`from_config_round_trip`, app.rs:L1577-1594) but it only checks `column_width` and `editing_mode`, not all config fields.
-- `src/app.rs:L69-107` — `from_config` distributes to palette, dimming, viewport, editor
-- `src/app.rs:L206-215` — `save_config` manually re-reads from subsystems
-- `src/config.rs:L115` — `"typewriter"` → `FocusMode::Off` migration (lossy)
+**Resolution (2026-03-04):** Both round-trip tests (`from_config_round_trip` and `save_config_round_trip`) now verify all 5 config fields: palette name, focus_mode, column_width, editing_mode, and scroll_mode. The `save_config_round_trip` test uses `assert_eq!(recovered, original)` to catch any scatter/gather asymmetry mechanically. The prior audit's claim that only 2 fields were tested was incorrect.
 
-**Pattern:** Lossy Configuration DTO with Manual Scatter/Gather — adding a new persisted setting requires changes in four locations.
+**Remaining concern:** Adding a new persisted setting still requires changes in four locations (Config struct, from_config, save_config, settings UI). The round-trip tests will catch asymmetry between from_config and save_config, but won't catch a missing field in the UI.
 
-**Tradeoff:** Optimizes for a stable, human-readable TOML format at the expense of maintainability (four edit sites per new setting).
-
-**Question:** What happens when a new subsystem is extracted that owns a piece of configuration — and the developer adds the field to `Config` but forgets to update `save_config`?
-
-**Stewardship:** The existing round-trip test is a good start. Extend it to cover all config fields (focus_mode, scroll_mode, palette_name) to catch scatter/gather asymmetry mechanically.
+**Stewardship:** Resolved. The round-trip tests provide the mechanical safety net recommended by the prior audit.
 
 ---
 
@@ -213,22 +206,18 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 
 ---
 
-#### Finding: Documentation Drift Persists *(PARTIALLY RESOLVED)*
+#### Finding: Documentation Drift Persists *(RESOLVED)*
 
-**Resolved items:**
+**Resolution (2026-03-04):** All items addressed:
 - `--inline` flag removed from code and scenarios
-- `ZANI_WINDOW` re-spawn guard now implemented
+- `ZANI_WINDOW` re-spawn guard implemented
 - ADR-004 amended for opacity-based approach
 - README architecture section updated with animation subsystem
+- README test count updated (354 → 380)
+- Plexus/llm-orc domain model entries already marked "_(Planned, not yet implemented.)_"
+- tmux scenario already marked `[Planned]`
 
-**Remaining:**
-- `README.md` test count stale — says 354, actual is 368
-- Domain model documents Plexus/llm-orc integrations with no implementation
-- tmux detection scenario not implemented
-
-**Pattern:** Documentation Drift — docs describing features that don't exist (aspirational) and counts that are stale.
-
-**Stewardship:** Update README test count. Mark unimplemented domain model entries and scenarios as "planned."
+**Stewardship:** Resolved. Keep domain model "planned" markers current as features are implemented or dropped.
 
 ### Micro Level
 
@@ -259,23 +248,23 @@ The codebase's strengths — domain modeling discipline, WCAG AA as a hard invar
 
 ---
 
-#### Finding: `--inline` Flag and `ZANI_WINDOW` Guard Are Feature Ghosts *(PARTIALLY RESOLVED)*
+#### Finding: `--inline` Flag and `ZANI_WINDOW` Guard Are Feature Ghosts *(MOSTLY RESOLVED)*
 
-**Resolution (2026-03-04):** `--inline` flag removed entirely. `ZANI_WINDOW` now serves as an active re-spawn guard — main.rs checks `std::env::var("ZANI_WINDOW").is_ok()` as early exit in the `--window` block, preventing unbounded recursion.
+**Resolution (2026-03-04):** `--inline` flag removed entirely. `ZANI_WINDOW` now serves as an active re-spawn guard — main.rs checks `std::env::var("ZANI_WINDOW").is_err()` as a gate in the `--window` block, preventing unbounded recursion.
 
-**Remaining:** Verify the re-spawn guard is tested. The `--inline` ghost is fully resolved.
+**Remaining:** The re-spawn guard is not unit tested. Testing it is awkward since it's in `main()` rather than a library function.
 
-**Stewardship:** Mostly resolved. Consider adding a test that the re-spawn guard exits early when the env var is set.
+**Stewardship:** The `--inline` ghost is fully resolved. The re-spawn guard test is low priority — the guard is a single `if` condition in `main()` and the risk of regression is minimal.
 
 ---
 
 #### Finding: `Persistence::is_scratch` Flag Has No Behavioral Consequence *(RESOLVED)*
 
-**Resolution (2026-03-04):** `is_scratch` now drives three distinct behaviors: (1) Ctrl+Q on dirty scratch opens the scratch quit prompt (Save/Rename/Discard); (2) Ctrl+Q on clean scratch silently deletes the draft file and exits; (3) non-scratch Ctrl+Q exits normally. Tests: `scratch_dirty_opens_prompt`, `scratch_clean_quits_silently`, `scratch_save_choice_quits`, `scratch_discard_choice_quits`, `non_scratch_quit_unchanged`.
+**Resolution (2026-03-04):** `is_scratch` now drives four distinct behaviors: (1) Ctrl+Q on scratch with content opens the scratch quit prompt (Save/Rename/Discard) showing the generated filename; (2) Ctrl+Q on empty scratch silently deletes the draft file and exits; (3) non-scratch Ctrl+Q exits normally; (4) Rename from scratch quit prompt renders a standalone rename overlay outside the settings panel. The prompt checks `buffer.has_content()` (not `dirty`) so autosaved drafts still trigger the dialog. Tests: `scratch_with_content_opens_prompt`, `scratch_empty_quits_silently`, `scratch_autosaved_with_content_still_opens_prompt`, `scratch_save_choice_quits`, `scratch_discard_choice_quits`, `non_scratch_quit_unchanged`.
 
 **Original observation:** `is_scratch` was set on construction and cleared after rename but had no behavioral effect on quit or save.
 
-**Stewardship:** Resolved. The flag now has full lifecycle significance.
+**Stewardship:** Resolved. The flag now has full lifecycle significance. The content-based check (not dirty-based) correctly handles the autosave interaction.
 
 ---
 
@@ -337,7 +326,7 @@ Decision rule documented in `animation.rs` module docs. The `ScratchQuitOverlay`
 
 #### Convergence: Silent Error Handling (3 lenses) *(PARTIALLY RESOLVED)*
 
-The autosave guard bypass is fixed (`autosave()` now checks `load_error`). Save errors are visible in settings overlay. The broader concern — no persistent status bar or auto-dismissing error indicator on the writing surface — remains a product design choice.
+The autosave guard bypass is fixed (`autosave()` now checks `load_error`). Save errors are visible in settings overlay. Scratch quit prompt uses content-based check to avoid autosave masking the dialog. The broader concern — no persistent status bar or auto-dismissing error indicator on the writing surface — remains a product design choice.
 
 #### Convergence: `ui::draw()` Bypassing Accessor Facade (3 lenses) *(RESOLVED)*
 
@@ -373,23 +362,23 @@ The autosave guard bypass is fixed (`autosave()` now checks `load_error`). Save 
 
 9. **Mtime-based external change detection.** The `Persistence` mtime tracking, auto-reload for clean buffers, and conflict bar for dirty buffers establish a solid file lifecycle model. The pattern of silently handling the common case (clean reload) while prompting for the ambiguous case (dirty conflict) is the right UX tradeoff.
 
-10. **Scratch quit prompt lifecycle.** The Save/Rename/Discard flow for scratch buffers, including `pending_quit_after_rename` for deferred quit, is a well-structured state machine that should serve as a template for future modal interactions.
+10. **Scratch quit prompt lifecycle.** The Save/Rename/Discard flow for scratch buffers, including `pending_quit_after_rename` for deferred quit, content-based activation (not dirty-based), and standalone rename overlay, is a well-structured state machine that should serve as a template for future modal interactions.
+
+11. **Coordinator invariant doc comment.** The decision rule on App — "Does this read/write state from only one subsystem? If yes, it belongs on that subsystem" — should be consulted when adding new methods to App.
 
 ### What to Improve (Prioritized)
 
-*Items 1-5, 7-9 from the prior audit are resolved. Remaining items:*
+*Most findings from prior audits are resolved. The domain-logic extraction series addressed App decomposition. Config round-trip tests already cover all fields. Remaining items:*
 
-1. **Fix documentation drift** — Low-cost, high-signal:
-   - Update README test count (says 354, actual is 368)
-   - Mark unimplemented scenarios as "planned"
-   - Mark Plexus/llm-orc domain model entries as "planned"
-   *(Finding: Documentation Drift)*
+1. ~~**Fix remaining documentation drift**~~ — Resolved. README test count updated. Plexus/llm-orc and tmux entries were already marked as planned.
 
 2. **Add user-visible save error indicator** — Save errors are currently only visible in the settings overlay. Consider a brief, auto-dismissing indicator on the writing surface when `save_error` is set. *(Finding: Silent Error Handling — product design decision)*
 
-3. **Continue App decomposition** — App is now 1,839 lines (up from 1,616), having absorbed scratch quit, external change detection, and conflict handling. The coordinator pattern is working but App growth continues. Consider extracting conflict/scratch-quit state into a dedicated module when the next feature touches this area. *(Finding: App — Coordinator Label vs. Reality)*
+3. **Consolidate focus mode logic** — Focus dimming spans 4 modules (focus_mode.rs, dimming.rs, app.rs, writing_surface.rs). Push all opacity-computation logic into `DimmingState` so WritingSurface only applies pre-computed opacities. *(Finding: Focus Mode Distributed)*
 
-4. **Add `ZANI_WINDOW` re-spawn guard test** — The guard is implemented but untested. A unit test verifying early exit when the env var is set would prevent regression. *(Finding: Feature Ghosts — partially resolved)*
+4. **Address WritingSurface builder speculative generality** — 11 `Option<>` fields are always provided in production. Either collapse to required fields or add comments at each `None =>` fallback branch. *(Finding: WritingSurface Builder)*
+
+5. **Strengthen integration test** — `focus_dimming_and_markdown_styling_compose` checks type shape, not color values. Either rename to match what it verifies, or extend to assert specific cell colors. *(Finding: Integration Test Composition Path)*
 
 ### Ongoing Practices
 

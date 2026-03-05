@@ -127,7 +127,7 @@ Ropey buffer → Writing Surface → ratatui cell buffer → Crossterm → termi
 ## Development
 
 ```
-cargo test       # 354 unit + 3 integration + 1 alloc bench
+cargo test       # 380 unit + 3 integration + 1 alloc bench
 cargo clippy     # Lint
 cargo run        # Run in development
 ```
