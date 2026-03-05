@@ -67,6 +67,20 @@ impl Editor {
             && matches!(self.vim_mode, Mode::Normal | Mode::Visual)
     }
 
+    /// Switch editing mode, adjusting vim state to match.
+    pub fn set_editing_mode(&mut self, mode: EditingMode) {
+        self.editing_mode = mode;
+        match mode {
+            EditingMode::Standard => {
+                self.vim_mode = Mode::Insert;
+                self.pending_normal_key = None;
+            }
+            EditingMode::Vim => {
+                self.vim_mode = Mode::Normal;
+            }
+        }
+    }
+
     /// Handle a key press for editor-level input (not overlays or Ctrl combos).
     /// Returns true if the app should quit.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, column_width: u16) -> bool {
@@ -1739,5 +1753,27 @@ mod tests {
         editor.editing_mode = EditingMode::Standard;
         editor.vim_mode = Mode::Normal;
         assert!(!editor.can_vim_navigate());
+    }
+
+    // === set_editing_mode ===
+
+    #[test]
+    fn set_editing_mode_standard_enters_insert() {
+        let mut editor = Editor::new();
+        editor.pending_normal_key = Some('g');
+        editor.set_editing_mode(EditingMode::Standard);
+        assert_eq!(editor.editing_mode, EditingMode::Standard);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+        assert_eq!(editor.pending_normal_key, None);
+    }
+
+    #[test]
+    fn set_editing_mode_vim_enters_normal() {
+        let mut editor = Editor::new();
+        editor.editing_mode = EditingMode::Standard;
+        editor.vim_mode = Mode::Insert;
+        editor.set_editing_mode(EditingMode::Vim);
+        assert_eq!(editor.editing_mode, EditingMode::Vim);
+        assert_eq!(editor.vim_mode, Mode::Normal);
     }
 }

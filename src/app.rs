@@ -99,10 +99,7 @@ impl App {
         app.dimming.focus_mode = config.focus_mode;
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
-        app.editor.editing_mode = config.editing_mode;
-        if config.editing_mode == EditingMode::Standard {
-            app.editor.vim_mode = Mode::Insert;
-        }
+        app.editor.set_editing_mode(config.editing_mode);
         if let Some(ref path) = file_path {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
@@ -149,16 +146,7 @@ impl App {
         };
         match item {
             SettingsItem::EditingMode(mode) => {
-                self.editor.editing_mode = mode;
-                match mode {
-                    EditingMode::Standard => {
-                        self.editor.vim_mode = Mode::Insert;
-                        self.editor.pending_normal_key = None;
-                    }
-                    EditingMode::Vim => {
-                        self.editor.vim_mode = Mode::Normal;
-                    }
-                }
+                self.editor.set_editing_mode(mode);
             }
             SettingsItem::Palette(idx) => {
                 if let Some(p) = Palette::all().into_iter().nth(idx) {
