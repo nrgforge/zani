@@ -188,13 +188,6 @@ impl App {
         }
     }
 
-    /// Adjust column width by delta, clamped to 20–120.
-    pub fn settings_adjust_column(&mut self, delta: i16) {
-        let new = self.viewport.column_width as i16 + delta;
-        let clamped = new.clamp(20, 120) as u16;
-        self.viewport.column_width = clamped;
-    }
-
     /// Persist current settings to config file (best-effort, errors silently ignored).
     fn save_config(&self) {
         let config = Config {
@@ -492,13 +485,13 @@ impl App {
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.settings_adjust_column(-1);
+                    self.viewport.adjust_column_width(-1);
                     self.save_config();
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.settings_adjust_column(1);
+                    self.viewport.adjust_column_width(1);
                     self.save_config();
                 }
             }
@@ -879,30 +872,6 @@ mod tests {
         let before = app.viewport.column_width;
         app.settings_apply();
         assert_eq!(app.viewport.column_width, before, "ColumnWidth row should not change width on Enter");
-    }
-
-    #[test]
-    fn settings_adjust_column_increases() {
-        let mut app = App::new();
-        assert_eq!(app.viewport.column_width, 60, "default column width should be 60");
-        app.settings_adjust_column(5);
-        assert_eq!(app.viewport.column_width, 65, "adjusting +5 should increase to 65");
-    }
-
-    #[test]
-    fn settings_adjust_column_clamps_low() {
-        let mut app = App::new();
-        app.viewport.column_width = 22;
-        app.settings_adjust_column(-5);
-        assert_eq!(app.viewport.column_width, 20, "column width should clamp at 20");
-    }
-
-    #[test]
-    fn settings_adjust_column_clamps_high() {
-        let mut app = App::new();
-        app.viewport.column_width = 118;
-        app.settings_adjust_column(5);
-        assert_eq!(app.viewport.column_width, 120, "column width should clamp at 120");
     }
 
     #[test]

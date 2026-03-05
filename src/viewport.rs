@@ -98,4 +98,39 @@ impl Viewport {
             }
         }
     }
+
+    /// Adjust column width by delta, clamped to 20–120.
+    pub fn adjust_column_width(&mut self, delta: i16) {
+        let new = self.column_width as i16 + delta;
+        self.column_width = new.clamp(20, 120) as u16;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjust_column_increases() {
+        let mut vp = Viewport::new();
+        assert_eq!(vp.column_width, 60);
+        vp.adjust_column_width(5);
+        assert_eq!(vp.column_width, 65);
+    }
+
+    #[test]
+    fn adjust_column_clamps_low() {
+        let mut vp = Viewport::new();
+        vp.column_width = 22;
+        vp.adjust_column_width(-5);
+        assert_eq!(vp.column_width, 20);
+    }
+
+    #[test]
+    fn adjust_column_clamps_high() {
+        let mut vp = Viewport::new();
+        vp.column_width = 118;
+        vp.adjust_column_width(5);
+        assert_eq!(vp.column_width, 120);
+    }
 }
