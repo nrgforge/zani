@@ -17,7 +17,7 @@ use crate::markdown_styling::CharStyle;
 use crate::palette::Palette;
 use crate::persistence::Persistence;
 use crate::scroll_mode::ScrollMode;
-use crate::settings::{RenameState, SettingsItem, SettingsState};
+use crate::settings::{RenameState, ScratchQuitAction, ScratchQuitState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, CursorShape, Mode};
 use crate::viewport::Viewport;
 use crate::wrap::VisualLine;
@@ -48,10 +48,7 @@ pub struct App {
     pub(crate) needs_redraw: bool,
     /// True when the file was modified externally while the buffer is dirty.
     external_change_pending: bool,
-    /// Whether the scratch quit prompt is showing.
-    scratch_quit_active: bool,
-    /// Selected choice in scratch quit prompt: 0=Save, 1=Rename, 2=Discard.
-    scratch_quit_selected: u8,
+    scratch_quit: ScratchQuitState,
     /// Quit after the rename completes (set when scratch quit → Rename).
     pending_quit_after_rename: bool,
 }
@@ -79,8 +76,7 @@ impl App {
             render_cache: RenderCache::new(),
             needs_redraw: true,
             external_change_pending: false,
-            scratch_quit_active: false,
-            scratch_quit_selected: 0,
+            scratch_quit: ScratchQuitState::new(),
             pending_quit_after_rename: false,
         }
     }
@@ -227,7 +223,7 @@ impl App {
         }
 
         // Scratch quit prompt — swallow all keys when active
-        if self.scratch_quit_active {
+        if self.scratch_quit.active {
             self.handle_scratch_quit_key(code);
             return;
         }
@@ -305,8 +301,7 @@ impl App {
             }
             KeyCode::Char('q') => {
                 if self.persistence.is_scratch && self.editor.dirty {
-                    self.scratch_quit_active = true;
-                    self.scratch_quit_selected = 0;
+                    self.scratch_quit.open();
                     self.animations.start(
                         crate::animation::TransitionKind::ScratchQuitOverlay,
                         Duration::from_millis(150),
@@ -422,35 +417,15 @@ impl App {
 
     /// Handle key input while the scratch quit prompt is active.
     fn handle_scratch_quit_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
-                self.scratch_quit_selected = if self.scratch_quit_selected == 0 { 2 } else { self.scratch_quit_selected - 1 };
-            }
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Down | KeyCode::Char('j') => {
-                self.scratch_quit_selected = if self.scratch_quit_selected == 2 { 0 } else { self.scratch_quit_selected + 1 };
-            }
-            KeyCode::Esc => {
-                self.scratch_quit_active = false;
-            }
-            KeyCode::Enter => {
-                self.apply_scratch_quit_choice(self.scratch_quit_selected);
-            }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
-                self.apply_scratch_quit_choice(0);
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                self.apply_scratch_quit_choice(1);
-            }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                self.apply_scratch_quit_choice(2);
-            }
-            _ => {} // swallow other keys
+        match self.scratch_quit.handle_key(code) {
+            ScratchQuitAction::None | ScratchQuitAction::Close => {}
+            ScratchQuitAction::Choose(choice) => self.apply_scratch_quit_choice(choice),
         }
     }
 
     /// Execute a scratch quit choice: 0=Save, 1=Rename, 2=Discard.
     fn apply_scratch_quit_choice(&mut self, choice: u8) {
-        self.scratch_quit_active = false;
+        self.scratch_quit.active = false;
         match choice {
             0 => {
                 // Save: autosave to the generated scratch name and quit
@@ -611,8 +586,8 @@ impl App {
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
 
     pub fn external_change_pending(&self) -> bool { self.external_change_pending }
-    pub fn scratch_quit_active(&self) -> bool { self.scratch_quit_active }
-    pub fn scratch_quit_selected(&self) -> u8 { self.scratch_quit_selected }
+    pub fn scratch_quit_active(&self) -> bool { self.scratch_quit.active }
+    pub fn scratch_quit_selected(&self) -> u8 { self.scratch_quit.selected }
     pub fn scratch_quit_overlay_progress(&self) -> Option<f64> { self.animations.scratch_quit_overlay_progress() }
     pub fn file_path(&self) -> Option<&Path> { self.persistence.file_path.as_deref() }
     pub fn save_error(&self) -> Option<&str> { self.persistence.save_error.as_deref() }
@@ -1733,7 +1708,7 @@ mod tests {
 
         app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
         assert!(app.should_quit);
-        assert!(!app.scratch_quit_active);
+        assert!(!app.scratch_quit.active);
     }
 
     #[test]
@@ -1744,7 +1719,7 @@ mod tests {
 
         app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
         assert!(!app.should_quit);
-        assert!(app.scratch_quit_active);
+        assert!(app.scratch_quit.active);
     }
 
     #[test]
@@ -1784,6 +1759,6 @@ mod tests {
 
         app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
         assert!(app.should_quit);
-        assert!(!app.scratch_quit_active);
+        assert!(!app.scratch_quit.active);
     }
 }

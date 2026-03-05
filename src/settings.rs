@@ -1,3 +1,5 @@
+use crossterm::event::KeyCode;
+
 use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::scroll_mode::ScrollMode;
@@ -201,10 +203,119 @@ impl Default for RenameState {
     }
 }
 
+/// Result of handling a key in the scratch quit prompt.
+pub enum ScratchQuitAction {
+    /// Key consumed, no state change beyond navigation.
+    None,
+    /// Prompt dismissed (Esc).
+    Close,
+    /// User chose an option: 0=Save, 1=Rename, 2=Discard.
+    Choose(u8),
+}
+
+/// Scratch quit prompt state: Save / Rename / Discard.
+pub struct ScratchQuitState {
+    pub active: bool,
+    /// Selected choice: 0=Save, 1=Rename, 2=Discard.
+    pub selected: u8,
+}
+
+impl ScratchQuitState {
+    pub fn new() -> Self {
+        Self { active: false, selected: 0 }
+    }
+
+    pub fn open(&mut self) {
+        self.active = true;
+        self.selected = 0;
+    }
+
+    pub fn handle_key(&mut self, code: KeyCode) -> ScratchQuitAction {
+        match code {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
+                self.selected = if self.selected == 0 { 2 } else { self.selected - 1 };
+                ScratchQuitAction::None
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Down | KeyCode::Char('j') => {
+                self.selected = if self.selected == 2 { 0 } else { self.selected + 1 };
+                ScratchQuitAction::None
+            }
+            KeyCode::Esc => {
+                self.active = false;
+                ScratchQuitAction::Close
+            }
+            KeyCode::Enter => ScratchQuitAction::Choose(self.selected),
+            KeyCode::Char('s') | KeyCode::Char('S') => ScratchQuitAction::Choose(0),
+            KeyCode::Char('r') | KeyCode::Char('R') => ScratchQuitAction::Choose(1),
+            KeyCode::Char('d') | KeyCode::Char('D') => ScratchQuitAction::Choose(2),
+            _ => ScratchQuitAction::None,
+        }
+    }
+}
+
+impl Default for ScratchQuitState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Convert a char index to a byte index in a UTF-8 string.
 fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .nth(char_idx)
         .map(|(i, _)| i)
         .unwrap_or(s.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === ScratchQuitState ===
+
+    #[test]
+    fn scratch_quit_nav_wraps_forward() {
+        let mut state = ScratchQuitState::new();
+        state.open();
+        state.selected = 2;
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn scratch_quit_nav_wraps_backward() {
+        let mut state = ScratchQuitState::new();
+        state.open();
+        state.selected = 0;
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn scratch_quit_esc_deactivates() {
+        let mut state = ScratchQuitState::new();
+        state.open();
+        assert!(state.active);
+        let action = state.handle_key(KeyCode::Esc);
+        assert!(!state.active);
+        assert!(matches!(action, ScratchQuitAction::Close));
+    }
+
+    #[test]
+    fn scratch_quit_enter_returns_selected() {
+        let mut state = ScratchQuitState::new();
+        state.open();
+        state.selected = 1;
+        let action = state.handle_key(KeyCode::Enter);
+        assert!(matches!(action, ScratchQuitAction::Choose(1)));
+    }
+
+    #[test]
+    fn scratch_quit_hotkeys() {
+        let mut state = ScratchQuitState::new();
+        state.open();
+        assert!(matches!(state.handle_key(KeyCode::Char('s')), ScratchQuitAction::Choose(0)));
+        assert!(matches!(state.handle_key(KeyCode::Char('R')), ScratchQuitAction::Choose(1)));
+        assert!(matches!(state.handle_key(KeyCode::Char('d')), ScratchQuitAction::Choose(2)));
+    }
 }
