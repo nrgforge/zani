@@ -75,6 +75,11 @@ impl Buffer {
         self.rope.len_chars()
     }
 
+    /// Whether the buffer contains any non-whitespace text.
+    pub fn has_content(&self) -> bool {
+        self.rope.chars().any(|c| !c.is_whitespace())
+    }
+
     /// Total number of lines (newline-delimited) in the buffer.
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()

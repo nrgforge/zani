@@ -81,7 +81,12 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     // Scratch quit overlay
     if ctx.scratch_quit_active {
         let opacity = ctx.scratch_quit_opacity.unwrap_or(1.0);
-        draw_scratch_quit_overlay(frame, &ctx.effective_palette, area, ctx.scratch_quit_selected, opacity);
+        draw_scratch_quit_overlay(frame, &ctx.effective_palette, area, ctx.scratch_quit_selected, opacity, ctx.scratch_quit_filename.as_deref());
+    }
+
+    // Standalone rename overlay (when triggered from scratch quit, not settings)
+    if ctx.rename_active && !ctx.settings_visible {
+        draw_rename_overlay(frame, &ctx.effective_palette, area, &ctx.rename_buf, ctx.rename_cursor);
     }
 
     // Position cursor
@@ -192,8 +197,13 @@ fn draw_scratch_quit_overlay(
     area: Rect,
     selected: u8,
     opacity: f64,
+    filename: Option<&str>,
 ) {
-    let overlay_width = 42u16.min(area.width);
+    let title = match filename {
+        Some(name) => format!(" {} ", name),
+        None => " Save draft? ".to_string(),
+    };
+    let overlay_width = (title.len() as u16 + 8).max(42).min(area.width);
     let overlay_height = 5u16.min(area.height);
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
     let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
@@ -226,13 +236,57 @@ fn draw_scratch_quit_overlay(
 
     let effective_dim = crate::palette::interpolate(&palette.background, &palette.dimmed_foreground, opacity);
     let block = Block::bordered()
-        .title(" Save draft? ")
+        .title(title)
         .border_style(Style::default().fg(effective_dim))
         .style(Style::default().bg(palette.background));
 
     let paragraph = Paragraph::new(text)
         .style(normal_style)
         .alignment(ratatui::layout::Alignment::Center)
+        .block(block);
+
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// Draw a standalone rename overlay (used when rename is triggered outside the settings layer).
+fn draw_rename_overlay(
+    frame: &mut ratatui::Frame,
+    palette: &Palette,
+    area: Rect,
+    buf: &str,
+    cursor: usize,
+) {
+    let overlay_width = 44u16.min(area.width);
+    let overlay_height = 3u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_area);
+
+    let normal_style = Style::default().fg(palette.foreground).bg(palette.background);
+    let cursor_style = Style::default().fg(palette.background).bg(palette.foreground);
+    let dim_style = Style::default().fg(palette.dimmed_foreground).bg(palette.background);
+
+    let chars: Vec<char> = buf.chars().collect();
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, &ch) in chars.iter().enumerate() {
+        let style = if i == cursor { cursor_style } else { normal_style };
+        spans.push(Span::styled(String::from(ch), style));
+    }
+    // Show cursor at end when cursor == buf len
+    if cursor >= chars.len() {
+        spans.push(Span::styled(" ", cursor_style));
+    }
+
+    let text = Text::from(Line::from(spans));
+    let block = Block::bordered()
+        .title(" Rename ")
+        .border_style(dim_style)
+        .style(Style::default().bg(palette.background));
+
+    let paragraph = Paragraph::new(text)
+        .style(normal_style)
         .block(block);
 
     frame.render_widget(paragraph, overlay_area);
@@ -326,10 +380,15 @@ pub struct DrawContext<'a> {
     pub settings_vm: Option<SettingsViewModel>,
     // Conflict
     pub external_change_pending: bool,
+    // Inline rename (standalone, outside settings)
+    pub rename_active: bool,
+    pub rename_buf: String,
+    pub rename_cursor: usize,
     // Scratch quit prompt
     pub scratch_quit_active: bool,
     pub scratch_quit_selected: u8,
     pub scratch_quit_opacity: Option<f64>,
+    pub scratch_quit_filename: Option<String>,
 }
 
 impl<'a> DrawContext<'a> {
@@ -366,9 +425,16 @@ impl<'a> DrawContext<'a> {
             settings_visible: app.settings.visible,
             settings_vm,
             external_change_pending: app.external_change_pending(),
+            rename_active: app.rename.active,
+            rename_buf: app.rename.buf.clone(),
+            rename_cursor: app.rename.cursor,
             scratch_quit_active: app.scratch_quit_active(),
             scratch_quit_selected: app.scratch_quit_selected(),
             scratch_quit_opacity: app.scratch_quit_overlay_progress(),
+            scratch_quit_filename: app.file_path()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string()),
         }
     }
 }

@@ -297,15 +297,15 @@ impl App {
                 self.editor.apply_action(Action::SelectAll);
             }
             KeyCode::Char('q') => {
-                if self.persistence.is_scratch && self.editor.dirty {
+                if self.persistence.is_scratch && self.editor.buffer.has_content() {
                     self.scratch_quit.open();
                     self.animations.start(
                         crate::animation::TransitionKind::ScratchQuitOverlay,
                         Duration::from_millis(150),
                         crate::animation::Easing::EaseOut,
                     );
-                } else if self.persistence.is_scratch && !self.editor.dirty {
-                    // Clean scratch: delete draft file, quit silently
+                } else if self.persistence.is_scratch {
+                    // Empty scratch: delete draft file, quit silently
                     if let Some(ref path) = self.persistence.file_path {
                         let _ = std::fs::remove_file(path);
                     }
@@ -1696,12 +1696,12 @@ mod tests {
     // === Scratch quit prompt ===
 
     #[test]
-    fn scratch_clean_quits_silently() {
+    fn scratch_empty_quits_silently() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new();
         app.persistence.file_path = Some(dir.path().join("draft.md"));
         app.persistence.is_scratch = true;
-        app.editor.dirty = false;
+        // Buffer is empty (default) — no content worth saving
 
         app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
         assert!(app.should_quit);
@@ -1709,14 +1709,29 @@ mod tests {
     }
 
     #[test]
-    fn scratch_dirty_opens_prompt() {
+    fn scratch_with_content_opens_prompt() {
         let mut app = App::new();
         app.persistence.is_scratch = true;
-        app.editor.dirty = true;
+        app.editor.buffer = Buffer::from_text("some writing\n");
 
         app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
         assert!(!app.should_quit);
         assert!(app.scratch_quit.active);
+    }
+
+    #[test]
+    fn scratch_autosaved_with_content_still_opens_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        app.persistence.file_path = Some(dir.path().join("draft.md"));
+        app.persistence.is_scratch = true;
+        app.editor.buffer = Buffer::from_text("some writing\n");
+        // Simulate autosave having cleared dirty
+        app.editor.dirty = false;
+
+        app.handle_key(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(!app.should_quit, "should not quit silently when buffer has content");
+        assert!(app.scratch_quit.active, "should show save/discard prompt");
     }
 
     #[test]
