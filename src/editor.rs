@@ -828,6 +828,16 @@ impl Editor {
         }
         Some(self.buffer.slice_to_string(start_idx, end_idx))
     }
+
+    /// Replace the buffer with new content and reset all editing state.
+    pub fn reset_to_content(&mut self, content: &str) {
+        self.buffer = Buffer::from_text(content);
+        self.dirty = false;
+        self.cursor_line = 0;
+        self.cursor_col = 0;
+        self.undo_history = UndoHistory::new();
+        self.selection_anchor = None;
+    }
 }
 
 #[cfg(test)]
@@ -1677,5 +1687,27 @@ mod tests {
         assert_ne!(editor.buffer.to_string(), original);
         editor.apply_action(Action::Undo);
         assert_eq!(editor.buffer.to_string(), original);
+    }
+
+    // === reset_to_content ===
+
+    #[test]
+    fn reset_to_content_clears_state() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("old text\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 4;
+        editor.vim_mode = Mode::Insert;
+        editor.insert_char('x'); // populate undo history
+        editor.dirty = true;
+        editor.selection_anchor = Some((0, 2));
+
+        editor.reset_to_content("new content\n");
+
+        assert_eq!(editor.buffer.to_string(), "new content\n");
+        assert!(!editor.dirty);
+        assert_eq!(editor.cursor_line, 0);
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.selection_anchor, None);
     }
 }

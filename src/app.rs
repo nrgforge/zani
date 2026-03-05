@@ -599,12 +599,7 @@ impl App {
         };
         match std::fs::read_to_string(path) {
             Ok(content) => {
-                self.editor.buffer = Buffer::from_text(&content);
-                self.editor.dirty = false;
-                self.editor.cursor_line = 0;
-                self.editor.cursor_col = 0;
-                self.editor.undo_history = crate::undo::UndoHistory::new();
-                self.editor.selection_anchor = None;
+                self.editor.reset_to_content(&content);
                 self.persistence.record_mtime();
                 self.needs_redraw = true;
             }
