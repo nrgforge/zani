@@ -284,8 +284,8 @@ impl App {
         let dir = match code {
             KeyCode::Up => Direction::Up,
             KeyCode::Down => Direction::Down,
-            KeyCode::Char('k') if self.can_vim_navigate() => Direction::Up,
-            KeyCode::Char('j') if self.can_vim_navigate() => Direction::Down,
+            KeyCode::Char('k') if self.editor.can_vim_navigate() => Direction::Up,
+            KeyCode::Char('j') if self.editor.can_vim_navigate() => Direction::Down,
             _ => return false,
         };
 
@@ -301,12 +301,6 @@ impl App {
             self.editor.move_cursor_visual(dir, &visual_lines);
         }
         true
-    }
-
-    /// Whether the current mode allows vim navigation keys (j/k in Normal/Visual).
-    fn can_vim_navigate(&self) -> bool {
-        self.editor.editing_mode == EditingMode::Vim
-            && matches!(self.editor.vim_mode, Mode::Normal | Mode::Visual)
     }
 
     /// Handle Ctrl+key combinations.

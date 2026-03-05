@@ -61,6 +61,12 @@ impl Editor {
         self.vim_mode.cursor_shape()
     }
 
+    /// Whether the current mode allows vim navigation keys (j/k in Normal/Visual).
+    pub fn can_vim_navigate(&self) -> bool {
+        self.editing_mode == EditingMode::Vim
+            && matches!(self.vim_mode, Mode::Normal | Mode::Visual)
+    }
+
     /// Handle a key press for editor-level input (not overlays or Ctrl combos).
     /// Returns true if the app should quit.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, column_width: u16) -> bool {
@@ -1709,5 +1715,29 @@ mod tests {
         assert_eq!(editor.cursor_line, 0);
         assert_eq!(editor.cursor_col, 0);
         assert_eq!(editor.selection_anchor, None);
+    }
+
+    // === can_vim_navigate ===
+
+    #[test]
+    fn can_vim_navigate_checks_mode_and_editing_mode() {
+        let mut editor = Editor::new();
+        // Vim + Normal → true
+        editor.editing_mode = EditingMode::Vim;
+        editor.vim_mode = Mode::Normal;
+        assert!(editor.can_vim_navigate());
+
+        // Vim + Visual → true
+        editor.vim_mode = Mode::Visual;
+        assert!(editor.can_vim_navigate());
+
+        // Vim + Insert → false
+        editor.vim_mode = Mode::Insert;
+        assert!(!editor.can_vim_navigate());
+
+        // Standard + Normal → false
+        editor.editing_mode = EditingMode::Standard;
+        editor.vim_mode = Mode::Normal;
+        assert!(!editor.can_vim_navigate());
     }
 }
