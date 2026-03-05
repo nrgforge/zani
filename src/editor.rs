@@ -257,9 +257,10 @@ impl Editor {
                 }
             }
             Action::MoveCursor(dir) => {
-                // Left/Right don't need column_width; Up/Down use a default.
-                // From App, vertical moves are handled via move_cursor_visual
-                // with the real column_width before reaching apply_action.
+                // Left/Right ignore column_width. Up/Down use 60 as a default,
+                // but this path is unreachable through App for vertical moves:
+                // App::try_handle_vertical_move intercepts j/k and uses
+                // move_cursor_visual with the real column width.
                 self.move_cursor_with_width(dir, 60);
             }
             Action::LineStart => {
@@ -518,12 +519,12 @@ impl Editor {
     /// Try system clipboard first, fall back to yank register.
     /// Syncs clipboard content into yank_register so subsequent pastes use it.
     fn resolve_paste_text(&mut self) -> Option<String> {
+        #[cfg(not(test))]
         if let Some(text) = clipboard::read_clipboard() {
             self.yank_register = Some(text.clone());
-            Some(text)
-        } else {
-            self.yank_register.clone()
+            return Some(text);
         }
+        self.yank_register.clone()
     }
 
     /// Calculate the character index in the buffer for the current cursor position.

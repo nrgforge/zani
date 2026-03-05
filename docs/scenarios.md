@@ -179,12 +179,14 @@
 **When** Zani starts with `--window`
 **Then** it runs inline without spawning another window
 
-### Scenario: Inline Mode on --inline flag
+### Scenario: Inline Mode on --inline flag `[Superseded by ADR-007]`
 **Given** the writer runs `zani --inline document.md`
 **When** Zani starts
 **Then** it runs inside the current terminal without spawning a new window
 
-### Scenario: Inline Mode inside terminal multiplexer
+> Inline is the default behavior; `--inline` flag removed.
+
+### Scenario: Inline Mode inside terminal multiplexer `[Planned]`
 **Given** the writer is inside tmux or screen
 **When** the writer runs `zani document.md`
 **Then** Zani runs inline in the current pane
@@ -278,13 +280,13 @@
 
 ## Feature: External Integrations (Pull-Only)
 
-### Scenario: Plexus ingest is triggered on demand
+### Scenario: Plexus ingest is triggered on demand `[Planned]`
 **Given** the writer has text in the Document
 **When** the writer invokes the Ingest action via hotkey
 **Then** the Document content (or selection) is sent to Plexus via its ingest pipeline
 **And** no ingest occurs without explicit invocation
 
-### Scenario: llm-orc ensemble is invoked on demand
+### Scenario: llm-orc ensemble is invoked on demand `[Planned]`
 **Given** the writer has text in the Document
 **When** the writer invokes an ensemble via hotkey
 **Then** the selected ensemble runs against the Document content (or selection)

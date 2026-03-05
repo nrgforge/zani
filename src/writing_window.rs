@@ -63,7 +63,6 @@ pub fn spawn_command(
     zani_args: &[&str],
 ) -> Option<Vec<String>> {
     let inline_args: Vec<String> = std::iter::once(binary.to_string())
-        .chain(std::iter::once("--inline".to_string()))
         .chain(zani_args.iter().map(|s| s.to_string()))
         .collect();
 
@@ -182,10 +181,10 @@ mod tests {
     }
 
     #[test]
-    fn spawn_command_includes_inline_and_font() {
+    fn spawn_command_includes_binary_and_font() {
         let config = WindowConfig::default();
         let cmd = spawn_command(&Terminal::Ghostty, &config, "/usr/bin/zani", &["draft.md"]).unwrap();
-        assert!(cmd.contains(&"--inline".to_string()));
+        assert!(!cmd.contains(&"--inline".to_string()));
         assert!(cmd.contains(&"/usr/bin/zani".to_string()));
         assert!(cmd.contains(&"draft.md".to_string()));
         assert!(cmd.iter().any(|s| s.contains("font-family")));

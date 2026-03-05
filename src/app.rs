@@ -129,7 +129,7 @@ impl App {
         if self.settings.visible {
             use crate::animation::{Easing, TransitionKind};
             self.animations.start(
-                TransitionKind::OverlayOpacity,
+                TransitionKind::SettingsOverlay,
                 Duration::from_millis(150),
                 Easing::EaseOut,
             );
@@ -356,7 +356,7 @@ impl App {
                         self.editor.cursor_col,
                     ));
                     self.animations.start(
-                        crate::animation::TransitionKind::OverlayOpacity,
+                        crate::animation::TransitionKind::FindOverlay,
                         Duration::from_millis(150),
                         crate::animation::Easing::EaseOut,
                     );
@@ -633,7 +633,8 @@ impl App {
     pub fn find_state(&self) -> Option<&FindState> { self.find_state.as_ref() }
     pub fn settings_visible(&self) -> bool { self.settings.visible }
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
-    pub fn overlay_progress(&self) -> Option<f64> { self.animations.overlay_progress() }
+    pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
+    pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
 
     pub fn external_change_pending(&self) -> bool { self.external_change_pending }
     pub fn scratch_quit_active(&self) -> bool { self.scratch_quit_active }
@@ -1286,7 +1287,7 @@ mod tests {
     fn overlay_animation_starts_on_settings_open() {
         let mut app = App::new();
         app.toggle_settings();
-        assert!(app.animations.overlay_progress().is_some());
+        assert!(app.animations.settings_overlay_progress().is_some());
     }
 
     #[test]
@@ -1297,7 +1298,7 @@ mod tests {
         app.animations.transitions.clear();
         app.settings.dismiss();
         // No overlay animation started on dismiss
-        assert!(app.animations.overlay_progress().is_none());
+        assert!(app.animations.settings_overlay_progress().is_none());
     }
 
     // === Task 7: DimLayer wired into App ===

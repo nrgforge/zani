@@ -10,7 +10,7 @@ Terminals do not support true per-character opacity. The ANSI `dim` attribute ex
 
 ## Decision
 
-Dimming is implemented as per-character foreground color interpolation toward the background color. The Writing Surface calculates each character's foreground color based on its distance from the Active Region.
+Dimming is implemented as per-character foreground color interpolation toward the background color. The Writing Surface calculates each character's foreground color based on its opacity level (set per-line by the active Focus Mode).
 
 Example interpolation for the default Palette:
 - Active text: `rgb(220, 215, 205)` — full brightness, warm off-white
@@ -18,7 +18,7 @@ Example interpolation for the default Palette:
 - 2+ paragraphs away: `rgb(100, 97, 92)` — ~30% brightness
 - Background: `rgb(40, 38, 35)` — warm dark gray
 
-The interpolation curve, number of gradient steps, and distance metric (sentence or paragraph) vary by the active Focus Mode variant.
+The interpolation curve, number of gradient steps, and scope (sentence or paragraph) vary by the active Focus Mode variant.
 
 ## Consequences
 

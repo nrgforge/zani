@@ -268,7 +268,7 @@ impl SettingsViewModel {
             .unwrap_or("[scratch]")
             .to_string();
         Self {
-            overlay_opacity: app.animations.overlay_progress().unwrap_or(1.0),
+            overlay_opacity: app.animations.settings_overlay_progress().unwrap_or(1.0),
             editing_mode: app.editor.editing_mode,
             vim_mode: app.editor.vim_mode,
             palette_name: app.palette.name,
@@ -362,7 +362,7 @@ impl<'a> DrawContext<'a> {
             visual_lines,
             sentence_bounds,
             find_state: app.find_state.as_ref(),
-            find_opacity: app.animations.overlay_progress(),
+            find_opacity: app.animations.find_overlay_progress(),
             settings_visible: app.settings.visible,
             settings_vm,
             external_change_pending: app.external_change_pending(),

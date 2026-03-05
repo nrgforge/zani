@@ -23,8 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .next_back()
         .map(PathBuf::from);
 
-    // Writing Window: only spawn a dedicated window when explicitly requested
-    if window_flag {
+    // Writing Window: only spawn a dedicated window when explicitly requested.
+    // Skip if already inside a Writing Window (ZANI_WINDOW=1) to prevent re-spawning.
+    if window_flag && std::env::var("ZANI_WINDOW").is_err() {
         let env_fn = |key: &str| -> Option<String> { std::env::var(key).ok() };
         let detected = writing_window::detect_terminal(&env_fn);
         let config = writing_window::WindowConfig::default();

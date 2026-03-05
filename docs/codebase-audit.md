@@ -1,304 +1,402 @@
 # Codebase Audit: Zani
 
-**Date:** 2026-02-28
-**Scope:** Whole codebase — all 22 source files, integration tests, documentation, and configuration.
-**Coverage:** This analysis sampled strategically across all source files, with deepest focus on `app.rs` (3,294 lines), `main.rs` (170 lines), `writing_surface.rs` (712 lines), `focus_mode.rs` (535 lines), `ui.rs` (962 lines), and all ADRs and domain model documentation. It is representative, not exhaustive. Test code was sampled across all 19 inline test modules and the integration test suite.
-
----
+**Date:** 2026-03-04
+**Prior audits:** 2026-03-03, 2026-03-02 (post-extraction series)
+**Scope:** Whole codebase — all 27 source modules, integration tests, allocation benchmark, documentation, and configuration.
+**Coverage:** This analysis sampled strategically across all source files via ten independent analytical lenses operating across three levels (Macro, Meso, Micro). Deepest focus on `app.rs` (1,839 lines), `editor.rs` (1,681 lines), `ui.rs` (1,199 lines), `writing_surface.rs` (984 lines), `focus_mode.rs` (438 lines), `animation.rs` (437 lines), `persistence.rs` (202 lines), `main.rs`, `settings.rs`, `config.rs` (261 lines), all test modules, and documentation. Not covered: build artifacts, `.worktrees/` content, git object internals.
 
 ## Executive Summary
 
-Zani is a terminal-based creative writing application built in Rust with ratatui, crossterm, and ropey. At ~9,000 lines across 22 source files, it is a well-scoped, single-purpose tool with a clear architectural vision: zero-chrome distraction-free writing with focus modes, curated color palettes, vim keybindings, and smart typography. The codebase benefits from unusually thorough design documentation — 8 ADRs, a domain model with 15 invariants, and an amendment log tracking design pivots.
+Zani is a ~10,500-line Rust terminal writing application built on ratatui, crossterm, and ropey. It implements a distraction-free creative writing environment with curated color palettes, sentence/paragraph focus dimming, vim modal editing, markdown-as-native-format, and smooth animations — all rendered through a custom `WritingSurface` widget that bypasses ratatui's built-in paragraph rendering for per-character styling control.
 
-The actual architecture is a layered monolith centered on a single `App` struct (3,294 lines, ~34% of source) that has accumulated responsibilities across cursor logic, file I/O, undo history, dimming orchestration, settings state, rename state, and input dispatch. This God Object pattern is the codebase's primary structural pressure point — it does not yet block progress, but the cost of each new feature is increasing as unrelated concerns interleave. The rendering boundary (UI/WritingSurface) is clean and well-designed, using a builder pattern that enforces one-shot render semantics. Key dispatch was consolidated into the library crate (`App::handle_key`), and Ctrl-chord handlers now route through the `Action` command pattern with full undo coverage.
+Since the prior audit (2026-03-03), a focused series of changes has resolved 13 of 15 findings. The highest-convergence finding — `column_width` duplicated between Editor and Viewport — was eliminated by removing the field from Editor entirely. `ui::draw()` was decoupled from `App` via a new `DrawContext` struct, completing the pattern started by `SettingsViewModel`. The `OverlayOpacity` shared animation slot was split into `SettingsOverlay`, `FindOverlay`, and `ScratchQuitOverlay`. The autosave `load_error` guard was moved into `autosave()` itself, closing the Ctrl+S bypass. `SettingsItem::all()` was converted to a `const` array. The `hjkl_moves_cursor` eager test was split into four. `alloc_bench` now asserts zero allocations for all three focus modes. The animation decision rule was documented. The `--inline` feature ghost was removed and `ZANI_WINDOW` now serves as an active re-spawn guard.
 
-The codebase shows evidence of healthy design pivots — Typewriter mode moved from FocusMode to ScrollMode, sentence dimming migrated from per-line layers to per-character fade queues. Previous evolutionary debris (vestigial fields, dead methods, stale documentation) has been cleaned up. The 341-test suite is comprehensive in unit coverage with assertion messages on all multi-assertion tests.
+Two new features were added: (1) **external file change detection** with mtime tracking, auto-reload for clean buffers, and a conflict bar for dirty buffers; (2) **scratch quit prompt** giving users a Save/Rename/Discard choice when quitting a dirty scratch buffer. Both features use the new `DrawContext` and `ScratchQuitOverlay` animation infrastructure. A clipboard test isolation fix (`#[cfg(not(test))]` on `read_clipboard`) resolved 7 pre-existing test failures caused by system clipboard pollution.
 
----
+The remaining open findings are: (1) documentation drift — README test count is stale (says 354, actual is 368); (2) App continues to grow (now 1,839 lines) as the coordinator for new features (scratch quit, external change detection, conflict handling).
+
+The codebase's strengths — domain modeling discipline, WCAG AA as a hard invariant, the pure vim state machine, version-keyed caching, the custom WritingSurface, and the `App::tick()` frame contract — remain intact and should be protected.
 
 ## Architectural Profile
 
 ### Patterns Identified
 
-| Pattern | Confidence | Summary |
-|---------|-----------|---------|
-| God Object (`App`) | High | 33 public fields, 6+ responsibilities, ~34% of source |
-| Layered Architecture (with leaky input boundary) | High | Rendering layer clean; persistence and input split across layers |
-| Command Pattern (complete) | High | 23 `Action` variants, all mutations routed through `apply_action` |
-| Builder Pattern (`WritingSurface`) | High | Clean one-shot render construction, well-applied |
-| Composable Opacity Layers | High | Multiplicative dimming with chase-based animation, backed by ADR-008 |
-| Data Transfer Object (`Config`) | Medium | Serialization boundary decoupled from `App`, with migration logic |
-| Code as Configuration (Palettes) | Medium | Static Rust structs, no runtime extension path |
+| Pattern | Confidence | Evidence |
+|---------|------------|----------|
+| **Coordinator-Subsystem** (App routes input to extracted subsystems) | High | `app.rs:L39` doc comment "thin coordinator"; 11 subsystems; `tick()` returns `TickOutput` |
+| **Immediate-Mode Game Loop** (tick → draw → poll → handle → repeat) | High | `main.rs:L92-145`; `App::tick()` returns `Option<TickOutput>` gating draw |
+| **Command Pattern (partial)** via `Action` enum | High | `vim_bindings.rs` pure `char → Action`; `editor.rs` `apply_action`; Standard mode partially bypasses |
+| **Builder Pattern with De Facto Required Arguments** on WritingSurface | Medium | 14 builder methods; single call site always invokes all 14; `Option<>` fields never `None` in production |
+| **Demand-Driven Caching** via `Buffer::version()` | High | Monotonic `u64` drives `RenderCache`, visual line cache, sentence bounds cache invalidation |
+| **Parallel Domain-Specific Animation Systems** (documented) | High | `AnimationManager` for palette/overlay; `AnimatedValue`/`DimLayer` for per-line dimming; decision rule in `animation.rs` module docs |
+| **ViewModel Extraction** (DrawContext + SettingsViewModel) | High | `draw()` takes `&DrawContext` (not `&App`); `draw_settings_layer` takes `SettingsViewModel`; full decoupling achieved |
 
 ### Quality Attribute Fitness
 
-| Attribute | Assessment |
-|-----------|-----------|
-| **Usability** | Primary optimization target — zero-chrome, focus modes, curated palettes, graceful degradation |
-| **Performance / Latency** | Architecturally valued (Invariant 6, Rust, zero-GC) with wrap caching and O(log n) word/sentence navigation via rope-backed `Buffer` API |
-| **Testability** | Well-served — 341 unit tests across 19 modules, all key dispatch testable in library crate, assertion messages on all multi-assertion tests |
-| **Modifiability** | Under pressure from `App` gravity — all features flow through one struct |
-| **Reliability** | Silent error absorption on autosave — failed writes discard errors, prevent user awareness |
-| **Operability** | Minimal by design — no logging, no diagnostics, consistent with "tool disappears" philosophy |
-| **Graceful Degradation** | Structurally embedded (Invariant 11) — 3-tier color profile, terminal fallbacks, OSC 52 silent fail |
+| Attribute | Status |
+|-----------|--------|
+| **Performance** | Prioritized by design (Rust, zero-GC, visual line cache, zero-allocation enforced via `alloc_bench.rs` across all focus modes). WritingSurface find-match O(matches) per character. `SettingsItem::all()` now returns `&'static [SettingsItem]`. |
+| **Usability** | Core strength — focus modes, curated palettes, WCAG AA enforcement, zero chrome, typewriter scrolling. New: scratch quit prompt (Save/Rename/Discard), external change conflict bar (Reload/Keep mine). |
+| **Modifiability** | Significantly improved — `DrawContext` decouples `draw()` from App internals; `column_width` duplication eliminated; animation decision rule documented. App still growing (1,839 lines). |
+| **Testability** | Strong — 368 unit tests, 3 integration, 1 alloc bench. Clipboard tests isolated via `#[cfg(not(test))]`. `hjkl` split into 4 tests. Autosave guard tested at both `should_autosave` and `autosave` layers. |
+| **Reliability** | Improved — `autosave()` now checks `load_error` directly (no bypass path). External file changes detected via mtime. Save errors visible in settings overlay. Scratch buffers get explicit quit prompt. |
+| **Operability** | Gap — no logging infrastructure; error handling uses three incompatible strategies (silent discard, field storage, propagation). |
+| **Accessibility** | Strong for active text (WCAG AA enforced in tests via `Palette::validate`); intentionally relaxed for dimmed text; interpolated dimming colors not validated. |
 
 ### Inferred Decisions
 
-1. **Vim as First-Class Citizen** (High confidence) — Standard mode is an accommodation; vim is the default. The entire key dispatch is structured around modal editing.
-2. **`App` as God Object** (High confidence) — Organic accretion, not an explicit decision. ~34% of source lines, 33 public fields, 6+ distinct responsibilities.
-3. **Dual Animation Systems** (High confidence) — `AnimationManager` for UI transitions, `DimLayer`/`LineOpacity` for content-level dimming. Architecturally parallel, unnamed boundary.
-4. **Graceful Degradation as Structural Invariant** (High confidence) — 3-tier color profile, terminal fallbacks, documented as Invariant 11.
-5. **OSC 52 as Sole Clipboard** (Medium confidence) — No system clipboard crate; write-only; paste only from internal yank register.
-6. **Palettes as Static Code** (Medium confidence) — Per ADR-006; `&'static str` names block user-defined palettes.
-
----
+1. **Rust + zero-GC for physiology, not benchmarks** — Language chosen to meet a sensory latency invariant (Dan Luu's perceptual research), not throughput needs. Go explicitly rejected for GC pauses during sustained typing. (High confidence)
+2. **Custom WritingSurface as first-class architectural layer** — Bypasses ratatui's Paragraph for domain-specific per-character rendering with dimming, markdown styling, and find-match composition. (High confidence)
+3. **Vim as assumed user, Standard mode as accommodation** — Vim is `#[default]`, implemented first; Standard mode retrofitted. Settings layer uses hjkl unconditionally regardless of editing mode. (High confidence)
+4. **Composable dimming via flat data structures** — Two implementations explored; simpler flat `Vec<LineOpacity>` won over trait-based `LayerStack`. (High confidence)
+5. **OSC 52 clipboard write + subprocess clipboard read** — Writes via escape sequence (universal, zero-dependency); reads via platform-specific subprocesses with fallback to yank register. (High confidence)
+6. **Coordinator extraction via incremental refactoring** — Seven-commit series established the coordinator pattern. `App::tick()` consolidated frame logic. SettingsViewModel decoupled settings rendering. Ongoing. (High confidence)
+7. **Two animation systems for different scheduling semantics** — `AnimatedValue` provides chase-with-interruption for N simultaneous line opacities; `AnimationManager` provides discrete-with-prune for 2-3 global transitions (palette crossfade, overlay fade, scroll). Different domains, shared primitive. (Medium confidence — appears conscious but undocumented)
 
 ## Tradeoff Map
 
 | Optimizes For | At the Expense Of | Evidence |
 |--------------|-------------------|----------|
-| Coordination simplicity (all state in `App`) | Modifiability, testability | `app.rs:L62-110` — 33 public fields; every feature opens this file |
-| ~~Implementation directness (Ctrl-chords inline in `main.rs`)~~ | ~~Undo consistency, testability~~ | **Resolved** — all Ctrl-chords routed through `apply_action` with undo |
-| Usability continuity (no error dialogs) | Reliability, observability | `app.rs:L1234` — autosave error silently discarded |
-| ~~Rendering correctness (no cache invalidation)~~ | ~~Performance at scale~~ | **Resolved** — wrap computation cached, keyed on `(buffer.version(), column_width)` |
-| Call-site readability (WritingSurface builder) | Verbosity | `ui.rs:L37-48` — 11-method builder chain per frame |
-| Type safety (palettes in Rust source) | User extensibility | `palette.rs:L18-63` — `&'static str` names, compile-time only |
-| Graceful degradation (always runs) | Color fidelity on basic terminals | `writing_surface.rs:L289` — Basic profile uses `DIM` attribute, not RGB interpolation |
-| ~~Development velocity (`rope_mut()` public)~~ | ~~Encapsulation~~ | **Resolved** — `rope_mut()` removed, `Buffer` exposes domain methods directly |
-
----
+| Perceived latency (zero-GC, sub-1ms target) | Ecosystem convenience | Rust 2024 edition; 6 runtime deps; custom WritingSurface |
+| Rendering correctness (stateless per-frame) | Performance at scale | O(n) markdown styling per frame; WritingSurface per-character loop |
+| Testability (pub(crate) fields, isolated subsystems) | Encapsulation | App subsystem fields pub(crate); DrawContext extracts at boundary |
+| Distraction-free UX (minimal error surfacing) | Operability & data safety | Save errors visible in settings overlay; no persistent status bar |
+| Development velocity (incremental refactoring) | API stability | Coordinator boundary stabilizing; DrawContext + SettingsViewModel complete |
+| Feature locality (dimming types in focus_mode) | Conceptual integrity | Dual animation system (now documented); focus dimming spans 4 modules |
+| Zero-allocation on render path | Code complexity | WritingSurface fallback paths; RenderCache; DimmingState pre-allocated buffers |
 
 ## Findings
 
 ### Macro Level
 
-#### Finding: App as Gravitational Center
+#### Finding: App — Coordinator Label vs. Reality
 
-**Observation:** `App` at 3,294 lines carries 33 public fields spanning cursor position, scroll state, file/save state, rename sub-state, settings sub-state, dimming animation state, undo history, find overlay, and vim mode. The struct and its `impl` block handle all editing mutations, cursor logic, undo integration, focus mode computation, autosave, scroll management, and settings management.
-- `src/app.rs:L62-110` — 33 public fields, no sub-structs grouping related state
-- `src/app.rs:L459-694` — `apply_action` is a 239-line match over 23 variants
-- `src/app.rs:L286-371` — rename subsystem (6 methods) exclusively touches 3 fields
-- `src/app.rs:L186-278` — settings subsystem (6 methods) exclusively touches 2 fields
+**Observation:** App is documented as a "thin coordinator" but contains 1,616 lines including inline palette interpolation (`effective_palette`, L571-599), animation-start logic embedded in `settings_apply` (L128-133, L327-330), sentence-bounds caching, and six input-handler functions. The extraction series reduced App from 3,294 to 1,616 lines, but it remains the largest behavioral module.
+- `src/app.rs:L39` — doc comment says "Thin coordinator"
+- `src/app.rs:L156-195` — `settings_apply` encodes per-item dispatch logic including animation start, mode mutation, and delegation
+- `src/app.rs:L571-599` — palette interpolation implemented inline in App
+- `src/app.rs:L206-215` — `save_config` assembles Config from scattered subsystem fields
 
-**Pattern:** God Object. A struct that knows too much and does too much, accumulating responsibility that logically belongs to smaller, more focused types.
+**Pattern:** God Object in Extraction. The App struct has accumulated responsibilities beyond routing — palette interpolation, animation lifecycle management, and settings semantics all live here. The "thin coordinator" label describes the aspiration, not the current state.
 
-**Tradeoff:** Optimizes for coordination simplicity (all state reachable in one hop) at the expense of modifiability and testability. Adding any feature requires opening `app.rs` regardless of which subsystem is affected.
+**Tradeoff:** Optimizes for co-location of state (nothing requires indirection to reach) at the expense of modifiability. Adding a new feature requires understanding whether App is the right place, which it usually is, which grows App further.
 
-**Question:** What would it take to add a second open document — a split-pane session — to this codebase?
+**Question:** What happens when two developers independently need to add a feature that both read and write through `settings_apply` — where is the boundary between their work?
 
-**Stewardship:** Extract `RenameState`, `SettingsState`, and cursor/scroll state into sub-structs owned by `App`. This shrinks the public surface without breaking call sites. The current size is approaching the threshold where the next feature will cost more than it should.
-
----
-
-#### Finding: Command Pattern Partially Applied [RESOLVED]
-
-**Observation:** `vim_bindings.rs` defines a 23-variant `Action` enum (the Command pattern). All key inputs — including multi-key sequences (`gg`, `dd`) and Ctrl-chords (Ctrl+C/X/V) — now route through `apply_action` with full undo recording. Multi-key dispatch logic lives in the vim layer (`handle_normal_with_pending`, `handle_visual_with_pending`).
-
-**Resolution:** `PasteAtCursor` variant added. Ctrl+C → `Yank`, Ctrl+X → `DeleteSelection`, Ctrl+V → `PasteAtCursor`. `DeleteSelection`, `PasteAfter`, and `PasteBefore` now record undo. Pending key logic moved from `App` to `vim_bindings.rs`.
+**Stewardship:** The "thin coordinator" label is aspirational rather than descriptive. A good steward would treat it as a target. `effective_palette` computation and the animation-start logic in `settings_apply` are the most displaced — consider extracting them when the next feature in either area makes the current arrangement costly.
 
 ---
 
-#### Finding: Composable Opacity Layers — Well-Designed Domain System
+#### Finding: Two Parallel Animation Systems *(RESOLVED)*
 
-**Observation:** The dimming system uses independently animated opacity layers composing by multiplication, with documented invariants grounding each decision.
-- `src/focus_mode.rs:L229-278` — `DimLayer` manages per-line chase-based animation
-- `src/focus_mode.rs:L127-191` — `LineOpacity` captures current value on target change, eliminating flicker
-- `src/app.rs:L1128-1133` — Composition is a one-liner: `paragraph_dim.opacity(i) * sentence_dim.opacity(i)`
-- `docs/decisions/adr-008` — Documents the layered model, multiplicative composition, and chase-based rationale
+**Resolution (2026-03-04):** Decision rule now documented in `animation.rs` module-level doc comment (lines 12-21). The `ScratchQuitOverlay` variant was successfully added to `AnimationManager` following the documented rule, validating the decision.
 
-**Pattern:** Composable Layers with Chase-Based Animation. Each visual concern owns its own state and animation lifecycle.
+**Original observation:** `AnimationManager` maintains discrete overlay/palette transitions; `DimLayer` maintains per-line chase animations. Both build on `AnimatedValue` but serve different scheduling semantics. The decision rule was undocumented.
 
-**Tradeoff:** Optimizes for visual correctness (no flicker, independent timing, clean composition) at the expense of state complexity (three independent animation state machines).
-
-**Question:** What would a fourth dimming source require in terms of changes across how many files?
-
-**Stewardship:** Well-applied, deliberate design. No action needed. Document the extension contract for adding a new layer.
+**Stewardship:** Resolved. The documented decision rule guided the `ScratchQuitOverlay` addition correctly. No further action needed.
 
 ---
 
-#### Finding: WritingSurface Builder Pattern — Clean and Complete
+#### Finding: Rendering Split — draw() Takes &App While WritingSurface Has Explicit Interface *(RESOLVED)*
 
-**Observation:** `WritingSurface` uses the builder pattern consistently. Construction produces an immutable render value; all configuration flows through method chaining.
-- `src/writing_surface.rs:L47-121` — `new()` + 10 builder methods, each returning `Self`
-- `src/ui.rs:L37-48` — 11-method chain at the call site
-- `src/writing_surface.rs:L189-400` — `Widget::render` consumes `self`, enforcing single-use
+**Resolution (2026-03-04):** `DrawContext` struct introduced in `ui.rs`. `draw()` now takes `&DrawContext` instead of `&App`. The constructor extracts all rendering data through App's public accessor methods. New features (conflict bar, scratch quit overlay) were built directly on `DrawContext`, validating the pattern.
 
-**Pattern:** Builder Pattern with consume-on-use.
+**Original observation:** `ui::draw()` took `&App` and accessed `pub(crate)` subsystem fields directly, bypassing the accessor facade.
 
-**Tradeoff:** Optimizes for call-site readability and parameter safety at the expense of verbosity.
-
-**Question:** What would change about the rendering path for a split-pane view?
-
-**Stewardship:** Well-applied. No action needed. Keep builder methods focused on rendering parameters.
+**Stewardship:** Resolved. Future rendering features should add fields to `DrawContext` and populate them in the constructor.
 
 ---
+
+#### Finding: Configuration Scatter/Gather Without Full Round-Trip Verification
+
+**Observation:** `App::from_config` distributes 5 config fields to 4 subsystems. `App::save_config` re-assembles them by reading from each subsystem. A round-trip test was added (`from_config_round_trip`, app.rs:L1577-1594) but it only checks `column_width` and `editing_mode`, not all config fields.
+- `src/app.rs:L69-107` — `from_config` distributes to palette, dimming, viewport, editor
+- `src/app.rs:L206-215` — `save_config` manually re-reads from subsystems
+- `src/config.rs:L115` — `"typewriter"` → `FocusMode::Off` migration (lossy)
+
+**Pattern:** Lossy Configuration DTO with Manual Scatter/Gather — adding a new persisted setting requires changes in four locations.
+
+**Tradeoff:** Optimizes for a stable, human-readable TOML format at the expense of maintainability (four edit sites per new setting).
+
+**Question:** What happens when a new subsystem is extracted that owns a piece of configuration — and the developer adds the field to `Config` but forgets to update `save_config`?
+
+**Stewardship:** The existing round-trip test is a good start. Extend it to cover all config fields (focus_mode, scroll_mode, palette_name) to catch scatter/gather asymmetry mechanically.
+
+---
+
+#### Finding: Clipboard Asymmetry Resolved but Subprocess Read Has No Error Surfacing
+
+**Observation:** Clipboard write uses OSC 52 (escape sequence, universal). Clipboard read now uses platform subprocesses (`pbpaste`, `wl-paste`, `xclip`) with fallback to yank register. Read errors are silently discarded — a subprocess failure falls back to the yank register with no signal.
+- `src/clipboard.rs` — write via OSC52, read via subprocess with fallback
+- `src/app.rs` — Ctrl+V reads from clipboard; no error path
+
+**Pattern:** Silent Fallback — errors in the external-process clipboard path are masked by the internal fallback, meaning the user cannot distinguish "pasted from system clipboard" from "pasted from yank register because clipboard read failed."
+
+**Tradeoff:** Optimizes for graceful degradation at the expense of user awareness. Appropriate for clipboard (low-stakes), but the pattern should not be replicated for file operations.
+
+**Question:** What signal does a user receive when `pbpaste` is not installed and they attempt Ctrl+V?
+
+**Stewardship:** This is an acceptable tradeoff for clipboard operations. No action needed. The existing design correctly prioritizes functionality over error messaging for this non-critical path.
 
 ### Meso Level
 
-#### Finding: Key Dispatch Split Creates Undo Holes and Test Blind Spots [RESOLVED]
+#### Finding: `column_width` Duplicated Between Editor and Viewport (5-Lens Convergence) *(RESOLVED)*
 
-**Observation:** Input handling was consolidated into `App::handle_key` in the library crate. Ctrl-chord handlers (Ctrl+C/X/V) now route through the `Action` command pattern with full undo recording. `main.rs` is a thin event loop adapter.
+**Resolution (2026-03-04):** `column_width` removed from `Editor` entirely. The field now lives exclusively in `Viewport`. App passes it through at call sites. The 5-lens convergence — the strongest finding of the prior audit — is fully resolved.
 
-**Resolution:** `handle_key` moved to library crate. Ctrl+V paste now records undo. All input semantics are testable. Undo coverage confirmed by `ctrl_x_records_undo`, `ctrl_v_paste_at_cursor_records_undo`, and `paste_after_records_undo` tests.
+**Original observation:** `column_width` was stored independently in `Editor::column_width` and `Viewport::column_width` with manual synchronization at two call sites.
 
----
-
-#### Finding: `Buffer` Is a Transparent Newtype [RESOLVED]
-
-**Observation:** `Buffer` now exposes domain-level methods (`char_to_line`, `line_to_char`, `slice_to_string`, `len_chars`, `len_lines`, `line`, `char_at`, `chars_at`) directly. `rope()` and `rope_mut()` have been removed. `Buffer` also tracks a `version` field (incremented on every mutation) used for wrap computation caching.
-
-**Resolution:** All rope methods `App` needs are on `Buffer` directly. `rope_mut()` removed (no callers). `rope()` removed. `version()` accessor added for cache invalidation.
+**Stewardship:** Resolved. The single-source-of-truth pattern should be maintained for any future state that might be duplicated across subsystems.
 
 ---
 
-#### Finding: `sentence_dim` Is a Hollow Field [RESOLVED]
+#### Finding: `OverlayOpacity` Shared Between Settings and Find Overlays *(RESOLVED)*
 
-**Observation:** The vestigial `sentence_dim` field was removed in a prior stewardship pass. `line_opacities()` now returns only `paragraph_dim.opacity(i)`. The actual architecture — one paragraph layer plus a sentence-fade queue — is self-evident.
+**Resolution (2026-03-04):** `TransitionKind::OverlayOpacity` split into three distinct variants: `SettingsOverlay`, `FindOverlay`, `ScratchQuitOverlay`. Each has its own accessor method (`settings_overlay_progress()`, `find_overlay_progress()`, `scratch_quit_overlay_progress()`). A test (`settings_and_find_overlays_coexist`) verifies independent coexistence.
 
-**Resolution:** Field removed. `dim_animating()` simplified. No behavioral change.
+**Original observation:** A single `OverlayOpacity` variant was shared by Settings and Find overlays with accidental coupling.
 
----
-
-#### Finding: Invariant 5 Column Width Bounds Misimplemented [RESOLVED]
-
-**Observation:** Domain Model Invariant 5 was amended to reflect actual bounds (20–120). `Config::load()` now applies `clamp(20, 120)` so hand-edited config files cannot bypass the guard.
-
-**Resolution:** Invariant 5 amended. Clamp added to `Config::load()`. Domain model and code now agree.
+**Stewardship:** Resolved. Future overlays should add a new `TransitionKind` variant following this pattern.
 
 ---
 
-#### Finding: Autosave Silently Discards Errors [RESOLVED]
+#### Finding: `ui::draw()` Bypasses App's Accessor Facade *(RESOLVED)*
 
-**Observation:** `App::autosave()` now captures save failures in `save_error: Option<String>`. The error is surfaced in the settings layer when the writer summons it. `dirty` remains `true` on failure, enabling retry.
+**Resolution (2026-03-04):** `DrawContext` struct introduced. `draw()` now takes `&DrawContext` instead of `&App`. The constructor assembles all rendering data through App's public accessor methods. This completes the pattern started by `SettingsViewModel`.
 
-**Resolution:** `save_error` field added to `App`. Settings layer displays save errors. Distraction-free default preserved while failures are visible on demand.
+**Stewardship:** Resolved. See Macro-level "Rendering Split" finding for details.
 
 ---
+
+#### Finding: Autosave Guard Has Reachability Gap *(RESOLVED)*
+
+**Resolution (2026-03-04):** `load_error` check moved into `autosave()` itself (persistence.rs:L46). Both `should_autosave()` and `autosave()` now independently guard on `load_error.is_some()`. Test `autosave_refuses_when_load_error_set` verifies the file is not overwritten when `load_error` is set.
+
+**Original observation:** `should_autosave` checked `load_error` but `autosave` did not, allowing the Ctrl+S path to bypass the guard.
+
+**Stewardship:** Resolved. The "move guards into the guarded function" practice should be applied to future safety-critical paths.
+
+---
+
+#### Finding: Silent Error Handling Risks Data Loss
+
+**Observation:** Three incompatible error strategies coexist: (1) `save_config` discards errors with `let _ = config.save()` (app.rs:L214); (2) autosave captures errors into `save_error: Option<String>`, visible only in settings overlay; (3) terminal setup propagates errors via `?`. A user whose document fails to save continuously will not know unless they open the settings panel.
+- `src/app.rs:L214` — `let _ = config.save()` silently discards config write failure
+- `src/persistence.rs:L57-59` — save error stored in field but only surfaced in settings overlay
+- `src/main.rs:L67-89` — terminal setup propagates errors via `?`
+
+**Pattern:** Silent Failure — the most consequential silence is autosave failure: a user can write for 30 minutes without knowing their work is not being persisted.
+
+**Tradeoff:** Optimizes for visual minimalism and the distraction-free philosophy at the expense of reliability. No error dialogs, no popups, no status bars — but also no signal when data is at risk.
+
+**Question:** If a user writes for 30 minutes in a session where autosave is silently failing due to a filesystem permission error, what is the first signal they receive?
+
+**Stewardship:** This is a genuine tension between product philosophy and reliability. A minimal improvement preserving the zen aesthetic: a brief, auto-dismissing indicator in a corner of the writing surface when `save_error` is set, visible for a few seconds without requiring user action. The implementation is straightforward; the product decision requires deliberate choice.
+
+---
+
+#### Finding: Focus Mode Distributed Across Four Modules
+
+**Observation:** Focus dimming spans `focus_mode.rs` (sentence parsing, opacity calculation, DimLayer, color math), `dimming.rs` (DimmingState orchestration), `app.rs` (sentence bounds caching, settings apply), and `writing_surface.rs` (per-character opacity application). Changing focus dimming semantics requires reading and editing at least three files.
+- `src/focus_mode.rs:L40-268` — sentence parsing, DimLayer, `apply_dimming_with_opacity`
+- `src/dimming.rs:L46-102` — `DimmingState::update()` orchestrates layers
+- `src/writing_surface.rs:L277-296` — renderer applies per-character opacity
+- `src/app.rs:L571-599` — sentence bounds caching in `tick()`
+
+**Pattern:** Shotgun Surgery — any change to focus dimming semantics requires edits to at least three files.
+
+**Tradeoff:** Optimizes for separation of computation from rendering at the expense of feature cohesion.
+
+**Question:** What would a developer need to read to understand the complete semantics of sentence focus mode?
+
+**Stewardship:** Push all opacity-computation logic into `DimmingState`, so `WritingSurface` only applies pre-computed opacities. This consolidates the feature's logic while preserving the rendering boundary.
+
+---
+
+#### Finding: Documentation Drift Persists *(PARTIALLY RESOLVED)*
+
+**Resolved items:**
+- `--inline` flag removed from code and scenarios
+- `ZANI_WINDOW` re-spawn guard now implemented
+- ADR-004 amended for opacity-based approach
+- README architecture section updated with animation subsystem
+
+**Remaining:**
+- `README.md` test count stale — says 354, actual is 368
+- Domain model documents Plexus/llm-orc integrations with no implementation
+- tmux detection scenario not implemented
+
+**Pattern:** Documentation Drift — docs describing features that don't exist (aspirational) and counts that are stale.
+
+**Stewardship:** Update README test count. Mark unimplemented domain model entries and scenarios as "planned."
 
 ### Micro Level
 
-#### Finding: Three Word-Navigation Methods Each Materialize the Entire Buffer [RESOLVED]
+#### Finding: WritingSurface Builder Has 11 "Optional" Fields Always Provided
 
-**Observation:** Word navigation (`word_forward`, `word_backward`, `word_end`) now uses `Buffer::char_at()` for O(log n) character access instead of materializing the entire buffer. `sentence_bounds_in_buffer()` also uses the Buffer API directly.
+**Observation:** WritingSurface defines 17 fields, of which 11 are typed as `Option<&'a ...>` or initialized to defaults in `new()`. The single call site in ui.rs:L38-55 always populates every field. The fallback paths inside `render()` (L412-444) that handle absent data compute the same values inline with heap allocation — the very allocation the cache was designed to prevent. These fallback paths are only exercised by test helpers.
+- `src/writing_surface.rs:L185-195` — six fields declared `Option<&'a ...>`
+- `src/writing_surface.rs:L412-444` — fallback paths that allocate `Vec` when precomputed data is absent
+- `src/ui.rs:L38-55` — the only production call site, always provides all precomputed data
 
-**Resolution:** Full-buffer `to_string()` calls replaced with rope-backed `char_at()` scans. `sentence_bounds_in_buffer()` added as an allocation-free alternative to `sentence_bounds_at()`.
+**Pattern:** Speculative Generality — the builder was designed with fallback paths for callers that don't have precomputed data. There is one caller and it always has the data. The fallback paths are dead in production, alive in tests.
 
----
+**Tradeoff:** Optimizes for test isolation (tests can construct a surface without `RenderCache`) at the expense of clarity. The `Option<>` wrappers communicate "this may not be present" when the actual invariant is "this is always present."
 
-#### Finding: Wrap Computation Runs 3x Per Frame [RESOLVED]
+**Question:** If a new developer reads `WritingSurface::new()` and sees `precomputed_visual_lines` defaulting to `None`, what assumption will they make about whether they need to provide it?
 
-**Observation:** `App::visual_lines()` now caches results keyed on `(buffer.version(), column_width)`. `Buffer` tracks a `version: u64` field incremented on every `insert()` and `remove()`. Cache hits return a clone; misses recompute and store.
-
-**Resolution:** `visual_lines_cache: Option<(u64, u16, Vec<VisualLine>)>` added to `App`. Redundant recomputation eliminated for non-mutating operations (e.g., Up/Down cursor movement).
-
----
-
-#### Finding: Assertion Roulette in Test Suite [RESOLVED]
-
-**Observation:** All multi-bare-assertion tests now have descriptive message strings. Tests across 10 files updated: `vim_bindings.rs`, `config.rs`, `app.rs`, `buffer.rs`, `wrap.rs`, `focus_mode.rs`, `writing_surface.rs`, `palette.rs`, and `tests/integration.rs`.
-
-**Resolution:** ~60 bare assertions annotated with context messages describing what each assertion verifies.
+**Stewardship:** Add a comment at each `None => { ... }` branch stating: "This path is only reached from test helpers; production always provides precomputed data." Alternatively, collapse `Option<>` fields to required fields and update test helpers to supply minimal data.
 
 ---
 
-#### Finding: `autosave_writes_buffer_content` Integration Test Doesn't Test Autosave [RESOLVED]
+#### Finding: `SettingsItem::all()` Allocates Vec on Every Keystroke *(RESOLVED)*
 
-**Observation:** The test was renamed to `styling_preserves_raw_buffer_content` and its assertions now have descriptive messages.
+**Resolution (2026-03-04):** `SettingsItem::all()` now returns `&'static [SettingsItem]` backed by a `const ALL_ITEMS: [SettingsItem; 12]` array. Zero allocation on every call.
 
-**Resolution:** Test renamed. Assertions annotated. The test now accurately describes what it verifies.
+**Original observation:** `all()` returned a fresh `Vec<SettingsItem>` on every invocation, allocating 3-5 times per keypress during settings navigation.
+
+**Stewardship:** Resolved.
 
 ---
+
+#### Finding: `--inline` Flag and `ZANI_WINDOW` Guard Are Feature Ghosts *(PARTIALLY RESOLVED)*
+
+**Resolution (2026-03-04):** `--inline` flag removed entirely. `ZANI_WINDOW` now serves as an active re-spawn guard — main.rs checks `std::env::var("ZANI_WINDOW").is_ok()` as early exit in the `--window` block, preventing unbounded recursion.
+
+**Remaining:** Verify the re-spawn guard is tested. The `--inline` ghost is fully resolved.
+
+**Stewardship:** Mostly resolved. Consider adding a test that the re-spawn guard exits early when the env var is set.
+
+---
+
+#### Finding: `Persistence::is_scratch` Flag Has No Behavioral Consequence *(RESOLVED)*
+
+**Resolution (2026-03-04):** `is_scratch` now drives three distinct behaviors: (1) Ctrl+Q on dirty scratch opens the scratch quit prompt (Save/Rename/Discard); (2) Ctrl+Q on clean scratch silently deletes the draft file and exits; (3) non-scratch Ctrl+Q exits normally. Tests: `scratch_dirty_opens_prompt`, `scratch_clean_quits_silently`, `scratch_save_choice_quits`, `scratch_discard_choice_quits`, `non_scratch_quit_unchanged`.
+
+**Original observation:** `is_scratch` was set on construction and cleared after rename but had no behavioral effect on quit or save.
+
+**Stewardship:** Resolved. The flag now has full lifecycle significance.
+
+---
+
+#### Finding: `column_width` Sync Tested at Init, Not at Mutation *(RESOLVED)*
+
+**Resolution (2026-03-04):** `column_width` removed from Editor entirely (see `column_width` duplication finding). There is no longer a sync to test — Viewport is the single source of truth.
+
+**Stewardship:** Resolved by eliminating the root cause.
+
+---
+
+#### Finding: Autosave Guard Tested via `should_autosave`, Not via `autosave` *(RESOLVED)*
+
+**Resolution (2026-03-04):** Both code and test fixed. `autosave()` now checks `load_error` directly (persistence.rs:L46). Test `autosave_refuses_when_load_error_set` calls `autosave()` with `load_error` set and verifies the original file content is preserved.
+
+**Stewardship:** Resolved.
+
+---
+
+#### Finding: `alloc_bench.rs` Only Asserts Paragraph Mode *(RESOLVED)*
+
+**Resolution (2026-03-04):** All three focus modes (Off, Paragraph, Sentence) now have zero-allocation assertions. Three independent `assert!` calls verify `off_per_frame == 0`, `paragraph_per_frame == 0`, `sentence_per_frame == 0`.
+
+**Stewardship:** Resolved.
+
+---
+
+#### Finding: `hjkl_moves_cursor` Is an Eager Test with Assertion Roulette *(RESOLVED)*
+
+**Resolution (2026-03-04):** Split into four independent tests: `h_moves_cursor_left`, `l_moves_cursor_right`, `k_moves_cursor_up`, `j_moves_cursor_down`. Each tests exactly one key with its own setup and assertion, following the pattern established by `w`, `b`, `e` tests.
+
+**Stewardship:** Resolved.
+
+---
+
+#### Finding: Integration Test Does Not Verify Actual Composition Path
+
+**Observation:** `focus_dimming_and_markdown_styling_compose` manually calls `apply_dimming_with_opacity` and asserts the result `matches!(Color::Rgb(_, _, _))`. The function signature already guarantees an RGB return for RGB input — the assertion cannot meaningfully fail. The actual composition in `WritingSurface::render` (where dimming opacity is applied on top of markdown-resolved color) is not tested end-to-end.
+- `tests/integration.rs:L62-70` — assertion checks type shape, not color values
+- `src/writing_surface.rs:L625-937` — WritingSurface tests exist but none assert composed color values
+
+**Pattern:** Test-code correspondence gap — the test name and comment promise integration verification but the test verifies helper arithmetic already covered by unit tests.
+
+**Tradeoff:** Optimizes for test isolation at the expense of integration confidence.
+
+**Question:** If `WritingSurface` were modified to apply focus dimming before markdown resolution (reversing composition order), would the test suite catch it?
+
+**Stewardship:** Either rename the test to match what it actually verifies, or extend it to render a real frame and assert specific cell colors in the output buffer.
 
 ### Multi-Lens Observations
 
-#### Convergence: `App` God Object (5 lenses)
+#### Convergence: `column_width` Duplication (5+ lenses) *(RESOLVED)*
 
-All five analysis lenses — Pattern Recognition, Architectural Fitness, Dependency & Coupling, Intent-Implementation Alignment, and Structural Health — independently identified `App` as the codebase's central structural concern. The convergence across independent analyses strengthens confidence that this is the primary modifiability pressure point.
+The strongest convergent finding of the prior audit. Eliminated by removing `column_width` from Editor entirely.
 
-#### Convergence: Key Dispatch Split (4 lenses) [RESOLVED]
+#### Convergence: Dual Animation System (4 lenses) *(RESOLVED)*
 
-Pattern Recognition, Architectural Fitness, Dependency & Coupling, and Test Quality all flagged the `main.rs`/`app.rs` input handling split. **Resolved:** Key dispatch consolidated into library crate. Ctrl-chords route through `apply_action` with full undo coverage and test coverage.
+Decision rule documented in `animation.rs` module docs. The `ScratchQuitOverlay` was added following the documented rule, validating the approach.
 
-#### Convergence: `sentence_dim` Vestigial Field (4 lenses) [RESOLVED]
+#### Convergence: Silent Error Handling (3 lenses) *(PARTIALLY RESOLVED)*
 
-Intent-Implementation Alignment, Dead Code, Structural Health, and Invariant Analysis all identified `sentence_dim` as a hollow field. **Resolved:** Field removed in prior stewardship pass.
+The autosave guard bypass is fixed (`autosave()` now checks `load_error`). Save errors are visible in settings overlay. The broader concern — no persistent status bar or auto-dismissing error indicator on the writing surface — remains a product design choice.
 
-#### Convergence: README Documentation Drift (3 lenses) [RESOLVED]
+#### Convergence: `ui::draw()` Bypassing Accessor Facade (3 lenses) *(RESOLVED)*
 
-Decision Archaeology, Documentation Integrity, and Invariant Analysis all flagged README inaccuracies. **Resolved:** README updated with correct keybindings, palette names, Focus/Scroll mode sections, and test count.
+`DrawContext` struct fully decouples `draw()` from App internals.
 
----
+#### Convergence: Feature Ghosts in Writing Window (3 lenses) *(RESOLVED)*
+
+`--inline` removed. `ZANI_WINDOW` now serves as active re-spawn guard.
+
+#### Convergence: Test-Code Correspondence Gaps (3 lenses) *(RESOLVED)*
+
+`column_width` duplication eliminated (no sync to test). `alloc_bench` asserts all three modes. `autosave_refuses_when_load_error_set` tests the mutation directly. `hjkl` split into four tests.
 
 ## Stewardship Guide
 
 ### What to Protect
 
-1. **The rendering boundary.** `WritingSurface`'s builder pattern cleanly separates configuration from rendering. This is the codebase's strongest architectural seam.
-2. **The composable dimming design.** ADR-008's multiplicative opacity composition with chase-based animation is principled, well-documented, and correctly implemented. The invariants (12–15) that govern it are enforced by code.
-3. **The domain model and ADR discipline.** Eight ADRs, 15 invariants, an amendment log. This is unusually rigorous for a project of this scale. The investment pays dividends in design coherence.
-4. **Graceful degradation.** The 3-tier color profile with fallback behavior is structurally embedded, not bolted on. Invariant 11 is enforced by the `ColorProfile` enum design.
-5. **The test culture.** 341 unit tests across 19 modules with descriptive assertion messages demonstrates a commitment to verification.
+1. **The domain modeling discipline.** Named invariants, ADRs with amendment logs, a formal domain model — this practice is rare and valuable. Preserve it even as individual documents are corrected.
+
+2. **WCAG AA as a hard invariant.** `Palette::validate()` enforced in tests is a model for how invariants should work. The approach — physiology research → design constraint → automated enforcement — is worth replicating.
+
+3. **Vim bindings as a pure state machine.** `vim_bindings.rs` is the best-structured module: pure functions, no side effects, independently testable. It should serve as the template for future input handling.
+
+4. **The version-keyed caching system.** `Buffer::version()` driving `RenderCache`, visual line cache, and sentence bounds cache is well-engineered. The invalidation key is correct and minimal.
+
+5. **The extraction series approach.** One structural change per commit, no behavior changes, each obviously correct. This is the model for future structural improvements.
+
+6. **`App::tick()` and `TickOutput`.** The recently extracted tick method consolidates per-frame state updates and gates draw via `Option<TickOutput>`. This is the right architectural direction — preserve this boundary.
+
+7. **WritingSurface's explicit builder interface.** Despite the de-facto required arguments, the builder correctly insulates the renderer from App's internals.
+
+8. **DrawContext + SettingsViewModel decoupling.** `draw()` now takes `&DrawContext`, completing the pattern started by SettingsViewModel. This boundary should be maintained — all new rendering state flows through DrawContext.
+
+9. **Mtime-based external change detection.** The `Persistence` mtime tracking, auto-reload for clean buffers, and conflict bar for dirty buffers establish a solid file lifecycle model. The pattern of silently handling the common case (clean reload) while prompting for the ambiguous case (dirty conflict) is the right UX tradeoff.
+
+10. **Scratch quit prompt lifecycle.** The Save/Rename/Discard flow for scratch buffers, including `pending_quit_after_rename` for deferred quit, is a well-structured state machine that should serve as a template for future modal interactions.
 
 ### What to Improve (Prioritized)
 
-1. ~~**Move key dispatch into the library crate**~~ — **[DONE]** `handle_key` moved into `App`. Ctrl-chords route through `apply_action`. Undo hole closed.
+*Items 1-5, 7-9 from the prior audit are resolved. Remaining items:*
 
-2. ~~**Fix the README**~~ — **[DONE]** Keybindings, palette names, Focus/Scroll mode sections, and test count updated.
+1. **Fix documentation drift** — Low-cost, high-signal:
+   - Update README test count (says 354, actual is 368)
+   - Mark unimplemented scenarios as "planned"
+   - Mark Plexus/llm-orc domain model entries as "planned"
+   *(Finding: Documentation Drift)*
 
-3. ~~**Remove dead code**~~ — **[DONE]** `sentence_dim`, `FocusMode::next()`, `ScrollMode::next()`, `rope_mut()`, `chrome_visible` removed.
+2. **Add user-visible save error indicator** — Save errors are currently only visible in the settings overlay. Consider a brief, auto-dismissing indicator on the writing surface when `save_error` is set. *(Finding: Silent Error Handling — product design decision)*
 
-4. ~~**Extract sub-states from `App`**~~ — **[DONE]** `RenameState` and `SettingsState` extracted as named structs.
+3. **Continue App decomposition** — App is now 1,839 lines (up from 1,616), having absorbed scratch quit, external change detection, and conflict handling. The coordinator pattern is working but App growth continues. Consider extracting conflict/scratch-quit state into a dedicated module when the next feature touches this area. *(Finding: App — Coordinator Label vs. Reality)*
 
-5. ~~**Cache wrap computation**~~ — **[DONE]** `visual_lines_cache` on `App`, keyed on `(buffer.version(), column_width)`.
-
-6. ~~**Reconcile Invariant 5 bounds**~~ — **[DONE]** Domain model amended to 20–120. `Config::load()` clamps.
-
-7. ~~**Surface autosave failures**~~ — **[DONE]** `save_error: Option<String>` on `App`, surfaced in settings layer.
-
-8. ~~**Add assertion messages to tests**~~ — **[DONE]** ~60 bare assertions annotated across 10 files.
+4. **Add `ZANI_WINDOW` re-spawn guard test** — The guard is implemented but untested. A unit test verifying early exit when the env var is set would prevent regression. *(Finding: Feature Ghosts — partially resolved)*
 
 ### Ongoing Practices
 
-- **Before adding a new feature, ask: does this require opening `app.rs`?** If so, consider whether the feature's state could live in a sub-struct first.
-- **Route all buffer mutations through `apply_action`.** If a new action needs to modify the buffer, add an `Action` variant rather than mutating inline. This keeps undo history consistent.
-- **When removing a feature or redesigning a subsystem, sweep documentation.** The README/domain model drift from the Typewriter→ScrollMode pivot was preventable with a post-pivot docs pass.
-- **Add assertion messages to new tests.** One sentence per `assert_eq!` describing what the assertion verifies.
-- **Treat the domain model invariants as a checklist.** When a new invariant is added or an existing one is relaxed, update the Amendment Log and any affected ADRs.
-
----
-
-## Resolution Log
-
-All audit findings have been addressed. This log documents the work done.
-
-### Phase 1: Stewardship Priorities (8 items)
-
-| # | Item | Commit/Change | Status |
-|---|------|--------------|--------|
-| 1 | Move key dispatch into library crate | `handle_key` moved to `App`; `main.rs` is thin event loop | Done |
-| 2 | Fix the README | Keybindings, palettes, Focus/Scroll sections, test count | Done |
-| 3 | Remove dead code | `sentence_dim`, `FocusMode::next()`, `ScrollMode::next()`, `rope_mut()`, `chrome_visible` | Done |
-| 4 | Extract sub-states from `App` | `RenameState`, `SettingsState` as named structs | Done |
-| 5 | Cache wrap computation | `visual_lines_cache` on `App`, keyed `(buffer.version(), column_width)` | Done |
-| 6 | Reconcile Invariant 5 bounds | Domain model amended to 20–120; `Config::load()` clamps | Done |
-| 7 | Surface autosave failures | `save_error: Option<String>` on `App`, displayed in settings | Done |
-| 8 | Add assertion messages to tests | ~60 bare assertions annotated across 10 files | Done |
-
-### Phase 2: Remaining Findings (5 items)
-
-| # | Item | Change | Status |
-|---|------|--------|--------|
-| 1 | Ctrl-chord command pattern + undo gaps | `PasteAtCursor` added; Ctrl+C/X/V → `apply_action`; `DeleteSelection`/`PasteAfter`/`PasteBefore` record undo | Done |
-| 2 | Wrap recomputation cache | `Buffer.version` field; `App.visual_lines_cache` | Done |
-| 3 | `pending_normal_key` in vim layer | `handle_normal_with_pending`/`handle_visual_with_pending` in `vim_bindings.rs` | Done |
-| 4 | Assertion roulette | Message strings on all multi-bare-assertion tests across 10 files | Done |
-| 5 | Audit doc stale | This Resolution Log; [RESOLVED] tags; updated metrics | Done |
-
-### Metrics After Resolution
-
-- **Source files:** 22
-- **Total lines:** ~9,018
-- **Tests:** 341 (was 331 at audit time)
-- **Action variants:** 23 (was 22)
-- **app.rs:** 3,294 lines (was 2,984)
-- **Clippy:** Clean (0 warnings)
+- **Add new rendering state to DrawContext.** The scratch quit overlay and conflict bar were built on DrawContext from the start. Future overlays/bars should follow this pattern.
+- **Add new overlay animations as separate TransitionKind variants.** The `ScratchQuitOverlay` pattern — new variant + new accessor method + test for coexistence — is the template.
+- **Move guards into the guarded function.** If a precondition matters, check it where the mutation happens, not in a separate "should I?" method. (Established by `autosave()` fix.)
+- **Keep domain model current.** Mark unimplemented entries. Update when modules move or rename.
+- **Isolate external dependencies in tests.** Use `#[cfg(not(test))]` to gate system calls (clipboard, filesystem) that make tests non-deterministic. (Established by `resolve_paste_text` fix.)
+- **Make fields private as invariants are identified.** Each invariant can be sealed one at a time by narrowing visibility.
+- **Assert what matters, not what's guaranteed.** Review new tests for assertions that verify type-system guarantees or test-setup values.

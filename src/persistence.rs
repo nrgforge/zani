@@ -43,7 +43,7 @@ impl Persistence {
 
     /// Perform autosave if a file path is set. Returns true if saved.
     pub fn autosave(&mut self, buffer: &Buffer, dirty: &mut bool) -> bool {
-        if !*dirty || self.file_path.is_none() {
+        if !*dirty || self.file_path.is_none() || self.load_error.is_some() {
             return false;
         }
 
@@ -145,6 +145,25 @@ mod tests {
         let mut p = Persistence::new();
         p.load_error = Some("corrupt file".into());
         assert!(!p.should_autosave(true));
+    }
+
+    #[test]
+    fn autosave_refuses_when_load_error_set() {
+        let dir = std::env::temp_dir().join("zani_test_load_error");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.md");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut p = Persistence::new();
+        p.file_path = Some(path.clone());
+        p.load_error = Some("corrupt".into());
+
+        let buffer = Buffer::from_text("overwritten");
+        let mut dirty = true;
+        assert!(!p.autosave(&buffer, &mut dirty));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
