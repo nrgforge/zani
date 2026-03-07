@@ -506,7 +506,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
                 format!("  {} {}", marker, label)
             }
             SettingsItem::Palette => {
-                format!("  > {:<14}", vm.palette_name)
+                format!("  {} [enter]", vm.palette_name)
             }
             SettingsItem::FocusMode(mode) => {
                 let label = match mode {
@@ -894,10 +894,10 @@ mod tests {
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
-        // Single palette row should show the current palette name
+        // Single palette row should show the current palette name with [enter] hint
         assert!(
-            text.contains("> Ember"),
-            "Palette row should show current palette 'Ember' with '>'"
+            text.contains("Ember") && text.contains("[enter]"),
+            "Palette row should show current palette 'Ember' with [enter] hint"
         );
     }
 
@@ -1047,7 +1047,7 @@ mod tests {
 
         // Settings Layer should reflect new active palette
         assert!(
-            text.contains("> Inkwell"),
+            text.contains("Inkwell") && text.contains("[enter]"),
             "Active palette indicator should show 'Inkwell' after switch"
         );
 
