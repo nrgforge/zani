@@ -417,11 +417,64 @@
 **When** the writer opens a file in a different project whose Local Config specifies "Neon Noir"
 **Then** the Writing Surface crossfades from Ember to Neon Noir via the 300ms animation
 
-### Scenario: Palette Browser offers Bind to project
+### Scenario: Palette Browser offers Bind to project `[Superseded by ADR-013]`
 **Given** the Palette Browser is open and the writer selects a new Palette
 **When** the writer chooses "Bind to project"
 **Then** a `.zani.toml` file is written in the nearest project directory (or the file's directory)
 **And** the file contains `palette = "[selected palette name]"`
+
+> Superseded: Bind-to-project moved from the Palette Browser to a dedicated Config row in the Settings Layer (ADR-013).
+
+---
+
+## Feature: Config Persistence Provenance (ADR-013)
+
+### Scenario: Local config persists immediately on settings change
+**Given** the session loaded config from a `.zani.toml` (config_source is Local)
+**When** the writer changes any setting (palette, focus mode, column width, editing mode, or scroll mode)
+**Then** the change is written immediately to the same `.zani.toml` that was loaded
+**And** the global config file is not modified
+**And** a second file opened in the same project directory will use the updated settings
+
+### Scenario: Global config changes are held in memory until quit
+**Given** the session loaded config from `~/.config/zani/config.toml` (config_source is Global)
+**When** the writer changes any setting during the session
+**Then** the change is held in memory only — the global config file is not modified yet
+**And** on quit, the current settings are written to the global config file
+
+### Scenario: Default config changes are held in memory until quit
+**Given** no config files exist (config_source is Default)
+**When** the writer changes any setting during the session
+**Then** the change is held in memory only
+**And** on quit, the current settings are written to `~/.config/zani/config.toml` (creating it if needed)
+
+### Scenario: Config row shows current config scope
+**Given** the Settings Layer is visible
+**When** the writer views the Config row
+**Then** the row displays "Config: project" when config_source is Local
+**Or** the row displays "Config: global [enter]" when config_source is Global or Default
+
+### Scenario: Config row Save to project creates Local Config
+**Given** the Settings Layer is visible and config_source is Global
+**And** the writer has a file open (not a scratch buffer)
+**When** the writer selects the Config row and presses Enter
+**Then** a `.zani.toml` is written in the file's parent directory (or the existing Local Config location if one was found by walk-up)
+**And** the `.zani.toml` contains all current settings (palette, focus mode, column width, editing mode, scroll mode)
+**And** config_source switches to Local
+**And** subsequent settings changes persist immediately to the `.zani.toml`
+
+### Scenario: Config row is informational when already Local
+**Given** the Settings Layer is visible and config_source is Local
+**When** the writer views the Config row
+**Then** the row displays "Config: project" without an `[enter]` affordance
+**And** pressing Enter on the Config row has no effect
+
+### Scenario: Scratch buffer cannot Save to project
+**Given** the writer is editing a scratch buffer (no file path)
+**And** the Settings Layer is visible
+**When** the writer views the Config row
+**Then** the row displays "Config: global" without an `[enter]` affordance
+**And** pressing Enter on the Config row has no effect
 
 ---
 
@@ -453,7 +506,7 @@
 
 ---
 
-## Integration Scenarios (ADR-009 through ADR-012)
+## Integration Scenarios (ADR-009 through ADR-013)
 
 ### Scenario: Config Resolution feeds the correct Palette to the Palette Browser
 **Given** a Local Config binds "Inkwell" to the current project
@@ -461,10 +514,19 @@
 **Then** "Inkwell" is marked as the active Palette
 **And** the Affective Category containing Inkwell is expanded or highlighted
 
-### Scenario: Palette selected in browser persists via Local Config Bind
+### Scenario: Palette selected in browser persists via Local Config Bind `[Superseded by ADR-013]`
 **Given** the Palette Browser is open in a project with an existing Local Config
 **When** the writer selects "Neon Noir" and chooses "Bind to project"
 **Then** the `.zani.toml` is updated with `palette = "Neon Noir"`
+**And** subsequent file opens in this project resolve to "Neon Noir" via Config Resolution
+
+> Superseded: Palette selection in the browser saves via write-back-to-source (ADR-013). The browser selects; the config scope determines where changes persist.
+
+### Scenario: Palette change in browser persists to Local Config via write-back
+**Given** the session loaded config from a `.zani.toml` (config_source is Local)
+**And** the Palette Browser is open
+**When** the writer selects "Neon Noir"
+**Then** `save_config()` writes `palette = "Neon Noir"` to the same `.zani.toml`
 **And** subsequent file opens in this project resolve to "Neon Noir" via Config Resolution
 
 ### Scenario: 256-color degradation applies to the resolved Palette
@@ -479,3 +541,11 @@
 **When** `validate()` is called
 **Then** both the True Color color pairs and the 256-color color pairs pass Invariant 3
 **And** validation failure in either set produces a PaletteError
+
+### Scenario: Save to project then reload round-trips all settings
+**Given** a writer opens a file with global config (no `.zani.toml` exists)
+**And** the writer changes palette to "Neon Noir", focus mode to Paragraph, and column width to 72
+**When** the writer selects the Config row to "Save to project"
+**And** Config Resolution runs again for a file in the same directory
+**Then** the resolved config has palette "Neon Noir", focus mode Paragraph, and column width 72
+**And** config_source is Local

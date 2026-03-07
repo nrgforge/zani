@@ -314,6 +314,8 @@ pub struct SettingsViewModel {
     pub rename_active: bool,
     pub rename_buf: String,
     pub rename_cursor: usize,
+    pub config_source: crate::config::ConfigSource,
+    pub is_scratch: bool,
 }
 
 impl SettingsViewModel {
@@ -342,6 +344,8 @@ impl SettingsViewModel {
             rename_active: app.rename.active,
             rename_buf: app.rename.buf.clone(),
             rename_cursor: app.rename.cursor,
+            config_source: app.config_source,
+            is_scratch: app.persistence.is_scratch,
         }
     }
 }
@@ -484,6 +488,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
             SettingsItem::ScrollMode(_) => "Scroll",
             SettingsItem::ColumnWidth => "Document",
             SettingsItem::File => "Document",
+            SettingsItem::Config => "Document",
         };
 
         // Insert subheading when group changes
@@ -537,6 +542,19 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
                 } else {
                     let skip = file_str.len() - (avail - 2);
                     format!("{}..{}", prefix, &file_str[skip..])
+                }
+            }
+            SettingsItem::Config => {
+                use crate::config::ConfigSource;
+                match vm.config_source {
+                    ConfigSource::Local => "  Config      project".to_string(),
+                    ConfigSource::Global | ConfigSource::Default => {
+                        if vm.is_scratch {
+                            "  Config      global".to_string()
+                        } else {
+                            "  Config      global [enter]".to_string()
+                        }
+                    }
                 }
             }
         };
@@ -1448,5 +1466,147 @@ mod tests {
             }
         }
         panic!("Could not find File row with rename text");
+    }
+
+    // === Acceptance tests: Config row (ADR-013 Scenarios 4-7) ===
+
+    #[test]
+    fn config_row_shows_project_when_local() {
+        let mut app = App::new();
+        app.config_source = crate::config::ConfigSource::Local;
+        app.toggle_settings();
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("Config") && text.contains("project"),
+            "Config row should show 'project' when config_source is Local"
+        );
+        assert!(
+            !text.contains("global [enter]"),
+            "Config row should NOT show '[enter]' when already Local"
+        );
+    }
+
+    #[test]
+    fn config_row_shows_global_with_enter_hint() {
+        let mut app = App::new();
+        app.config_source = crate::config::ConfigSource::Global;
+        app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/doc.md"));
+        app.toggle_settings();
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("Config") && text.contains("global") && text.contains("[enter]"),
+            "Config row should show 'global [enter]' when config_source is Global with a file open"
+        );
+    }
+
+    #[test]
+    fn config_row_scratch_no_enter_hint() {
+        let mut app = App::new().with_scratch_name();
+        app.config_source = crate::config::ConfigSource::Default;
+        app.toggle_settings();
+        let buf = render_app(&mut app, 80, 30);
+
+        // Find the row containing "Config" and verify it does NOT have "[enter]"
+        let area = buf.area;
+        let mut found_config_row = false;
+        for y in area.top()..area.bottom() {
+            let mut row_text = String::new();
+            for x in area.left()..area.right() {
+                row_text.push_str(buf[(x, y)].symbol());
+            }
+            if row_text.contains("Config") && row_text.contains("global") {
+                found_config_row = true;
+                assert!(
+                    !row_text.contains("[enter]"),
+                    "Scratch buffer Config row should not show '[enter]': got '{}'",
+                    row_text.trim()
+                );
+            }
+        }
+        assert!(found_config_row, "Config row should be visible in Settings Layer");
+    }
+
+    #[test]
+    fn config_row_save_to_project_creates_local_config() {
+        use tempfile::TempDir;
+        use crate::config::{Config, ConfigSource, LocalConfig};
+
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("doc.md");
+        std::fs::write(&file, "test").unwrap();
+
+        let mut app = App::from_config_with_source(
+            &Config {
+                palette: "Inkwell".to_string(),
+                focus_mode: FocusMode::Paragraph,
+                column_width: 72,
+                ..Config::default()
+            },
+            crate::color_profile::ColorProfile::TrueColor,
+            Some(file),
+            ConfigSource::Global,
+        );
+
+        // Navigate to Config row and press Enter
+        app.toggle_settings();
+        let config_pos = SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Config)
+            .unwrap();
+        app.settings.cursor = config_pos;
+        app.handle_key(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
+
+        // Verify: .zani.toml created with all settings
+        let local_path = dir.path().join(".zani.toml");
+        assert!(local_path.exists(), ".zani.toml should be created");
+
+        let content = std::fs::read_to_string(&local_path).unwrap();
+        let local: LocalConfig = toml::from_str(&content).unwrap();
+        assert_eq!(local.palette, Some("Inkwell".to_string()));
+        assert_eq!(local.focus_mode, Some("paragraph".to_string()));
+        assert_eq!(local.column_width, Some(72));
+
+        // config_source should switch to Local
+        assert_eq!(app.config_source, ConfigSource::Local);
+        assert_eq!(app.local_config_path, Some(local_path));
+    }
+
+    #[test]
+    fn config_row_enter_noop_when_local() {
+        let mut app = App::new();
+        app.config_source = crate::config::ConfigSource::Local;
+        app.local_config_path = Some(std::path::PathBuf::from("/tmp/.zani.toml"));
+
+        app.toggle_settings();
+        let config_pos = SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Config)
+            .unwrap();
+        app.settings.cursor = config_pos;
+
+        // Should remain Local, no error
+        app.handle_key(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
+        assert_eq!(app.config_source, crate::config::ConfigSource::Local);
+    }
+
+    #[test]
+    fn config_row_enter_noop_for_scratch() {
+        let mut app = App::new().with_scratch_name();
+        app.config_source = crate::config::ConfigSource::Default;
+
+        app.toggle_settings();
+        let config_pos = SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Config)
+            .unwrap();
+        app.settings.cursor = config_pos;
+
+        app.handle_key(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
+        // Should remain Default — scratch can't save to project
+        assert_eq!(app.config_source, crate::config::ConfigSource::Default);
     }
 }

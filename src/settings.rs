@@ -20,9 +20,11 @@ pub enum SettingsItem {
     ColumnWidth,
     /// File row (opens inline rename on Enter).
     File,
+    /// Config scope row: shows "project" or "global [enter]" (ADR-013).
+    Config,
 }
 
-const ALL_ITEMS: [SettingsItem; 10] = [
+const ALL_ITEMS: [SettingsItem; 11] = [
     SettingsItem::EditingMode(EditingMode::Vim),
     SettingsItem::EditingMode(EditingMode::Standard),
     SettingsItem::Palette,
@@ -33,6 +35,7 @@ const ALL_ITEMS: [SettingsItem; 10] = [
     SettingsItem::ScrollMode(ScrollMode::Typewriter),
     SettingsItem::ColumnWidth,
     SettingsItem::File,
+    SettingsItem::Config,
 ];
 
 impl SettingsItem {

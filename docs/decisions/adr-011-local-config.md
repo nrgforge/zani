@@ -16,7 +16,9 @@ The same `Config` fields are supported in `.zani.toml`. A local config need only
 
 When the resolved Palette differs from the currently active one (e.g., opening a file in a project with a different Local Config), the existing crossfade animation handles the transition.
 
-The Palette Browser (ADR-010) offers two apply actions: apply globally (write to global config) or Bind to project (write `.zani.toml` in the nearest project directory or current file's directory).
+> **Superseded:** The Bind-to-project action was originally located in the Palette Browser. ADR-013 moves it to a dedicated Config row in the Settings Layer, which is more general (covers all settings, not just palette).
+
+The Palette Browser (ADR-010) ~~offers two apply actions: apply globally (write to global config) or Bind to project (write `.zani.toml` in the nearest project directory or current file's directory)~~ selects palettes; where changes persist is governed by the config scope (ADR-013).
 
 **Rejected alternatives:**
 

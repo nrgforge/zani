@@ -177,6 +177,39 @@ impl App {
             SettingsItem::ScrollMode(mode) => self.viewport.scroll_mode = mode,
             SettingsItem::ColumnWidth => {} // adjusted via Left/Right, not Enter
             SettingsItem::File => self.rename.open(self.persistence.file_path.as_deref()),
+            SettingsItem::Config => self.save_to_project(),
+        }
+    }
+
+    /// Save current settings to project (ADR-013).
+    /// Creates a `.zani.toml` with all current settings and switches
+    /// config_source to Local for immediate persistence going forward.
+    /// No-op if already Local or if no file is open (scratch buffer).
+    fn save_to_project(&mut self) {
+        // Already Local or no file open — nothing to do
+        if self.config_source == ConfigSource::Local {
+            return;
+        }
+        let Some(ref file_path) = self.persistence.file_path else {
+            return;
+        };
+        if self.persistence.is_scratch {
+            return;
+        }
+
+        // Determine where to write: existing local config location (from walk-up)
+        // or the opened file's parent directory.
+        let local_path = self.local_config_path.clone().unwrap_or_else(|| {
+            file_path
+                .parent()
+                .unwrap_or(file_path.as_path())
+                .join(".zani.toml")
+        });
+
+        let config = self.current_config();
+        if config.save_local(&local_path).is_ok() {
+            self.config_source = ConfigSource::Local;
+            self.local_config_path = Some(local_path);
         }
     }
 
@@ -713,8 +746,8 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 2 editing modes + 1 palette + 3 focus modes + 2 scroll modes + 1 column width + 1 file = 10
-        assert_eq!(SettingsItem::all().len(), 10);
+        // 2 editing modes + 1 palette + 3 focus modes + 2 scroll modes + 1 column width + 1 file + 1 config = 11
+        assert_eq!(SettingsItem::all().len(), 11);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
