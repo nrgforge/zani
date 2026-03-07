@@ -107,8 +107,14 @@ impl App {
 
     /// Build an App fully configured from persisted settings.
     pub fn from_config(config: &Config, color_profile: ColorProfile, file_path: Option<PathBuf>) -> Self {
+        Self::from_config_with_source(config, color_profile, file_path, ConfigSource::Default)
+    }
+
+    /// Build an App with explicit config source provenance.
+    pub fn from_config_with_source(config: &Config, color_profile: ColorProfile, file_path: Option<PathBuf>, source: ConfigSource) -> Self {
         let mut app = Self::new();
         app.color_profile = color_profile;
+        app.config_source = source;
         app.palette = config.resolve_palette();
         app.dimming.focus_mode = config.focus_mode;
         app.viewport.scroll_mode = config.scroll_mode;

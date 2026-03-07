@@ -189,3 +189,148 @@ fn styling_preserves_raw_buffer_content() {
     assert!(content.contains("*italic*"), "markdown italic syntax should be preserved");
     assert!(content.contains("--"), "raw dashes should be preserved (no smart typography)");
 }
+
+/// Integration test: Config Resolution feeds the correct Palette to the Palette Browser.
+/// Exercises: config → App::from_config_with_source → palette_browser.open → UI rendering.
+/// Uses real types at every boundary (no mocks).
+#[test]
+fn config_resolution_feeds_palette_browser() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use zani::app::App;
+    use zani::color_profile::ColorProfile;
+    use zani::config::{Config, ConfigSource};
+
+    // Simulate: local config binds "Inkwell" to project
+    let config = Config {
+        palette: "Inkwell".to_string(),
+        ..Config::default()
+    };
+
+    let mut app = App::from_config_with_source(
+        &config,
+        ColorProfile::TrueColor,
+        None,
+        ConfigSource::Local,
+    );
+    assert_eq!(app.palette().name, "Inkwell", "App should use Inkwell from config");
+    assert_eq!(app.config_source(), ConfigSource::Local);
+
+    // Open settings (Ctrl+P), then navigate to Palette row and press Enter
+    app.toggle_settings();
+    assert!(app.settings_visible());
+
+    // Palette row is at index 2 (after 2 editing mode rows), toggle_settings lands on it
+    // Press Enter to open browser
+    app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(app.palette_browser().open);
+
+    // Focused palette should be Inkwell (cursor positioned on active palette)
+    let focused = app.palette_browser().focused_palette().unwrap();
+    assert_eq!(focused.name, "Inkwell", "Browser cursor should land on Inkwell");
+}
+
+/// Integration test: 256-color degradation applies to resolved palette.
+/// Exercises: palette (Color256Overrides) → color_profile (degrade_palette) → rendering chain.
+/// Uses real types (no mocks).
+#[test]
+fn degradation_applies_to_resolved_palette() {
+    use ratatui::style::Color;
+    use zani::color_profile::ColorProfile;
+    use zani::palette::{Color256Overrides, Palette, AffectiveCategory};
+
+    // Create a palette with hand-tuned 256-color overrides
+    let palette = Palette {
+        name: "TestWith256",
+        foreground: Color::Rgb(220, 220, 220),
+        background: Color::Rgb(30, 30, 30),
+        dimmed_foreground: Color::Rgb(100, 100, 100),
+        accent_heading: Color::Rgb(150, 180, 200),
+        accent_emphasis: Color::Rgb(180, 180, 190),
+        accent_link: Color::Rgb(140, 170, 180),
+        accent_code: Color::Rgb(160, 160, 170),
+        category: AffectiveCategory::DarkCool,
+        sort_key: 0.0,
+        color_256: Some(Color256Overrides {
+            foreground: Color::Rgb(210, 210, 210),
+            background: Color::Rgb(25, 25, 25),
+            dimmed_foreground: Color::Rgb(90, 90, 90),
+            accent_heading: Color::Rgb(140, 170, 190),
+            accent_emphasis: Color::Rgb(170, 170, 180),
+            accent_link: Color::Rgb(130, 160, 170),
+            accent_code: Color::Rgb(150, 150, 160),
+        }),
+    };
+
+    // Degrade to 256-color
+    let profile = ColorProfile::Color256;
+    let degraded = profile.degrade_palette(&palette);
+
+    // Should use hand-tuned values, not originals
+    assert_eq!(degraded.foreground, Color::Rgb(210, 210, 210), "Should use hand-tuned foreground");
+    assert_eq!(degraded.background, Color::Rgb(25, 25, 25), "Should use hand-tuned background");
+    assert_eq!(degraded.accent_heading, Color::Rgb(140, 170, 190), "Should use hand-tuned accent");
+
+    // Original fields preserved
+    assert_eq!(degraded.name, "TestWith256");
+    assert_eq!(degraded.category, AffectiveCategory::DarkCool);
+
+    // TrueColor passthrough
+    let truecolor = ColorProfile::TrueColor;
+    let passed = truecolor.degrade_palette(&palette);
+    assert_eq!(passed.foreground, palette.foreground, "TrueColor should pass through");
+}
+
+/// Integration test: Palette selected in browser persists via Config::bind_to_project.
+/// Exercises: palette_browser (select) → config (bind_to_project) → config (load_for_path).
+#[test]
+fn palette_bind_persists_via_local_config() {
+    use std::fs;
+    use tempfile::TempDir;
+    use zani::config::Config;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("doc.md");
+    fs::write(&file, "test").unwrap();
+
+    // Simulate selecting Inkwell and binding to project
+    Config::bind_to_project(dir.path(), "Inkwell").unwrap();
+
+    // Verify: loading config for a file in this directory resolves to Inkwell
+    let (config, source) = Config::load_for_path(&file);
+    assert_eq!(config.palette, "Inkwell", "Bound palette should persist");
+    assert_eq!(source, zani::config::ConfigSource::Local);
+}
+
+/// Integration test: Palette validation runs on both True Color and 256-color values.
+/// Exercises: palette validation across both color sets.
+#[test]
+fn validation_covers_both_truecolor_and_256() {
+    use ratatui::style::Color;
+    use zani::palette::{Color256Overrides, Palette, AffectiveCategory};
+
+    // Valid truecolor values, INVALID 256 overrides (pure black bg)
+    let palette = Palette {
+        name: "TestBad256",
+        foreground: Color::Rgb(220, 220, 220),
+        background: Color::Rgb(30, 30, 30),
+        dimmed_foreground: Color::Rgb(100, 100, 100),
+        accent_heading: Color::Rgb(150, 180, 200),
+        accent_emphasis: Color::Rgb(180, 180, 190),
+        accent_link: Color::Rgb(140, 170, 180),
+        accent_code: Color::Rgb(160, 160, 170),
+        category: AffectiveCategory::DarkCool,
+        sort_key: 0.0,
+        color_256: Some(Color256Overrides {
+            foreground: Color::Rgb(210, 210, 210),
+            background: Color::Rgb(0, 0, 0), // pure black — violates Invariant 3
+            dimmed_foreground: Color::Rgb(90, 90, 90),
+            accent_heading: Color::Rgb(140, 170, 190),
+            accent_emphasis: Color::Rgb(170, 170, 180),
+            accent_link: Color::Rgb(130, 160, 170),
+            accent_code: Color::Rgb(150, 150, 160),
+        }),
+    };
+
+    let result = palette.validate();
+    assert!(result.is_err(), "Palette with pure black 256-color bg should fail validation");
+}
