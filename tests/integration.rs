@@ -134,6 +134,8 @@ fn palette_switch_updates_all_styling() {
         accent_emphasis: ratatui::style::Color::Rgb(180, 180, 190),
         accent_link: ratatui::style::Color::Rgb(140, 170, 180),
         accent_code: ratatui::style::Color::Rgb(160, 160, 170),
+        category: zani::palette::AffectiveCategory::DarkCool,
+        sort_key: 0.0,
     };
 
     let line = "## Heading with **bold**";

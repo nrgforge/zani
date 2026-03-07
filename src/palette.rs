@@ -1,7 +1,53 @@
 use ratatui::style::Color;
 
+/// Mood-based grouping of palettes along two axes:
+/// brightness (Dark, Light) and character (Warm, Cool, Vivid).
+/// The organizing taxonomy for the Palette Browser (ADR-009).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AffectiveCategory {
+    DarkWarm,
+    DarkCool,
+    DarkVivid,
+    LightWarm,
+    LightCool,
+    LightVivid,
+}
+
+impl AffectiveCategory {
+    /// Returns all categories in display order.
+    pub fn all() -> &'static [AffectiveCategory] {
+        &[
+            AffectiveCategory::DarkWarm,
+            AffectiveCategory::DarkCool,
+            AffectiveCategory::DarkVivid,
+            AffectiveCategory::LightWarm,
+            AffectiveCategory::LightCool,
+            AffectiveCategory::LightVivid,
+        ]
+    }
+
+    /// Human-readable label for display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            AffectiveCategory::DarkWarm => "Dark — Warm",
+            AffectiveCategory::DarkCool => "Dark — Cool",
+            AffectiveCategory::DarkVivid => "Dark — Vivid",
+            AffectiveCategory::LightWarm => "Light — Warm",
+            AffectiveCategory::LightCool => "Light — Cool",
+            AffectiveCategory::LightVivid => "Light — Vivid",
+        }
+    }
+
+    /// Returns true if this is a Dark brightness category.
+    pub fn is_dark(&self) -> bool {
+        matches!(self, AffectiveCategory::DarkWarm | AffectiveCategory::DarkCool | AffectiveCategory::DarkVivid)
+    }
+}
+
 /// A named, curated color system defining foreground, background,
 /// dimming endpoints, and accent colors for the Writing Surface.
+/// Designed as a mood instrument — priming a specific affective state
+/// rather than serving as decoration. Belongs to an Affective Category.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub name: &'static str,
@@ -12,6 +58,10 @@ pub struct Palette {
     pub accent_emphasis: Color,
     pub accent_link: Color,
     pub accent_code: Color,
+    /// Mood-based grouping (ADR-009).
+    pub category: AffectiveCategory,
+    /// OKLCH hue angle for Perceptual Sort Order within category (ADR-009).
+    pub sort_key: f64,
 }
 
 impl Palette {
@@ -26,6 +76,8 @@ impl Palette {
             accent_emphasis: Color::Rgb(190, 185, 175),
             accent_link: Color::Rgb(150, 180, 170),
             accent_code: Color::Rgb(170, 165, 155),
+            category: AffectiveCategory::DarkWarm,
+            sort_key: oklch_hue(40, 38, 35),
         }
     }
 
@@ -40,6 +92,8 @@ impl Palette {
             accent_emphasis: Color::Rgb(180, 185, 195),
             accent_link: Color::Rgb(130, 185, 175),
             accent_code: Color::Rgb(160, 165, 175),
+            category: AffectiveCategory::DarkCool,
+            sort_key: oklch_hue(30, 32, 40),
         }
     }
 
@@ -54,6 +108,8 @@ impl Palette {
             accent_emphasis: Color::Rgb(70, 60, 50),
             accent_link: Color::Rgb(60, 95, 60),
             accent_code: Color::Rgb(100, 90, 80),
+            category: AffectiveCategory::LightWarm,
+            sort_key: oklch_hue(240, 230, 215),
         }
     }
 
@@ -68,12 +124,34 @@ impl Palette {
             accent_emphasis: interpolate(&from.accent_emphasis, &to.accent_emphasis, progress),
             accent_link: interpolate(&from.accent_link, &to.accent_link, progress),
             accent_code: interpolate(&from.accent_code, &to.accent_code, progress),
+            category: to.category,
+            sort_key: to.sort_key,
         }
     }
 
     /// Returns all built-in palettes.
     pub fn all() -> Vec<Self> {
         vec![Self::default_palette(), Self::inkwell(), Self::parchment()]
+    }
+
+    /// Returns palettes grouped by Affective Category, sorted by
+    /// Perceptual Sort Order (OKLCH hue angle) within each category.
+    pub fn all_by_category() -> Vec<(AffectiveCategory, Vec<Self>)> {
+        let all = Self::all();
+        let mut groups: Vec<(AffectiveCategory, Vec<Self>)> = Vec::new();
+
+        for &cat in AffectiveCategory::all() {
+            let mut palettes: Vec<Self> = all.iter()
+                .filter(|p| p.category == cat)
+                .copied()
+                .collect();
+            if !palettes.is_empty() {
+                palettes.sort_by(|a, b| a.sort_key.partial_cmp(&b.sort_key).unwrap_or(std::cmp::Ordering::Equal));
+                groups.push((cat, palettes));
+            }
+        }
+
+        groups
     }
 
     /// Find this palette's position in `Palette::all()`.
@@ -184,6 +262,33 @@ fn linearize(value: f64) -> f64 {
     }
 }
 
+/// Compute the OKLCH hue angle (in degrees) for an sRGB color.
+/// Used as the Perceptual Sort Order key within an Affective Category (ADR-009).
+fn oklch_hue(r: u8, g: u8, b: u8) -> f64 {
+    // sRGB → linear RGB
+    let lr = linearize(r as f64 / 255.0);
+    let lg = linearize(g as f64 / 255.0);
+    let lb = linearize(b as f64 / 255.0);
+
+    // linear RGB → OKLab (Björn Ottosson's method)
+    let l = 0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb;
+    let m = 0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb;
+    let s = 0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb;
+
+    let l_ = l.cbrt();
+    let m_ = m.cbrt();
+    let s_ = s.cbrt();
+
+    let _ok_l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+    let ok_a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+    let ok_b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+
+    // OKLab → OKLCH hue angle
+    let hue_rad = ok_b.atan2(ok_a);
+    let hue_deg = hue_rad.to_degrees();
+    if hue_deg < 0.0 { hue_deg + 360.0 } else { hue_deg }
+}
+
 /// Interpolate between two RGB colors. `t` ranges from 0.0 (color1) to 1.0 (color2).
 pub fn interpolate(color1: &Color, color2: &Color, t: f64) -> Color {
     let (r1, g1, b1) = rgb_components(color1).unwrap_or((0, 0, 0));
@@ -221,50 +326,101 @@ mod tests {
         }
     }
 
+    // === Acceptance tests: Affective Categories (ADR-009) ===
+
+    #[test]
+    fn every_palette_belongs_to_exactly_one_affective_category() {
+        for palette in Palette::all() {
+            // category is a required field — the type system ensures exactly one.
+            // Verify the category is a valid variant by checking the label isn't empty.
+            assert!(
+                !palette.category.label().is_empty(),
+                "Palette '{}' must have an Affective Category",
+                palette.name
+            );
+        }
+    }
+
+    #[test]
+    fn palettes_within_category_sorted_by_perceptual_sort_order() {
+        for (cat, palettes) in Palette::all_by_category() {
+            for window in palettes.windows(2) {
+                assert!(
+                    window[0].sort_key <= window[1].sort_key,
+                    "In category {:?}, '{}' (hue {:.1}) should sort before '{}' (hue {:.1})",
+                    cat, window[0].name, window[0].sort_key, window[1].name, window[1].sort_key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn affective_category_taxonomy_covers_brightness_and_character() {
+        let all_cats = AffectiveCategory::all();
+        let has_dark = all_cats.iter().any(|c| c.is_dark());
+        let has_light = all_cats.iter().any(|c| !c.is_dark());
+        assert!(has_dark, "Taxonomy must include Dark brightness categories");
+        assert!(has_light, "Taxonomy must include Light brightness categories");
+
+        // Check all three character types exist within each brightness level
+        let dark_labels: Vec<&str> = all_cats.iter().filter(|c| c.is_dark()).map(|c| c.label()).collect();
+        assert!(dark_labels.iter().any(|l| l.contains("Warm")));
+        assert!(dark_labels.iter().any(|l| l.contains("Cool")));
+        assert!(dark_labels.iter().any(|l| l.contains("Vivid")));
+
+        let light_labels: Vec<&str> = all_cats.iter().filter(|c| !c.is_dark()).map(|c| c.label()).collect();
+        assert!(light_labels.iter().any(|l| l.contains("Warm")));
+        assert!(light_labels.iter().any(|l| l.contains("Cool")));
+        assert!(light_labels.iter().any(|l| l.contains("Vivid")));
+    }
+
     // === Unit tests for the validation logic ===
+
+    /// Helper to build a test palette with required fields.
+    fn test_palette(
+        name: &'static str,
+        fg: Color, bg: Color, dimmed: Color,
+        heading: Color, emphasis: Color, link: Color, code: Color,
+    ) -> Palette {
+        Palette {
+            name, foreground: fg, background: bg, dimmed_foreground: dimmed,
+            accent_heading: heading, accent_emphasis: emphasis,
+            accent_link: link, accent_code: code,
+            category: AffectiveCategory::DarkWarm,
+            sort_key: 0.0,
+        }
+    }
 
     #[test]
     fn rejects_pure_black_foreground() {
-        let palette = Palette {
-            name: "bad",
-            foreground: Color::Rgb(0, 0, 0),
-            background: Color::Rgb(40, 38, 35),
-            dimmed_foreground: Color::Rgb(100, 97, 92),
-            accent_heading: Color::Rgb(200, 170, 130),
-            accent_emphasis: Color::Rgb(190, 185, 175),
-            accent_link: Color::Rgb(150, 180, 170),
-            accent_code: Color::Rgb(170, 165, 155),
-        };
+        let palette = test_palette(
+            "bad",
+            Color::Rgb(0, 0, 0), Color::Rgb(40, 38, 35), Color::Rgb(100, 97, 92),
+            Color::Rgb(200, 170, 130), Color::Rgb(190, 185, 175),
+            Color::Rgb(150, 180, 170), Color::Rgb(170, 165, 155),
+        );
         assert!(matches!(palette.validate(), Err(PaletteError::PureBlack(_))));
     }
 
     #[test]
     fn rejects_pure_white_background() {
-        let palette = Palette {
-            name: "bad",
-            foreground: Color::Rgb(220, 215, 205),
-            background: Color::Rgb(255, 255, 255),
-            dimmed_foreground: Color::Rgb(100, 97, 92),
-            accent_heading: Color::Rgb(200, 170, 130),
-            accent_emphasis: Color::Rgb(190, 185, 175),
-            accent_link: Color::Rgb(150, 180, 170),
-            accent_code: Color::Rgb(170, 165, 155),
-        };
+        let palette = test_palette(
+            "bad",
+            Color::Rgb(220, 215, 205), Color::Rgb(255, 255, 255), Color::Rgb(100, 97, 92),
+            Color::Rgb(200, 170, 130), Color::Rgb(190, 185, 175),
+            Color::Rgb(150, 180, 170), Color::Rgb(170, 165, 155),
+        );
         assert!(matches!(palette.validate(), Err(PaletteError::PureWhite(_))));
     }
 
     #[test]
     fn rejects_insufficient_contrast() {
-        let palette = Palette {
-            name: "bad",
-            foreground: Color::Rgb(42, 40, 37),
-            background: Color::Rgb(40, 38, 35),
-            dimmed_foreground: Color::Rgb(100, 97, 92),
-            accent_heading: Color::Rgb(200, 170, 130),
-            accent_emphasis: Color::Rgb(190, 185, 175),
-            accent_link: Color::Rgb(150, 180, 170),
-            accent_code: Color::Rgb(170, 165, 155),
-        };
+        let palette = test_palette(
+            "bad",
+            Color::Rgb(42, 40, 37), Color::Rgb(40, 38, 35), Color::Rgb(100, 97, 92),
+            Color::Rgb(200, 170, 130), Color::Rgb(190, 185, 175),
+            Color::Rgb(150, 180, 170), Color::Rgb(170, 165, 155),
+        );
         assert!(matches!(
             palette.validate(),
             Err(PaletteError::InsufficientContrast { .. })
