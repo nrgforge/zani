@@ -415,7 +415,7 @@ fn sagebrush() -> Palette {
         background: Color::Rgb(34, 38, 34),
         dimmed_foreground: Color::Rgb(98, 105, 98),
         accent_heading: Color::Rgb(152, 172, 148),
-        accent_emphasis: Color::Rgb(162, 175, 158),
+        accent_emphasis: Color::Rgb(178, 168, 122),
         accent_link: Color::Rgb(170, 158, 172),
         accent_code: Color::Rgb(168, 174, 168),
         category: AffectiveCategory::DarkMuted,

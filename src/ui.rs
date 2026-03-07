@@ -1297,6 +1297,7 @@ mod tests {
                 let mut found_bg_swatch = false;
                 let mut found_fg_swatch = false;
                 let mut found_accent_swatch = false;
+                let mut found_emphasis_swatch = false;
                 for x in area.left()..area.right() {
                     let cell = &buf[(x, y)];
                     if cell.bg == default.background {
@@ -1312,10 +1313,14 @@ mod tests {
                             found_accent_swatch = true;
                         }
                     }
+                    if cell.bg == default.accent_emphasis {
+                        found_emphasis_swatch = true;
+                    }
                 }
                 assert!(found_bg_swatch, "Should have swatch with palette background color");
                 assert!(found_fg_swatch, "Should have swatch with palette foreground color");
                 assert!(found_accent_swatch, "Should have swatch with accent heading color");
+                assert!(found_emphasis_swatch, "Should have swatch with accent emphasis color");
                 return;
             }
         }
