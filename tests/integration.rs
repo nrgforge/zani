@@ -301,6 +301,97 @@ fn palette_bind_persists_via_local_config() {
     assert_eq!(source, zani::config::ConfigSource::Local);
 }
 
+/// Integration test: Save to project round-trips all settings (ADR-013).
+/// Exercises: App (settings changes) → save_to_project → Config::save_local
+/// → Config::load_for_path round-trip with real types at every boundary.
+#[test]
+fn save_to_project_round_trips_all_settings() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use std::fs;
+    use tempfile::TempDir;
+    use zani::app::App;
+    use zani::color_profile::ColorProfile;
+    use zani::config::{Config, ConfigSource};
+    use zani::focus_mode::FocusMode;
+    use zani::palette::Palette;
+    use zani::settings::SettingsItem;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("doc.md");
+    fs::write(&file, "test content").unwrap();
+
+    // Start with Global config (no .zani.toml exists)
+    let config = Config::default();
+    let mut app = App::from_config_with_source(
+        &config,
+        ColorProfile::TrueColor,
+        Some(file.clone()),
+        ConfigSource::Global,
+    );
+    assert_eq!(app.config_source(), ConfigSource::Global);
+
+    // Change settings: palette to Neon Noir, focus to Paragraph, column width to 72
+    app.set_palette(Palette::neon_noir());
+    app.toggle_settings();
+
+    // Navigate to FocusMode(Paragraph) and apply
+    let paragraph_idx = SettingsItem::all()
+        .iter()
+        .position(|i| *i == SettingsItem::FocusMode(FocusMode::Paragraph))
+        .unwrap();
+    // Set cursor directly for test efficiency
+    app.handle_key(KeyCode::Esc, KeyModifiers::NONE); // close settings
+    app.toggle_settings(); // reopen
+    // Use handle_key to navigate — settings opens on Palette row (index 2)
+    // Navigate to Paragraph (index 5): 3 presses down
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 3
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 4
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 5 = Paragraph
+    assert_eq!(app.settings_cursor(), paragraph_idx);
+    app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(app.focus_mode(), FocusMode::Paragraph);
+
+    // Adjust column width: navigate to ColumnWidth row (index 8), then Left arrow
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 6
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 7
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 8 = ColumnWidth
+    // Set column width to 72 via Left/Right keys
+    // Default is 60; each Right adds 1. We need 72, so press Right 12 times.
+    for _ in 0..12 {
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE);
+    }
+    assert_eq!(app.column_width(), 72);
+
+    // Navigate to Config row (index 10): 2 presses down from ColumnWidth (8)
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 9 = File
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE); // 10 = Config
+    let config_idx = SettingsItem::all()
+        .iter()
+        .position(|i| *i == SettingsItem::Config)
+        .unwrap();
+    assert_eq!(app.settings_cursor(), config_idx);
+
+    // Press Enter to save to project
+    app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(
+        app.config_source(),
+        ConfigSource::Local,
+        "Config source should switch to Local after save"
+    );
+
+    // Verify .zani.toml was created
+    let toml_path = dir.path().join(".zani.toml");
+    assert!(toml_path.exists(), ".zani.toml should exist after save to project");
+
+    // Round-trip: load config for a file in the same directory
+    let (reloaded, source, local_path) = Config::load_for_path(&file);
+    assert_eq!(source, ConfigSource::Local, "Reloaded config should be Local");
+    assert!(local_path.is_some(), "Local config path should be set");
+    assert_eq!(reloaded.palette, "Neon Noir", "Palette should round-trip");
+    assert_eq!(reloaded.focus_mode, FocusMode::Paragraph, "Focus mode should round-trip");
+    assert_eq!(reloaded.column_width, 72, "Column width should round-trip");
+}
+
 /// Integration test: Palette validation runs on both True Color and 256-color values.
 /// Exercises: palette validation across both color sets.
 #[test]
