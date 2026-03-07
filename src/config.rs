@@ -73,10 +73,7 @@ impl Default for Config {
 impl Config {
     /// Resolve the palette name to a Palette, falling back to default.
     pub fn resolve_palette(&self) -> Palette {
-        Palette::all()
-            .into_iter()
-            .find(|p| p.name == self.palette)
-            .unwrap_or_else(Palette::default_palette)
+        Palette::by_name(&self.palette)
     }
 
     /// Config file path: $HOME/.config/zani/config.toml

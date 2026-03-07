@@ -5,6 +5,9 @@
 //! Organization: 8 Affective Categories × 5 palettes each = 40 total.
 //! Within each category, palettes are spread across OKLCH hue space
 //! for maximum perceptual diversity.
+//!
+//! sort_key convention: pass the background RGB to oklch_hue().
+//! The background's hue angle defines the palette's perceptual character.
 
 use ratatui::style::Color;
 use super::{AffectiveCategory, Palette, oklch_hue};
