@@ -174,6 +174,42 @@ impl Config {
         Ok(())
     }
 
+    /// Write all current settings to a `.zani.toml` at the given path (ADR-013).
+    /// Creates a fully self-contained local config — no field inheritance.
+    pub fn save_local(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let local = self.to_local_config();
+        let content = toml::to_string_pretty(&local)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// Convert this Config to a LocalConfig with all fields populated.
+    fn to_local_config(&self) -> LocalConfig {
+        let focus_mode_str = match self.focus_mode {
+            FocusMode::Off => "off",
+            FocusMode::Sentence => "sentence",
+            FocusMode::Paragraph => "paragraph",
+        };
+        let editing_mode_str = match self.editing_mode {
+            EditingMode::Vim => "vim",
+            EditingMode::Standard => "standard",
+        };
+        let scroll_mode_str = match self.scroll_mode {
+            ScrollMode::Edge => "edge",
+            ScrollMode::Typewriter => "typewriter",
+        };
+        LocalConfig {
+            palette: Some(self.palette.clone()),
+            focus_mode: Some(focus_mode_str.to_string()),
+            column_width: Some(self.column_width),
+            editing_mode: Some(editing_mode_str.to_string()),
+            scroll_mode: Some(scroll_mode_str.to_string()),
+        }
+    }
+
     /// Save config to disk. Creates parent directories as needed.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::path().ok_or("could not determine config path")?;
@@ -454,6 +490,47 @@ mod tests {
 
         let (config, source, _) = Config::load_for_path(&file);
         assert_eq!(config.palette, "Inkwell", "load_for_path should read the bound palette");
+        assert_eq!(source, ConfigSource::Local);
+    }
+
+    #[test]
+    fn save_local_writes_all_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".zani.toml");
+        let config = Config {
+            palette: "Neon Noir".to_string(),
+            focus_mode: FocusMode::Paragraph,
+            column_width: 72,
+            editing_mode: EditingMode::Standard,
+            scroll_mode: ScrollMode::Typewriter,
+        };
+        config.save_local(&path).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        let local: LocalConfig = toml::from_str(&content).unwrap();
+        assert_eq!(local.palette, Some("Neon Noir".to_string()));
+        assert_eq!(local.focus_mode, Some("paragraph".to_string()));
+        assert_eq!(local.column_width, Some(72));
+        assert_eq!(local.editing_mode, Some("standard".to_string()));
+        assert_eq!(local.scroll_mode, Some("typewriter".to_string()));
+    }
+
+    #[test]
+    fn save_local_round_trips_via_load_for_path() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            palette: "Neon Noir".to_string(),
+            focus_mode: FocusMode::Paragraph,
+            column_width: 72,
+            editing_mode: EditingMode::Standard,
+            scroll_mode: ScrollMode::Typewriter,
+        };
+        config.save_local(&dir.path().join(".zani.toml")).unwrap();
+
+        let file = dir.path().join("doc.md");
+        fs::write(&file, "test").unwrap();
+        let (loaded, source, _) = Config::load_for_path(&file);
+        assert_eq!(loaded, config);
         assert_eq!(source, ConfigSource::Local);
     }
 }
