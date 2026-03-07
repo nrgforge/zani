@@ -157,6 +157,7 @@ fn run(
 
         if app.should_quit() {
             app.autosave();
+            app.save_config_on_quit();
             break;
         }
     }
