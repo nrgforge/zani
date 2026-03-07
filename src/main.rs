@@ -60,11 +60,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Detect terminal color capability
     let color_profile = ColorProfile::detect();
 
-    // Load persisted config
-    let config = Config::load();
+    // Load persisted config (local → global → default)
+    let (config, config_source, local_config_path) = match &file_path {
+        Some(path) => Config::load_for_path(path),
+        None => {
+            let config = Config::load();
+            let source = if Config::path().map_or(false, |p| p.exists()) {
+                zani::config::ConfigSource::Global
+            } else {
+                zani::config::ConfigSource::Default
+            };
+            (config, source, None)
+        }
+    };
 
     // Create application state
-    let mut app = App::from_config(&config, color_profile, file_path);
+    let mut app = App::from_config_with_source(&config, color_profile, file_path, config_source);
+    app.local_config_path = local_config_path;
 
     // Initialize terminal
     terminal::enable_raw_mode()?;

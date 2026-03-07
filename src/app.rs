@@ -49,6 +49,8 @@ pub struct App {
     pub(crate) settings: SettingsState,
     pub(crate) palette_browser: PaletteBrowserState,
     pub(crate) config_source: ConfigSource,
+    /// Path to the found `.zani.toml`, if config_source is Local (ADR-013).
+    pub local_config_path: Option<PathBuf>,
     should_quit: bool,
     pub(crate) persistence: Persistence,
     pub(crate) rename: RenameState,
@@ -82,6 +84,7 @@ impl App {
             settings: SettingsState::new(),
             palette_browser: PaletteBrowserState::new(),
             config_source: ConfigSource::Default,
+            local_config_path: None,
             should_quit: false,
             persistence: Persistence::new(),
             rename: RenameState::new(),

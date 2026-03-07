@@ -100,8 +100,9 @@ impl Config {
     /// Load config with local override resolution (ADR-011).
     /// Walks up from `file_path` looking for `.zani.toml`. If found,
     /// its fields override the global config. Returns the resolved
-    /// config and its source.
-    pub fn load_for_path(file_path: &Path) -> (Self, ConfigSource) {
+    /// config, its source, and the path of the found `.zani.toml`
+    /// (needed for write-back per ADR-013).
+    pub fn load_for_path(file_path: &Path) -> (Self, ConfigSource, Option<PathBuf>) {
         let global = Self::load();
 
         // Walk up from file's parent directory looking for .zani.toml
@@ -118,7 +119,7 @@ impl Config {
                 if let Ok(local) = toml::from_str::<LocalConfig>(&content) {
                     let mut config = global;
                     config.merge_local(&local);
-                    return (config, ConfigSource::Local);
+                    return (config, ConfigSource::Local, Some(local_path));
                 }
             }
             dir = d.parent();
@@ -129,7 +130,7 @@ impl Config {
         } else {
             ConfigSource::Default
         };
-        (global, source)
+        (global, source, None)
     }
 
     /// Apply local config overrides to this config.
@@ -373,9 +374,10 @@ mod tests {
         let file = dir.path().join("document.md");
         fs::write(&file, "test").unwrap();
 
-        let (config, source) = Config::load_for_path(&file);
+        let (config, source, local_path) = Config::load_for_path(&file);
         assert_eq!(config.palette, "Inkwell", "Local config should override palette");
         assert_eq!(source, ConfigSource::Local);
+        assert_eq!(local_path, Some(dir.path().join(".zani.toml")));
     }
 
     #[test]
@@ -392,9 +394,10 @@ mod tests {
         let file = sub.join("chapter1.md");
         fs::write(&file, "test").unwrap();
 
-        let (config, source) = Config::load_for_path(&file);
+        let (config, source, local_path) = Config::load_for_path(&file);
         assert_eq!(config.palette, "Parchment", "Walk-up should find parent's .zani.toml");
         assert_eq!(source, ConfigSource::Local);
+        assert_eq!(local_path, Some(dir.path().join(".zani.toml")));
     }
 
     #[test]
@@ -409,7 +412,7 @@ mod tests {
         fs::write(&file, "test").unwrap();
 
         let global = Config::load();
-        let (config, _) = Config::load_for_path(&file);
+        let (config, _, _) = Config::load_for_path(&file);
         assert_eq!(config.palette, "Inkwell", "Palette from local");
         // Unspecified fields should come from global config
         assert_eq!(config.column_width, global.column_width, "Unspecified column_width from global");
@@ -426,8 +429,9 @@ mod tests {
         fs::write(&file, "test").unwrap();
 
         let global = Config::load();
-        let (config, _) = Config::load_for_path(&file);
+        let (config, _, local_path) = Config::load_for_path(&file);
         assert_eq!(config.palette, global.palette, "Should fall through to global/default");
+        assert_eq!(local_path, None, "No local config should return None path");
     }
 
     #[test]
@@ -448,7 +452,7 @@ mod tests {
         let file = dir.path().join("doc.md");
         fs::write(&file, "test").unwrap();
 
-        let (config, source) = Config::load_for_path(&file);
+        let (config, source, _) = Config::load_for_path(&file);
         assert_eq!(config.palette, "Inkwell", "load_for_path should read the bound palette");
         assert_eq!(source, ConfigSource::Local);
     }

@@ -296,7 +296,7 @@ fn palette_bind_persists_via_local_config() {
     Config::bind_to_project(dir.path(), "Inkwell").unwrap();
 
     // Verify: loading config for a file in this directory resolves to Inkwell
-    let (config, source) = Config::load_for_path(&file);
+    let (config, source, _) = Config::load_for_path(&file);
     assert_eq!(config.palette, "Inkwell", "Bound palette should persist");
     assert_eq!(source, zani::config::ConfigSource::Local);
 }
