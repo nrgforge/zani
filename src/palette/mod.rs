@@ -616,9 +616,9 @@ mod tests {
 
     #[test]
     fn index_in_all_finds_known_palette() {
-        let inkwell = Palette::by_name("Inkwell");
-        let idx = inkwell.index_in_all();
-        assert!(idx > 0, "Inkwell should not be at index 0 (that's the default)");
+        let sitka = Palette::by_name("Sitka");
+        let idx = sitka.index_in_all();
+        assert!(idx > 0, "Sitka should not be at index 0 (that's the default)");
     }
 
     #[test]

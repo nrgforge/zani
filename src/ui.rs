@@ -888,8 +888,8 @@ mod tests {
 
         // Settings Layer overlay should show current Palette name
         assert!(
-            text.contains("Ember"),
-            "Settings Layer should show the active Palette name 'Ember'"
+            text.contains("Manzanita"),
+            "Settings Layer should show the active Palette name 'Manzanita'"
         );
         // Settings Layer overlay should show current Focus Mode
         assert!(
@@ -907,15 +907,15 @@ mod tests {
 
     #[test]
     fn settings_layer_shows_palette_row_with_current_name() {
-        let mut app = App::new(); // default palette is Ember
+        let mut app = App::new(); // default palette is Manzanita
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // Single palette row should show the current palette name with [enter] hint
         assert!(
-            text.contains("Ember") && text.contains("[enter]"),
-            "Palette row should show current palette 'Ember' with [enter] hint"
+            text.contains("Manzanita") && text.contains("[enter]"),
+            "Palette row should show current palette 'Manzanita' with [enter] hint"
         );
     }
 
@@ -1054,30 +1054,30 @@ mod tests {
 
     #[test]
     fn palette_switch_changes_rendered_colors() {
-        let mut app = App::new(); // default palette is Ember
-        let ember_bg = app.palette.background;
+        let mut app = App::new(); // default palette is Manzanita
+        let default_bg = app.palette.background;
 
-        // Switch to Inkwell palette
-        app.set_palette(crate::palette::Palette::by_name("Inkwell"));
+        // Switch to Sitka palette
+        app.set_palette(crate::palette::Palette::by_name("Sitka"));
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
         // Settings Layer should reflect new active palette
         assert!(
-            text.contains("Inkwell") && text.contains("[enter]"),
-            "Active palette indicator should show 'Inkwell' after switch"
+            text.contains("Sitka") && text.contains("[enter]"),
+            "Active palette indicator should show 'Sitka' after switch"
         );
 
-        // The rendered buffer should use Inkwell's background color, not Ember's
-        let inkwell_bg = app.palette.background;
-        assert_ne!(ember_bg, inkwell_bg, "Palettes should have different backgrounds");
+        // The rendered buffer should use Sitka's background color, not Manzanita's
+        let sitka_bg = app.palette.background;
+        assert_ne!(default_bg, sitka_bg, "Palettes should have different backgrounds");
 
         // Check that a cell in the writing surface area uses the new palette background
         let cell = &buf[(0, 0)];
         assert_eq!(
-            cell.bg, inkwell_bg,
-            "Writing surface should render with Inkwell's background"
+            cell.bg, sitka_bg,
+            "Writing surface should render with Sitka's background"
         );
     }
 
@@ -1088,19 +1088,19 @@ mod tests {
     #[test]
     fn settings_cursor_row_has_inverted_background() {
         let mut app = App::new();
-        app.toggle_settings(); // cursor starts at active palette index (0 = Ember)
+        app.toggle_settings(); // cursor starts at active palette index (0 = Manzanita)
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
         let buf = render_app(&mut app, 80, 24);
 
-        // Find the row containing "Ember" in the overlay
+        // Find the row containing "Manzanita" in the overlay
         let area = buf.area;
         for y in area.top()..area.bottom() {
             let mut row_text = String::new();
             for x in area.left()..area.right() {
                 row_text.push_str(buf[(x, y)].symbol());
             }
-            if row_text.contains("Ember") {
+            if row_text.contains("Manzanita") {
                 // The cursor row should have accent_heading as background
                 let cell = &buf[(area.left() + 24, y)]; // inside the overlay content
                 assert_eq!(
@@ -1110,7 +1110,7 @@ mod tests {
                 return;
             }
         }
-        panic!("Could not find 'Ember' row in rendered buffer");
+        panic!("Could not find 'Manzanita' row in rendered buffer");
     }
 
     #[test]
@@ -1216,28 +1216,28 @@ mod tests {
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
 
-        // Find the row containing "Ember" and check for swatch bg colors
-        let ember = Palette::default_palette();
+        // Find the row containing "Manzanita" and check for swatch bg colors
+        let default = Palette::default_palette();
         let area = buf.area;
         for y in area.top()..area.bottom() {
             let mut row_text = String::new();
             for x in area.left()..area.right() {
                 row_text.push_str(buf[(x, y)].symbol());
             }
-            if row_text.contains("Ember") {
+            if row_text.contains("Manzanita") {
                 // Look for cells with the palette's background color as bg
                 let mut found_bg_swatch = false;
                 let mut found_fg_swatch = false;
                 let mut found_accent_swatch = false;
                 for x in area.left()..area.right() {
                     let cell = &buf[(x, y)];
-                    if cell.bg == ember.background {
+                    if cell.bg == default.background {
                         found_bg_swatch = true;
                     }
-                    if cell.bg == ember.foreground {
+                    if cell.bg == default.foreground {
                         found_fg_swatch = true;
                     }
-                    if cell.bg == ember.accent_heading {
+                    if cell.bg == default.accent_heading {
                         // Cursor row also uses accent_heading as bg,
                         // but swatch cells have space as symbol
                         if cell.symbol() == " " {
@@ -1251,14 +1251,14 @@ mod tests {
                 return;
             }
         }
-        panic!("Could not find 'Ember' row in rendered buffer");
+        panic!("Could not find 'Manzanita' row in rendered buffer");
     }
 
     // === Acceptance test: Live palette preview ===
 
     #[test]
     fn settings_palette_row_shows_color_swatches() {
-        let mut app = App::new(); // default is Ember
+        let mut app = App::new(); // default is Manzanita
         app.toggle_settings();
 
         let buf = render_app(&mut app, 80, 24);
@@ -1271,7 +1271,7 @@ mod tests {
             for x in area.left()..area.right() {
                 row_text.push_str(buf[(x, y)].symbol());
             }
-            if row_text.contains("Ember") {
+            if row_text.contains("Manzanita") {
                 // Look for swatch cells with palette background color
                 let mut found_swatch = false;
                 for x in area.left()..area.right() {
@@ -1329,7 +1329,8 @@ mod tests {
             .unwrap();
         app.settings_apply();
 
-        let buf = render_app(&mut app, 80, 30);
+        // 40 palettes + 8 category headers + spacers need a tall terminal
+        let buf = render_app(&mut app, 80, 60);
         let text = extract_all_text(&buf);
 
         for palette in crate::palette::Palette::all() {
@@ -1343,7 +1344,7 @@ mod tests {
 
     #[test]
     fn palette_browser_marks_active_palette() {
-        let mut app = App::new(); // Ember is default
+        let mut app = App::new(); // Manzanita is default
         app.toggle_settings();
         app.settings.cursor = crate::settings::SettingsItem::all()
             .iter()
@@ -1355,7 +1356,7 @@ mod tests {
         let text = extract_all_text(&buf);
 
         assert!(
-            text.contains("> Ember"),
+            text.contains("> Manzanita"),
             "Active palette should be marked with '>'"
         );
     }

@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn degrade_falls_back_without_overrides() {
         let palette = Palette::default_palette();
-        assert!(palette.color_256_overrides().is_none(), "Ember has no 256-color overrides");
+        assert!(palette.color_256_overrides().is_none(), "Manzanita has no 256-color overrides");
 
         let degraded = ColorProfile::Color256.degrade_palette(&palette);
         // Without overrides, palette is returned unchanged — map_color

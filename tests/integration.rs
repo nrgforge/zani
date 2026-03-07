@@ -201,9 +201,9 @@ fn config_resolution_feeds_palette_browser() {
     use zani::color_profile::ColorProfile;
     use zani::config::{Config, ConfigSource};
 
-    // Simulate: local config binds "Inkwell" to project
+    // Simulate: local config binds "Sitka" to project
     let config = Config {
-        palette: "Inkwell".to_string(),
+        palette: "Sitka".to_string(),
         ..Config::default()
     };
 
@@ -213,7 +213,7 @@ fn config_resolution_feeds_palette_browser() {
         None,
         ConfigSource::Local,
     );
-    assert_eq!(app.palette().name, "Inkwell", "App should use Inkwell from config");
+    assert_eq!(app.palette().name, "Sitka", "App should use Sitka from config");
     assert_eq!(app.config_source(), ConfigSource::Local);
 
     // Open settings (Ctrl+P), then navigate to Palette row and press Enter
@@ -225,9 +225,9 @@ fn config_resolution_feeds_palette_browser() {
     app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
     assert!(app.palette_browser().open);
 
-    // Focused palette should be Inkwell (cursor positioned on active palette)
+    // Focused palette should be Sitka (cursor positioned on active palette)
     let focused = app.palette_browser().focused_palette().unwrap();
-    assert_eq!(focused.name, "Inkwell", "Browser cursor should land on Inkwell");
+    assert_eq!(focused.name, "Sitka", "Browser cursor should land on Sitka");
 }
 
 /// Integration test: 256-color degradation applies to resolved palette.
@@ -294,12 +294,12 @@ fn palette_bind_persists_via_local_config() {
     let file = dir.path().join("doc.md");
     fs::write(&file, "test").unwrap();
 
-    // Simulate selecting Inkwell and binding to project
-    Config::bind_to_project(dir.path(), "Inkwell").unwrap();
+    // Simulate selecting Sitka and binding to project
+    Config::bind_to_project(dir.path(), "Sitka").unwrap();
 
-    // Verify: loading config for a file in this directory resolves to Inkwell
+    // Verify: loading config for a file in this directory resolves to Sitka
     let (config, source, _) = Config::load_for_path(&file);
-    assert_eq!(config.palette, "Inkwell", "Bound palette should persist");
+    assert_eq!(config.palette, "Sitka", "Bound palette should persist");
     assert_eq!(source, zani::config::ConfigSource::Local);
 }
 
@@ -333,7 +333,7 @@ fn save_to_project_round_trips_all_settings() {
     assert_eq!(app.config_source(), ConfigSource::Global);
 
     // Change settings: palette to Neon Noir, focus to Paragraph, column width to 72
-    app.set_palette(Palette::by_name("Neon Noir"));
+    app.set_palette(Palette::by_name("Fly Agaric"));
     app.toggle_settings();
 
     // Navigate to FocusMode(Paragraph) and apply
@@ -389,7 +389,7 @@ fn save_to_project_round_trips_all_settings() {
     let (reloaded, source, local_path) = Config::load_for_path(&file);
     assert_eq!(source, ConfigSource::Local, "Reloaded config should be Local");
     assert!(local_path.is_some(), "Local config path should be set");
-    assert_eq!(reloaded.palette, "Neon Noir", "Palette should round-trip");
+    assert_eq!(reloaded.palette, "Fly Agaric", "Palette should round-trip");
     assert_eq!(reloaded.focus_mode, FocusMode::Paragraph, "Focus mode should round-trip");
     assert_eq!(reloaded.column_width, 72, "Column width should round-trip");
 }

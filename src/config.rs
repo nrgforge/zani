@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn default_config_values() {
         let config = Config::default();
-        assert_eq!(config.palette, "Ember", "default palette should be Ember");
+        assert_eq!(config.palette, "Manzanita", "default palette should be Manzanita");
         assert_eq!(config.focus_mode, FocusMode::Off, "default focus mode should be Off");
         assert_eq!(config.column_width, 60, "default column width should be 60");
         assert_eq!(config.editing_mode, EditingMode::Vim, "default editing mode should be Vim");
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn round_trip_serialization() {
         let config = Config {
-            palette: "Inkwell".to_string(),
+            palette: "Sitka".to_string(),
             focus_mode: FocusMode::Paragraph,
             column_width: 72,
             editing_mode: EditingMode::Standard,
@@ -318,9 +318,9 @@ mod tests {
 
     #[test]
     fn deserialize_with_missing_fields_uses_defaults() {
-        let toml_str = r#"palette = "Parchment""#;
+        let toml_str = r#"palette = "Oatgrass""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.palette, "Parchment", "palette should match specified value");
+        assert_eq!(config.palette, "Oatgrass", "palette should match specified value");
         assert_eq!(config.focus_mode, FocusMode::Off, "missing focus_mode should default to Off");
         assert_eq!(config.column_width, 60, "missing column_width should default to 60");
     }
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn missing_editing_mode_defaults_to_vim() {
-        let toml_str = r#"palette = "Ember""#;
+        let toml_str = r#"palette = "Manzanita""#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.editing_mode, EditingMode::Vim);
     }
@@ -352,11 +352,11 @@ mod tests {
     #[test]
     fn resolve_palette_finds_known_palette() {
         let config = Config {
-            palette: "Inkwell".to_string(),
+            palette: "Sitka".to_string(),
             ..Config::default()
         };
         let palette = config.resolve_palette();
-        assert_eq!(palette.name, "Inkwell");
+        assert_eq!(palette.name, "Sitka");
     }
 
     #[test]
@@ -407,14 +407,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join(".zani.toml"),
-            r#"palette = "Inkwell""#,
+            r#"palette = "Sitka""#,
         ).unwrap();
 
         let file = dir.path().join("document.md");
         fs::write(&file, "test").unwrap();
 
         let (config, source, local_path) = Config::load_for_path(&file);
-        assert_eq!(config.palette, "Inkwell", "Local config should override palette");
+        assert_eq!(config.palette, "Sitka", "Local config should override palette");
         assert_eq!(source, ConfigSource::Local);
         assert_eq!(local_path, Some(dir.path().join(".zani.toml")));
     }
@@ -425,7 +425,7 @@ mod tests {
         // .zani.toml at project root
         fs::write(
             dir.path().join(".zani.toml"),
-            r#"palette = "Parchment""#,
+            r#"palette = "Oatgrass""#,
         ).unwrap();
         // Subdirectory with no .zani.toml
         let sub = dir.path().join("chapters");
@@ -434,7 +434,7 @@ mod tests {
         fs::write(&file, "test").unwrap();
 
         let (config, source, local_path) = Config::load_for_path(&file);
-        assert_eq!(config.palette, "Parchment", "Walk-up should find parent's .zani.toml");
+        assert_eq!(config.palette, "Oatgrass", "Walk-up should find parent's .zani.toml");
         assert_eq!(source, ConfigSource::Local);
         assert_eq!(local_path, Some(dir.path().join(".zani.toml")));
     }
@@ -445,14 +445,14 @@ mod tests {
         // Local config with only palette
         fs::write(
             dir.path().join(".zani.toml"),
-            r#"palette = "Inkwell""#,
+            r#"palette = "Sitka""#,
         ).unwrap();
         let file = dir.path().join("doc.md");
         fs::write(&file, "test").unwrap();
 
         let global = Config::load();
         let (config, _, _) = Config::load_for_path(&file);
-        assert_eq!(config.palette, "Inkwell", "Palette from local");
+        assert_eq!(config.palette, "Sitka", "Palette from local");
         // Unspecified fields should come from global config
         assert_eq!(config.column_width, global.column_width, "Unspecified column_width from global");
         assert_eq!(config.focus_mode, global.focus_mode, "Unspecified focus_mode from global");
@@ -476,23 +476,23 @@ mod tests {
     #[test]
     fn bind_writes_zani_toml() {
         let dir = TempDir::new().unwrap();
-        Config::bind_to_project(dir.path(), "Neon Noir").unwrap();
+        Config::bind_to_project(dir.path(), "Fly Agaric").unwrap();
 
         let content = fs::read_to_string(dir.path().join(".zani.toml")).unwrap();
         let local: LocalConfig = toml::from_str(&content).unwrap();
-        assert_eq!(local.palette, Some("Neon Noir".to_string()));
+        assert_eq!(local.palette, Some("Fly Agaric".to_string()));
     }
 
     #[test]
     fn bind_then_load_round_trip() {
         let dir = TempDir::new().unwrap();
-        Config::bind_to_project(dir.path(), "Inkwell").unwrap();
+        Config::bind_to_project(dir.path(), "Sitka").unwrap();
 
         let file = dir.path().join("doc.md");
         fs::write(&file, "test").unwrap();
 
         let (config, source, _) = Config::load_for_path(&file);
-        assert_eq!(config.palette, "Inkwell", "load_for_path should read the bound palette");
+        assert_eq!(config.palette, "Sitka", "load_for_path should read the bound palette");
         assert_eq!(source, ConfigSource::Local);
     }
 
@@ -501,7 +501,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".zani.toml");
         let config = Config {
-            palette: "Neon Noir".to_string(),
+            palette: "Fly Agaric".to_string(),
             focus_mode: FocusMode::Paragraph,
             column_width: 72,
             editing_mode: EditingMode::Standard,
@@ -511,7 +511,7 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         let local: LocalConfig = toml::from_str(&content).unwrap();
-        assert_eq!(local.palette, Some("Neon Noir".to_string()));
+        assert_eq!(local.palette, Some("Fly Agaric".to_string()));
         assert_eq!(local.focus_mode, Some("paragraph".to_string()));
         assert_eq!(local.column_width, Some(72));
         assert_eq!(local.editing_mode, Some("standard".to_string()));
@@ -522,7 +522,7 @@ mod tests {
     fn save_local_round_trips_via_load_for_path() {
         let dir = TempDir::new().unwrap();
         let config = Config {
-            palette: "Neon Noir".to_string(),
+            palette: "Fly Agaric".to_string(),
             focus_mode: FocusMode::Paragraph,
             column_width: 72,
             editing_mode: EditingMode::Standard,

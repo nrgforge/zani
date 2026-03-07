@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn toggle_settings_lands_on_palette_row() {
-        let app_palettes = [Palette::default_palette(), Palette::by_name("Inkwell"), Palette::by_name("Parchment")];
+        let app_palettes = [Palette::default_palette(), Palette::by_name("Sitka"), Palette::by_name("Oatgrass")];
         for p in &app_palettes {
             let mut app = App::new();
             app.palette = *p;
@@ -1348,18 +1348,18 @@ mod tests {
     #[test]
     fn palette_animation_starts_on_set_palette() {
         let mut app = App::new();
-        let inkwell = Palette::by_name("Inkwell");
+        let sitka = Palette::by_name("Sitka");
         use crate::animation::{Easing, TransitionKind};
         app.animations.start(
             TransitionKind::Palette {
                 from: Box::new(app.palette),
-                to: Box::new(inkwell),
+                to: Box::new(sitka),
             },
             Duration::from_millis(300),
             Easing::EaseInOut,
         );
-        app.set_palette(inkwell);
-        assert_eq!(app.palette.name, "Inkwell");
+        app.set_palette(sitka);
+        assert_eq!(app.palette.name, "Sitka");
         assert!(app.animations.is_active());
     }
 
@@ -1737,14 +1737,14 @@ mod tests {
     fn from_config_round_trip() {
         use crate::config::Config;
         let config = Config {
-            palette: "Inkwell".to_string(),
+            palette: "Sitka".to_string(),
             focus_mode: FocusMode::Paragraph,
             column_width: 80,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Edge,
         };
         let app = App::from_config(&config, ColorProfile::TrueColor, None);
-        assert_eq!(app.palette.name, "Inkwell");
+        assert_eq!(app.palette.name, "Sitka");
         assert_eq!(app.dimming.focus_mode, FocusMode::Paragraph);
         assert_eq!(app.viewport.column_width, 80);
         assert_eq!(app.editor.editing_mode, EditingMode::Standard);
@@ -1755,7 +1755,7 @@ mod tests {
     fn save_config_round_trip() {
         use crate::config::Config;
         let original = Config {
-            palette: "Parchment".to_string(),
+            palette: "Oatgrass".to_string(),
             focus_mode: FocusMode::Sentence,
             column_width: 72,
             editing_mode: EditingMode::Standard,
@@ -1945,7 +1945,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let local_path = dir.path().join(".zani.toml");
 
-        // Create initial local config with Ember palette
+        // Create initial local config with Manzanita palette
         let initial = Config::default();
         initial.save_local(&local_path).unwrap();
 
@@ -2058,7 +2058,7 @@ mod tests {
 
         let mut app = App::from_config_with_source(
             &Config {
-                palette: "Inkwell".to_string(),
+                palette: "Sitka".to_string(),
                 focus_mode: FocusMode::Paragraph,
                 column_width: 72,
                 ..Config::default()
@@ -2083,7 +2083,7 @@ mod tests {
 
         let content = std::fs::read_to_string(&local_path).unwrap();
         let local: LocalConfig = toml::from_str(&content).unwrap();
-        assert_eq!(local.palette, Some("Inkwell".to_string()));
+        assert_eq!(local.palette, Some("Sitka".to_string()));
         assert_eq!(local.focus_mode, Some("paragraph".to_string()));
         assert_eq!(local.column_width, Some(72));
 

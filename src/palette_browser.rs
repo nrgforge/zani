@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn browser_groups_palettes_by_affective_category() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Ember");
+        browser.open("Manzanita");
 
         let groups = browser.groups();
         assert!(!groups.is_empty(), "Browser should have palette groups");
@@ -140,16 +140,16 @@ mod tests {
     #[test]
     fn browser_opens_with_cursor_on_active_palette() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Inkwell");
+        browser.open("Sitka");
 
         let focused = browser.focused_palette().unwrap();
-        assert_eq!(focused.name, "Inkwell", "Cursor should start on active palette");
+        assert_eq!(focused.name, "Sitka", "Cursor should start on active palette");
     }
 
     #[test]
     fn nav_down_moves_through_palettes_and_categories() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Ember");
+        browser.open("Manzanita");
 
         browser.nav_down();
         // Should have moved — either to next palette in category or next category
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn nav_up_moves_back() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Ember");
+        browser.open("Manzanita");
 
         // Navigate down then back up
         let initial = browser.focused_palette().unwrap().name.to_string();
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn esc_closes_browser() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Ember");
+        browser.open("Manzanita");
         assert!(browser.open);
 
         browser.close();
@@ -190,10 +190,10 @@ mod tests {
     #[test]
     fn set_active_updates_marker() {
         let mut browser = PaletteBrowserState::new();
-        browser.open("Ember");
-        assert_eq!(browser.active_palette_name(), "Ember");
+        browser.open("Manzanita");
+        assert_eq!(browser.active_palette_name(), "Manzanita");
 
-        browser.set_active("Inkwell");
-        assert_eq!(browser.active_palette_name(), "Inkwell");
+        browser.set_active("Sitka");
+        assert_eq!(browser.active_palette_name(), "Sitka");
     }
 }
