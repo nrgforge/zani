@@ -40,6 +40,8 @@ impl CharStyle {
             palette.accent_link
         } else if self.is_code {
             palette.accent_code
+        } else if self.modifier.contains(Modifier::BOLD) || self.modifier.contains(Modifier::ITALIC) {
+            palette.accent_emphasis
         } else {
             palette.foreground
         };
@@ -416,6 +418,22 @@ mod tests {
         let s = CharStyle::default();
         let style = s.resolve(&palette);
         assert_eq!(style.fg.unwrap(), palette.foreground);
+    }
+
+    #[test]
+    fn resolve_bold_uses_accent_emphasis() {
+        let palette = Palette::default_palette();
+        let s = CharStyle { modifier: Modifier::BOLD, ..Default::default() };
+        let style = s.resolve(&palette);
+        assert_eq!(style.fg.unwrap(), palette.accent_emphasis);
+    }
+
+    #[test]
+    fn resolve_italic_uses_accent_emphasis() {
+        let palette = Palette::default_palette();
+        let s = CharStyle { modifier: Modifier::ITALIC, ..Default::default() };
+        let style = s.resolve(&palette);
+        assert_eq!(style.fg.unwrap(), palette.accent_emphasis);
     }
 
     // === Markdown link tests ===

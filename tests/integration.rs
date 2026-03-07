@@ -63,13 +63,13 @@ fn focus_dimming_and_markdown_colors_compose() {
         "Syntax '*' should be dimmer than plain text even in active region"
     );
 
-    // --- Active region (line 2): bold text at full foreground ---
+    // --- Active region (line 2): bold text uses accent_emphasis ---
     // 'b' in "bold" is at column 7
     let b_cell = &buf[(x_offset + 7, 2)];
     assert_eq!(b_cell.symbol(), "b");
     assert_eq!(
-        b_cell.fg, palette.foreground,
-        "Bold text in active region should be full foreground"
+        b_cell.fg, palette.accent_emphasis,
+        "Bold text in active region should use accent_emphasis"
     );
 
     // --- Non-active region (line 4): dimmed from foreground ---
