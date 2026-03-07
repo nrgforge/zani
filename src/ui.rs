@@ -864,9 +864,7 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
         let sample_area = Rect::new(footer_area.x, sample_y, footer_area.width, 1);
         let bg = Style::default().bg(fp.background);
         let sample_line = Line::from(vec![
-            Span::styled("  Background", Style::default().fg(fp.background).bg(fp.foreground)),
-            Span::styled("  ", bg),
-            Span::styled("Foreground", Style::default().fg(fp.foreground).bg(fp.background)),
+            Span::styled("  Foreground", Style::default().fg(fp.foreground).bg(fp.background)),
             Span::styled("  ", bg),
             Span::styled("Heading", Style::default().fg(fp.accent_heading).bg(fp.background)),
             Span::styled("  ", bg),
