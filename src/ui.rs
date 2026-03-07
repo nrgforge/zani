@@ -799,18 +799,16 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
 
             let style = if is_focused { cursor_style } else { normal_style };
 
-            // Right-align swatches: pad name to fill remaining space
-            // Swatch block: " " + 3 * ("  " + " ") = 10 chars
-            let swatch_width: usize = 10;
+            // Right-align swatches: packed tight, no spacers
+            // Swatch block: 4 * "  " = 8 chars
+            let swatch_width: usize = 8;
             let inner_width = (overlay_width as usize).saturating_sub(2); // minus borders
             let name_width = inner_width.saturating_sub(swatch_width);
             let padded = format!("{:<width$}", text, width = name_width);
 
             let mut spans = vec![Span::styled(padded, style)];
-            spans.push(Span::styled(" ", style));
-            for color in [p.background, p.foreground, p.accent_heading] {
+            for color in [p.background, p.foreground, p.accent_heading, p.accent_emphasis] {
                 spans.push(Span::styled("  ", Style::default().bg(color)));
-                spans.push(Span::styled(" ", style));
             }
             lines.push(Line::from(spans));
         }
@@ -1689,5 +1687,42 @@ mod tests {
         app.handle_key(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
         // Should remain Default — scratch can't save to project
         assert_eq!(app.config_source, crate::config::ConfigSource::Default);
+    }
+
+    // === Acceptance test: Browser swatch row includes accent_emphasis (ADR-014/015) ===
+
+    #[test]
+    fn palette_browser_shows_emphasis_swatch() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        let buf = render_app(&mut app, 80, 30);
+
+        // Find the row containing "Manzanita" and look for accent_emphasis bg color
+        let default = Palette::default_palette();
+        let area = buf.area;
+        for y in area.top()..area.bottom() {
+            let mut row_text = String::new();
+            for x in area.left()..area.right() {
+                row_text.push_str(buf[(x, y)].symbol());
+            }
+            if row_text.contains("Manzanita") {
+                let mut found_emphasis = false;
+                for x in area.left()..area.right() {
+                    if buf[(x, y)].bg == default.accent_emphasis {
+                        found_emphasis = true;
+                        break;
+                    }
+                }
+                assert!(found_emphasis, "Browser swatch row should include accent_emphasis color");
+                return;
+            }
+        }
+        panic!("Could not find Manzanita row");
     }
 }
