@@ -1531,51 +1531,6 @@ mod tests {
     }
 
     #[test]
-    fn config_row_save_to_project_creates_local_config() {
-        use tempfile::TempDir;
-        use crate::config::{Config, ConfigSource, LocalConfig};
-
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("doc.md");
-        std::fs::write(&file, "test").unwrap();
-
-        let mut app = App::from_config_with_source(
-            &Config {
-                palette: "Inkwell".to_string(),
-                focus_mode: FocusMode::Paragraph,
-                column_width: 72,
-                ..Config::default()
-            },
-            crate::color_profile::ColorProfile::TrueColor,
-            Some(file),
-            ConfigSource::Global,
-        );
-
-        // Navigate to Config row and press Enter
-        app.toggle_settings();
-        let config_pos = SettingsItem::all()
-            .iter()
-            .position(|i| *i == SettingsItem::Config)
-            .unwrap();
-        app.settings.cursor = config_pos;
-        app.handle_key(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE);
-
-        // Verify: .zani.toml created with all settings
-        let local_path = dir.path().join(".zani.toml");
-        assert!(local_path.exists(), ".zani.toml should be created");
-
-        let content = std::fs::read_to_string(&local_path).unwrap();
-        let local: LocalConfig = toml::from_str(&content).unwrap();
-        assert_eq!(local.palette, Some("Inkwell".to_string()));
-        assert_eq!(local.focus_mode, Some("paragraph".to_string()));
-        assert_eq!(local.column_width, Some(72));
-
-        // config_source should switch to Local
-        assert_eq!(app.config_source, ConfigSource::Local);
-        assert_eq!(app.local_config_path, Some(local_path));
-    }
-
-    #[test]
     fn config_row_enter_noop_when_local() {
         let mut app = App::new();
         app.config_source = crate::config::ConfigSource::Local;

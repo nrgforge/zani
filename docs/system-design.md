@@ -184,7 +184,7 @@ Bold entries are new or changed for ADR-009 through ADR-012.
 ```
 main → app, config, color_profile, writing_window
 app → editor, viewport, palette, palette_browser, dimming, color_profile, settings, persistence, animation, find, config
-ui → app, writing_surface, palette, palette_browser, settings, color_profile, find, focus_mode, editing_mode, scroll_mode, vim_bindings, markdown_styling, buffer, wrap
+ui → app, writing_surface, palette, palette_browser, settings, color_profile, config, find, focus_mode, editing_mode, scroll_mode, vim_bindings, markdown_styling, buffer, wrap
 writing_surface → buffer, palette, color_profile, focus_mode, markdown_styling, wrap
 editor → buffer, clipboard, editing_mode, smart_typography, undo, vim_bindings, wrap
 dimming → buffer, focus_mode, animation

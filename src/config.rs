@@ -188,25 +188,12 @@ impl Config {
 
     /// Convert this Config to a LocalConfig with all fields populated.
     fn to_local_config(&self) -> LocalConfig {
-        let focus_mode_str = match self.focus_mode {
-            FocusMode::Off => "off",
-            FocusMode::Sentence => "sentence",
-            FocusMode::Paragraph => "paragraph",
-        };
-        let editing_mode_str = match self.editing_mode {
-            EditingMode::Vim => "vim",
-            EditingMode::Standard => "standard",
-        };
-        let scroll_mode_str = match self.scroll_mode {
-            ScrollMode::Edge => "edge",
-            ScrollMode::Typewriter => "typewriter",
-        };
         LocalConfig {
             palette: Some(self.palette.clone()),
-            focus_mode: Some(focus_mode_str.to_string()),
+            focus_mode: Some(focus_mode_str(self.focus_mode).to_string()),
             column_width: Some(self.column_width),
-            editing_mode: Some(editing_mode_str.to_string()),
-            scroll_mode: Some(scroll_mode_str.to_string()),
+            editing_mode: Some(editing_mode_str(self.editing_mode).to_string()),
+            scroll_mode: Some(scroll_mode_str(self.scroll_mode).to_string()),
         }
     }
 
@@ -222,21 +209,41 @@ impl Config {
     }
 }
 
+/// Canonical string for FocusMode (single source of truth for serialization).
+fn focus_mode_str(mode: FocusMode) -> &'static str {
+    match mode {
+        FocusMode::Off => "off",
+        FocusMode::Sentence => "sentence",
+        FocusMode::Paragraph => "paragraph",
+    }
+}
+
+/// Canonical string for EditingMode.
+fn editing_mode_str(mode: EditingMode) -> &'static str {
+    match mode {
+        EditingMode::Vim => "vim",
+        EditingMode::Standard => "standard",
+    }
+}
+
+/// Canonical string for ScrollMode.
+fn scroll_mode_str(mode: ScrollMode) -> &'static str {
+    match mode {
+        ScrollMode::Edge => "edge",
+        ScrollMode::Typewriter => "typewriter",
+    }
+}
+
 /// Serde support for FocusMode as a lowercase string.
 mod focus_mode_serde {
-    use super::FocusMode;
+    use super::{FocusMode, focus_mode_str};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(mode: &FocusMode, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let s = match mode {
-            FocusMode::Off => "off",
-            FocusMode::Sentence => "sentence",
-            FocusMode::Paragraph => "paragraph",
-        };
-        serializer.serialize_str(s)
+        serializer.serialize_str(focus_mode_str(*mode))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<FocusMode, D::Error>
@@ -256,18 +263,14 @@ mod focus_mode_serde {
 
 /// Serde support for ScrollMode as a lowercase string.
 mod scroll_mode_serde {
-    use super::ScrollMode;
+    use super::{ScrollMode, scroll_mode_str};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(mode: &ScrollMode, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let s = match mode {
-            ScrollMode::Edge => "edge",
-            ScrollMode::Typewriter => "typewriter",
-        };
-        serializer.serialize_str(s)
+        serializer.serialize_str(scroll_mode_str(*mode))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<ScrollMode, D::Error>

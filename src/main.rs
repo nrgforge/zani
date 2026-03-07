@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create application state
     let mut app = App::from_config_with_source(&config, color_profile, file_path, config_source);
-    app.local_config_path = local_config_path;
+    app.set_local_config_path(local_config_path);
 
     // Initialize terminal
     terminal::enable_raw_mode()?;
