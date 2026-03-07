@@ -241,6 +241,7 @@ mod tests {
 
         let palette = Palette {
             name: "TestTuned",
+            provenance: "",
             foreground: Color::Rgb(220, 215, 205),
             background: Color::Rgb(40, 38, 35),
             dimmed_foreground: Color::Rgb(100, 97, 92),
@@ -278,6 +279,7 @@ mod tests {
 
         let palette = Palette {
             name: "TestTuned",
+            provenance: "",
             foreground: Color::Rgb(220, 215, 205),
             background: Color::Rgb(40, 38, 35),
             dimmed_foreground: Color::Rgb(100, 97, 92),

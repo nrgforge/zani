@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn toggle_settings_lands_on_palette_row() {
-        let app_palettes = [Palette::default_palette(), Palette::inkwell(), Palette::parchment()];
+        let app_palettes = [Palette::default_palette(), Palette::by_name("Inkwell"), Palette::by_name("Parchment")];
         for p in &app_palettes {
             let mut app = App::new();
             app.palette = *p;
@@ -1348,7 +1348,7 @@ mod tests {
     #[test]
     fn palette_animation_starts_on_set_palette() {
         let mut app = App::new();
-        let inkwell = Palette::inkwell();
+        let inkwell = Palette::by_name("Inkwell");
         use crate::animation::{Easing, TransitionKind};
         app.animations.start(
             TransitionKind::Palette {

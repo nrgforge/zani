@@ -127,6 +127,7 @@ fn palette_switch_updates_all_styling() {
     // Create a second palette with different colors
     let palette_b = Palette {
         name: "Test Alt",
+        provenance: "",
         foreground: ratatui::style::Color::Rgb(200, 200, 210),
         background: ratatui::style::Color::Rgb(30, 30, 40),
         dimmed_foreground: ratatui::style::Color::Rgb(90, 90, 100),
@@ -241,6 +242,7 @@ fn degradation_applies_to_resolved_palette() {
     // Create a palette with hand-tuned 256-color overrides
     let palette = Palette {
         name: "TestWith256",
+        provenance: "",
         foreground: Color::Rgb(220, 220, 220),
         background: Color::Rgb(30, 30, 30),
         dimmed_foreground: Color::Rgb(100, 100, 100),
@@ -331,7 +333,7 @@ fn save_to_project_round_trips_all_settings() {
     assert_eq!(app.config_source(), ConfigSource::Global);
 
     // Change settings: palette to Neon Noir, focus to Paragraph, column width to 72
-    app.set_palette(Palette::neon_noir());
+    app.set_palette(Palette::by_name("Neon Noir"));
     app.toggle_settings();
 
     // Navigate to FocusMode(Paragraph) and apply
@@ -402,6 +404,7 @@ fn validation_covers_both_truecolor_and_256() {
     // Valid truecolor values, INVALID 256 overrides (pure black bg)
     let palette = Palette {
         name: "TestBad256",
+        provenance: "",
         foreground: Color::Rgb(220, 220, 220),
         background: Color::Rgb(30, 30, 30),
         dimmed_foreground: Color::Rgb(100, 100, 100),

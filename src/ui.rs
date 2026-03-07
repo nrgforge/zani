@@ -1058,7 +1058,7 @@ mod tests {
         let ember_bg = app.palette.background;
 
         // Switch to Inkwell palette
-        app.set_palette(crate::palette::Palette::inkwell());
+        app.set_palette(crate::palette::Palette::by_name("Inkwell"));
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
