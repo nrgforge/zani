@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +6,29 @@ use crate::editing_mode::EditingMode;
 use crate::focus_mode::FocusMode;
 use crate::palette::Palette;
 use crate::scroll_mode::ScrollMode;
+
+/// Where the active config was resolved from (ADR-011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// Built-in defaults only.
+    Default,
+    /// Global config file (~/.config/zani/config.toml).
+    Global,
+    /// Local config file (.zani.toml in a project directory).
+    Local,
+}
+
+/// Per-project config overrides from `.zani.toml` (ADR-011).
+/// All fields are optional — unspecified fields fall through to
+/// global config, then defaults.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LocalConfig {
+    pub palette: Option<String>,
+    pub focus_mode: Option<String>,
+    pub column_width: Option<u16>,
+    pub editing_mode: Option<String>,
+    pub scroll_mode: Option<String>,
+}
 
 /// Persisted user preferences, loaded from and saved to config.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,6 +95,82 @@ impl Config {
             .unwrap_or_default();
         config.column_width = config.column_width.clamp(20, 120);
         config
+    }
+
+    /// Load config with local override resolution (ADR-011).
+    /// Walks up from `file_path` looking for `.zani.toml`. If found,
+    /// its fields override the global config. Returns the resolved
+    /// config and its source.
+    pub fn load_for_path(file_path: &Path) -> (Self, ConfigSource) {
+        let global = Self::load();
+
+        // Walk up from file's parent directory looking for .zani.toml
+        let start = if file_path.is_dir() {
+            file_path.to_path_buf()
+        } else {
+            file_path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
+        };
+
+        let mut dir = Some(start.as_path());
+        while let Some(d) = dir {
+            let local_path = d.join(".zani.toml");
+            if let Ok(content) = std::fs::read_to_string(&local_path) {
+                if let Ok(local) = toml::from_str::<LocalConfig>(&content) {
+                    let mut config = global;
+                    config.merge_local(&local);
+                    return (config, ConfigSource::Local);
+                }
+            }
+            dir = d.parent();
+        }
+
+        let source = if Self::path().map_or(false, |p| p.exists()) {
+            ConfigSource::Global
+        } else {
+            ConfigSource::Default
+        };
+        (global, source)
+    }
+
+    /// Apply local config overrides to this config.
+    fn merge_local(&mut self, local: &LocalConfig) {
+        if let Some(ref p) = local.palette {
+            self.palette = p.clone();
+        }
+        if let Some(ref fm) = local.focus_mode {
+            self.focus_mode = match fm.as_str() {
+                "sentence" => FocusMode::Sentence,
+                "paragraph" => FocusMode::Paragraph,
+                _ => FocusMode::Off,
+            };
+        }
+        if let Some(cw) = local.column_width {
+            self.column_width = cw.clamp(20, 120);
+        }
+        if let Some(ref em) = local.editing_mode {
+            self.editing_mode = match em.as_str() {
+                "standard" => EditingMode::Standard,
+                _ => EditingMode::Vim,
+            };
+        }
+        if let Some(ref sm) = local.scroll_mode {
+            self.scroll_mode = match sm.as_str() {
+                "typewriter" => ScrollMode::Typewriter,
+                _ => ScrollMode::Edge,
+            };
+        }
+    }
+
+    /// Write a `.zani.toml` file binding a palette to a project directory (ADR-011).
+    pub fn bind_to_project(dir: &Path, palette_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let local = LocalConfig {
+            palette: Some(palette_name.to_string()),
+            ..LocalConfig::default()
+        };
+        let content = toml::to_string_pretty(&local)?;
+        let path = dir.join(".zani.toml");
+        std::fs::write(path, content)?;
+        Ok(())
     }
 
     /// Save config to disk. Creates parent directories as needed.
@@ -151,6 +250,8 @@ mod scroll_mode_serde {
 mod tests {
     use super::*;
     use crate::editing_mode::EditingMode;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn default_config_values() {
@@ -257,5 +358,97 @@ mod tests {
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(loaded.scroll_mode, ScrollMode::Typewriter);
+    }
+
+    // === Acceptance tests: Local Config (ADR-011) ===
+
+    #[test]
+    fn local_config_overrides_global_palette() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(".zani.toml"),
+            r#"palette = "Inkwell""#,
+        ).unwrap();
+
+        let file = dir.path().join("document.md");
+        fs::write(&file, "test").unwrap();
+
+        let (config, source) = Config::load_for_path(&file);
+        assert_eq!(config.palette, "Inkwell", "Local config should override palette");
+        assert_eq!(source, ConfigSource::Local);
+    }
+
+    #[test]
+    fn walk_up_search_finds_nearest_local_config() {
+        let dir = TempDir::new().unwrap();
+        // .zani.toml at project root
+        fs::write(
+            dir.path().join(".zani.toml"),
+            r#"palette = "Parchment""#,
+        ).unwrap();
+        // Subdirectory with no .zani.toml
+        let sub = dir.path().join("chapters");
+        fs::create_dir(&sub).unwrap();
+        let file = sub.join("chapter1.md");
+        fs::write(&file, "test").unwrap();
+
+        let (config, source) = Config::load_for_path(&file);
+        assert_eq!(config.palette, "Parchment", "Walk-up should find parent's .zani.toml");
+        assert_eq!(source, ConfigSource::Local);
+    }
+
+    #[test]
+    fn partial_local_config_merges_with_global() {
+        let dir = TempDir::new().unwrap();
+        // Local config with only palette
+        fs::write(
+            dir.path().join(".zani.toml"),
+            r#"palette = "Inkwell""#,
+        ).unwrap();
+        let file = dir.path().join("doc.md");
+        fs::write(&file, "test").unwrap();
+
+        let global = Config::load();
+        let (config, _) = Config::load_for_path(&file);
+        assert_eq!(config.palette, "Inkwell", "Palette from local");
+        // Unspecified fields should come from global config
+        assert_eq!(config.column_width, global.column_width, "Unspecified column_width from global");
+        assert_eq!(config.focus_mode, global.focus_mode, "Unspecified focus_mode from global");
+        assert_eq!(config.editing_mode, global.editing_mode, "Unspecified editing_mode from global");
+        assert_eq!(config.scroll_mode, global.scroll_mode, "Unspecified scroll_mode from global");
+    }
+
+    #[test]
+    fn no_local_config_falls_through() {
+        let dir = TempDir::new().unwrap();
+        // No .zani.toml anywhere
+        let file = dir.path().join("doc.md");
+        fs::write(&file, "test").unwrap();
+
+        let (config, _) = Config::load_for_path(&file);
+        assert_eq!(config.palette, Config::default().palette, "Should fall through to global/default");
+    }
+
+    #[test]
+    fn bind_writes_zani_toml() {
+        let dir = TempDir::new().unwrap();
+        Config::bind_to_project(dir.path(), "Neon Noir").unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".zani.toml")).unwrap();
+        let local: LocalConfig = toml::from_str(&content).unwrap();
+        assert_eq!(local.palette, Some("Neon Noir".to_string()));
+    }
+
+    #[test]
+    fn bind_then_load_round_trip() {
+        let dir = TempDir::new().unwrap();
+        Config::bind_to_project(dir.path(), "Inkwell").unwrap();
+
+        let file = dir.path().join("doc.md");
+        fs::write(&file, "test").unwrap();
+
+        let (config, source) = Config::load_for_path(&file);
+        assert_eq!(config.palette, "Inkwell", "load_for_path should read the bound palette");
+        assert_eq!(source, ConfigSource::Local);
     }
 }
