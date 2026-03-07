@@ -745,7 +745,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
 fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rect) {
     let palette = ctx.base_palette;
     let overlay_width = 48u16.min(area.width);
-    let footer_height: u16 = 5; // separator + provenance text
+    let footer_height: u16 = 7; // separator + provenance text + color samples
 
     let normal_style = Style::default()
         .fg(palette.foreground)
@@ -859,8 +859,24 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
         let sep = Paragraph::new(Line::from(Span::styled(rule, dim_style)));
         frame.render_widget(sep, sep_area);
 
-        // Provenance text: palette name + description
-        let prov_height = footer_area.height.saturating_sub(1);
+        // Color sample row (last row of footer)
+        let sample_y = footer_area.y + footer_area.height.saturating_sub(1);
+        let sample_area = Rect::new(footer_area.x, sample_y, footer_area.width, 1);
+        let bg = Style::default().bg(fp.background);
+        let sample_line = Line::from(vec![
+            Span::styled("  Heading", Style::default().fg(fp.accent_heading).bg(fp.background)),
+            Span::styled("  ", bg),
+            Span::styled("Emphasis", Style::default().fg(fp.accent_emphasis).bg(fp.background)),
+            Span::styled("  ", bg),
+            Span::styled("Link", Style::default().fg(fp.accent_link).bg(fp.background)),
+            Span::styled("  ", bg),
+            Span::styled("Code", Style::default().fg(fp.accent_code).bg(fp.background)),
+        ]);
+        let sample_paragraph = Paragraph::new(sample_line).style(bg);
+        frame.render_widget(sample_paragraph, sample_area);
+
+        // Provenance text: palette name + description (between separator and samples)
+        let prov_height = footer_area.height.saturating_sub(2); // minus separator and samples
         if prov_height > 0 {
             let prov_area = Rect::new(
                 footer_area.x,
@@ -1726,5 +1742,38 @@ mod tests {
             }
         }
         panic!("Could not find Manzanita row");
+    }
+
+    // === Acceptance test: Color sample labels in browser footer ===
+
+    #[test]
+    fn palette_browser_footer_shows_color_samples() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        let buf = render_app(&mut app, 80, 30);
+
+        let default = Palette::default_palette();
+        let area = buf.area;
+        let mut found_heading_sample = false;
+        let mut found_emphasis_sample = false;
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &buf[(x, y)];
+                if cell.fg == default.accent_heading && cell.symbol() != " " {
+                    found_heading_sample = true;
+                }
+                if cell.fg == default.accent_emphasis && cell.symbol() != " " {
+                    found_emphasis_sample = true;
+                }
+            }
+        }
+        assert!(found_heading_sample, "Footer should show text in accent_heading color");
+        assert!(found_emphasis_sample, "Footer should show text in accent_emphasis color");
     }
 }
