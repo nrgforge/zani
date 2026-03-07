@@ -627,4 +627,91 @@ mod tests {
         custom.name = "Unknown";
         assert_eq!(custom.index_in_all(), 0);
     }
+
+    // === Acceptance tests: PNW Flora Naming Register (ADR-015) ===
+
+    #[test]
+    fn default_palette_is_manzanita() {
+        let p = Palette::default_palette();
+        assert_eq!(p.name, "Manzanita");
+        assert_eq!(p.category, AffectiveCategory::DarkWarm);
+    }
+
+    #[test]
+    fn no_old_prototype_names_remain() {
+        let old_names = [
+            "Ember", "Hearthstone", "Inkwell", "Moonstone", "Neon Noir",
+            "Aurora", "Parchment", "Manuscript", "Glacier", "Daybreak",
+        ];
+        for palette in Palette::all() {
+            assert!(
+                !old_names.contains(&palette.name),
+                "Palette '{}' uses a retired prototype name",
+                palette.name
+            );
+        }
+    }
+
+    #[test]
+    fn collection_contains_exactly_40_palettes() {
+        assert_eq!(Palette::all().len(), 40);
+    }
+
+    #[test]
+    fn each_category_contains_exactly_5_palettes() {
+        let grouped = Palette::all_by_category();
+        for (cat, palettes) in &grouped {
+            assert_eq!(
+                palettes.len(), 5,
+                "Category {:?} has {} palettes, expected 5",
+                cat, palettes.len()
+            );
+        }
+        assert_eq!(grouped.len(), 8, "Should have 8 affective categories");
+    }
+
+    #[test]
+    fn every_palette_has_provenance_description() {
+        for palette in Palette::all() {
+            assert!(
+                !palette.provenance.is_empty(),
+                "Palette '{}' has empty provenance",
+                palette.name
+            );
+            // Provenance should reference a scientific name (contains em dash or
+            // genus-species pattern). We check for the em dash separator which
+            // all our provenance descriptions use.
+            assert!(
+                palette.provenance.contains('—'),
+                "Palette '{}' provenance should include scientific name with em dash separator",
+                palette.name
+            );
+        }
+    }
+
+    #[test]
+    fn sibling_palettes_have_diverse_hue_angles() {
+        let grouped = Palette::all_by_category();
+        let mut violations = Vec::new();
+        for (cat, palettes) in &grouped {
+            let hues: Vec<f64> = palettes.iter().map(|p| p.sort_key).collect();
+            for i in 0..hues.len() {
+                for j in (i + 1)..hues.len() {
+                    let diff = (hues[i] - hues[j]).abs();
+                    let min_diff = diff.min(360.0 - diff);
+                    if min_diff < 15.0 {
+                        violations.push(format!(
+                            "{:?}: '{}' ({:.1}°) and '{}' ({:.1}°) = {:.1}° apart",
+                            cat, palettes[i].name, hues[i], palettes[j].name, hues[j], min_diff
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Hue diversity violations:\n{}",
+            violations.join("\n")
+        );
+    }
 }

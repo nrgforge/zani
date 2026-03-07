@@ -658,4 +658,4 @@
 **Given** a `.zani.toml` exists with `palette = "Salal"`
 **When** Config Resolution runs
 **Then** the resolved Palette is Salal
-**And** the Palette belongs to the DarkCool Affective Category
+**And** the Palette belongs to the DarkVivid Affective Category

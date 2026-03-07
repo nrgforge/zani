@@ -428,3 +428,64 @@ fn validation_covers_both_truecolor_and_256() {
     let result = palette.validate();
     assert!(result.is_err(), "Palette with pure black 256-color bg should fail validation");
 }
+
+/// Integration test: Manzanita default round-trips through config persistence (ADR-015).
+/// Exercises: Config::default() → save → load → resolve_palette → name check.
+#[test]
+fn manzanita_default_round_trips_through_config() {
+    use tempfile::TempDir;
+    use zani::config::Config;
+
+    let dir = TempDir::new().unwrap();
+    let config = Config::default();
+    assert_eq!(config.palette, "Manzanita");
+
+    // Save and reload
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let loaded: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+    let palette = loaded.resolve_palette();
+    assert_eq!(palette.name, "Manzanita");
+    assert_eq!(palette.category, zani::palette::AffectiveCategory::DarkWarm);
+}
+
+/// Integration test: Palette Browser shows 8 categories with 5 palettes each (ADR-014+015).
+/// Exercises: PaletteBrowserState → Palette::all_by_category() → grouping and counts.
+#[test]
+fn palette_browser_shows_8_categories_with_5_each() {
+    use zani::palette::Palette;
+    use zani::palette_browser::PaletteBrowserState;
+
+    let mut browser = PaletteBrowserState::new();
+    browser.open("Manzanita");
+
+    let groups = Palette::all_by_category();
+    assert_eq!(groups.len(), 8, "Should have 8 affective categories");
+    for (cat, palettes) in &groups {
+        assert_eq!(
+            palettes.len(), 5,
+            "Category {:?} should have 5 palettes", cat
+        );
+    }
+}
+
+/// Integration test: Config file references palette by PNW species name (ADR-015).
+/// Exercises: .zani.toml → Config::load_for_path → resolve_palette → category check.
+#[test]
+fn config_file_references_pnw_species_name() {
+    use tempfile::TempDir;
+    use std::fs;
+    use zani::config::Config;
+    use zani::palette::AffectiveCategory;
+
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join(".zani.toml"), r#"palette = "Salal""#).unwrap();
+    let file = dir.path().join("doc.md");
+    fs::write(&file, "test").unwrap();
+
+    let (config, _, _) = Config::load_for_path(&file);
+    let palette = config.resolve_palette();
+    assert_eq!(palette.name, "Salal");
+    assert_eq!(palette.category, AffectiveCategory::DarkVivid);
+}
