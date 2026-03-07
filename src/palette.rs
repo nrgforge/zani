@@ -44,6 +44,20 @@ impl AffectiveCategory {
     }
 }
 
+/// Hand-tuned 256-color alternate values for a Palette (ADR-012).
+/// RGB values chosen so that `nearest_256_color` maps them to specific
+/// 6x6x6 cube entries that preserve mood character.
+#[derive(Debug, Clone, Copy)]
+pub struct Color256Overrides {
+    pub foreground: Color,
+    pub background: Color,
+    pub dimmed_foreground: Color,
+    pub accent_heading: Color,
+    pub accent_emphasis: Color,
+    pub accent_link: Color,
+    pub accent_code: Color,
+}
+
 /// A named, curated color system defining foreground, background,
 /// dimming endpoints, and accent colors for the Writing Surface.
 /// Designed as a mood instrument — priming a specific affective state
@@ -62,6 +76,8 @@ pub struct Palette {
     pub category: AffectiveCategory,
     /// OKLCH hue angle for Perceptual Sort Order within category (ADR-009).
     pub sort_key: f64,
+    /// Optional hand-tuned 256-color alternate values (ADR-012).
+    pub color_256: Option<Color256Overrides>,
 }
 
 impl Palette {
@@ -78,6 +94,7 @@ impl Palette {
             accent_code: Color::Rgb(170, 165, 155),
             category: AffectiveCategory::DarkWarm,
             sort_key: oklch_hue(40, 38, 35),
+            color_256: None,
         }
     }
 
@@ -94,6 +111,7 @@ impl Palette {
             accent_code: Color::Rgb(160, 165, 175),
             category: AffectiveCategory::DarkCool,
             sort_key: oklch_hue(30, 32, 40),
+            color_256: None,
         }
     }
 
@@ -110,6 +128,7 @@ impl Palette {
             accent_code: Color::Rgb(100, 90, 80),
             category: AffectiveCategory::LightWarm,
             sort_key: oklch_hue(240, 230, 215),
+            color_256: None,
         }
     }
 
@@ -126,7 +145,13 @@ impl Palette {
             accent_code: interpolate(&from.accent_code, &to.accent_code, progress),
             category: to.category,
             sort_key: to.sort_key,
+            color_256: to.color_256,
         }
+    }
+
+    /// Returns the 256-color overrides if present.
+    pub fn color_256_overrides(&self) -> Option<&Color256Overrides> {
+        self.color_256.as_ref()
     }
 
     /// Returns all built-in palettes.
@@ -202,6 +227,46 @@ impl Palette {
                     pair: name.to_string(),
                     ratio,
                 });
+            }
+        }
+
+        // Validate 256-color overrides if present (ADR-012, Invariant 3).
+        if let Some(ref ov) = self.color_256 {
+            let ov_colors = [
+                ("256:foreground", &ov.foreground),
+                ("256:background", &ov.background),
+                ("256:dimmed_foreground", &ov.dimmed_foreground),
+                ("256:accent_heading", &ov.accent_heading),
+                ("256:accent_emphasis", &ov.accent_emphasis),
+                ("256:accent_link", &ov.accent_link),
+                ("256:accent_code", &ov.accent_code),
+            ];
+
+            for (name, color) in ov_colors {
+                if is_pure_black(color) {
+                    return Err(PaletteError::PureBlack(name.to_string()));
+                }
+                if is_pure_white(color) {
+                    return Err(PaletteError::PureWhite(name.to_string()));
+                }
+            }
+
+            let ov_pairs = [
+                ("256:foreground/background", &ov.foreground, &ov.background),
+                ("256:accent_heading/background", &ov.accent_heading, &ov.background),
+                ("256:accent_emphasis/background", &ov.accent_emphasis, &ov.background),
+                ("256:accent_link/background", &ov.accent_link, &ov.background),
+                ("256:accent_code/background", &ov.accent_code, &ov.background),
+            ];
+
+            for (name, fg, bg) in ov_pairs {
+                let ratio = contrast_ratio(fg, bg);
+                if ratio < 4.5 {
+                    return Err(PaletteError::InsufficientContrast {
+                        pair: name.to_string(),
+                        ratio,
+                    });
+                }
             }
         }
 
@@ -388,6 +453,7 @@ mod tests {
             accent_link: link, accent_code: code,
             category: AffectiveCategory::DarkWarm,
             sort_key: 0.0,
+            color_256: None,
         }
     }
 
@@ -425,6 +491,56 @@ mod tests {
             palette.validate(),
             Err(PaletteError::InsufficientContrast { .. })
         ));
+    }
+
+    // === Acceptance tests: 256-Color Validation (ADR-012, Invariant 3) ===
+
+    #[test]
+    fn validate_rejects_256_overrides_with_insufficient_contrast() {
+        let mut palette = Palette::default_palette();
+        palette.color_256 = Some(Color256Overrides {
+            foreground: Color::Rgb(42, 40, 37), // too close to background
+            background: Color::Rgb(38, 38, 38),
+            dimmed_foreground: Color::Rgb(95, 95, 95),
+            accent_heading: Color::Rgb(215, 175, 135),
+            accent_emphasis: Color::Rgb(175, 175, 175),
+            accent_link: Color::Rgb(135, 175, 175),
+            accent_code: Color::Rgb(175, 175, 135),
+        });
+        assert!(matches!(
+            palette.validate(),
+            Err(PaletteError::InsufficientContrast { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_256_overrides_with_pure_black() {
+        let mut palette = Palette::default_palette();
+        palette.color_256 = Some(Color256Overrides {
+            foreground: Color::Rgb(215, 215, 215),
+            background: Color::Rgb(0, 0, 0), // pure black
+            dimmed_foreground: Color::Rgb(95, 95, 95),
+            accent_heading: Color::Rgb(215, 175, 135),
+            accent_emphasis: Color::Rgb(175, 175, 175),
+            accent_link: Color::Rgb(135, 175, 175),
+            accent_code: Color::Rgb(175, 175, 135),
+        });
+        assert!(matches!(palette.validate(), Err(PaletteError::PureBlack(_))));
+    }
+
+    #[test]
+    fn validate_accepts_valid_256_overrides() {
+        let mut palette = Palette::default_palette();
+        palette.color_256 = Some(Color256Overrides {
+            foreground: Color::Rgb(215, 215, 215),
+            background: Color::Rgb(38, 38, 38),
+            dimmed_foreground: Color::Rgb(95, 95, 95),
+            accent_heading: Color::Rgb(215, 175, 135),
+            accent_emphasis: Color::Rgb(175, 175, 175),
+            accent_link: Color::Rgb(135, 175, 175),
+            accent_code: Color::Rgb(175, 175, 135),
+        });
+        assert!(palette.validate().is_ok(), "Valid 256-color overrides should pass validation");
     }
 
     // === Unit tests for contrast ratio math ===

@@ -1,3 +1,5 @@
+use crate::palette::Palette;
+
 /// The terminal's color capability, detected at startup.
 /// Rendering degrades gracefully from TrueColor down to Basic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +36,33 @@ impl ColorProfile {
             std::env::var("COLORTERM").ok().as_deref(),
             std::env::var("TERM").ok().as_deref(),
         )
+    }
+
+    /// Apply color profile degradation to a palette (ADR-012).
+    /// For 256-color: uses hand-tuned overrides if available, otherwise
+    /// returns the palette unchanged (individual colors will go through
+    /// map_color during rendering).
+    pub fn degrade_palette(&self, palette: &Palette) -> Palette {
+        match self {
+            Self::TrueColor => *palette,
+            Self::Color256 => {
+                if let Some(ov) = palette.color_256_overrides() {
+                    Palette {
+                        foreground: ov.foreground,
+                        background: ov.background,
+                        dimmed_foreground: ov.dimmed_foreground,
+                        accent_heading: ov.accent_heading,
+                        accent_emphasis: ov.accent_emphasis,
+                        accent_link: ov.accent_link,
+                        accent_code: ov.accent_code,
+                        ..*palette
+                    }
+                } else {
+                    *palette
+                }
+            }
+            Self::Basic => *palette,
+        }
     }
 
     /// Detect from explicit COLORTERM and TERM values (fully testable).
@@ -191,5 +220,86 @@ mod tests {
         let color = Color::Rgb(255, 0, 0);
         let mapped = ColorProfile::Color256.map_color(color);
         assert_eq!(mapped, Color::Indexed(196));
+    }
+
+    // === Acceptance tests: 256-Color Degradation (ADR-012) ===
+
+    #[test]
+    fn degrade_uses_hand_tuned_values() {
+        use ratatui::style::Color;
+        use crate::palette::{AffectiveCategory, Color256Overrides};
+
+        let overrides = Color256Overrides {
+            foreground: Color::Rgb(215, 215, 215),
+            background: Color::Rgb(38, 38, 38),
+            dimmed_foreground: Color::Rgb(95, 95, 95),
+            accent_heading: Color::Rgb(215, 175, 135),
+            accent_emphasis: Color::Rgb(175, 175, 175),
+            accent_link: Color::Rgb(135, 175, 175),
+            accent_code: Color::Rgb(175, 175, 135),
+        };
+
+        let palette = Palette {
+            name: "TestTuned",
+            foreground: Color::Rgb(220, 215, 205),
+            background: Color::Rgb(40, 38, 35),
+            dimmed_foreground: Color::Rgb(100, 97, 92),
+            accent_heading: Color::Rgb(200, 170, 130),
+            accent_emphasis: Color::Rgb(190, 185, 175),
+            accent_link: Color::Rgb(150, 180, 170),
+            accent_code: Color::Rgb(170, 165, 155),
+            category: AffectiveCategory::DarkWarm,
+            sort_key: 0.0,
+            color_256: Some(overrides),
+        };
+
+        let degraded = ColorProfile::Color256.degrade_palette(&palette);
+        assert_eq!(degraded.foreground, overrides.foreground, "Should use hand-tuned foreground");
+        assert_eq!(degraded.background, overrides.background, "Should use hand-tuned background");
+        assert_eq!(degraded.accent_heading, overrides.accent_heading, "Should use hand-tuned accent");
+    }
+
+    #[test]
+    fn degrade_falls_back_without_overrides() {
+        let palette = Palette::default_palette();
+        assert!(palette.color_256_overrides().is_none(), "Ember has no 256-color overrides");
+
+        let degraded = ColorProfile::Color256.degrade_palette(&palette);
+        // Without overrides, palette is returned unchanged — map_color
+        // handles per-color mapping during rendering.
+        assert_eq!(degraded.foreground, palette.foreground);
+        assert_eq!(degraded.background, palette.background);
+    }
+
+    #[test]
+    fn truecolor_degrade_is_passthrough() {
+        use ratatui::style::Color;
+        use crate::palette::{AffectiveCategory, Color256Overrides};
+
+        let palette = Palette {
+            name: "TestTuned",
+            foreground: Color::Rgb(220, 215, 205),
+            background: Color::Rgb(40, 38, 35),
+            dimmed_foreground: Color::Rgb(100, 97, 92),
+            accent_heading: Color::Rgb(200, 170, 130),
+            accent_emphasis: Color::Rgb(190, 185, 175),
+            accent_link: Color::Rgb(150, 180, 170),
+            accent_code: Color::Rgb(170, 165, 155),
+            category: AffectiveCategory::DarkWarm,
+            sort_key: 0.0,
+            color_256: Some(Color256Overrides {
+                foreground: Color::Rgb(215, 215, 215),
+                background: Color::Rgb(38, 38, 38),
+                dimmed_foreground: Color::Rgb(95, 95, 95),
+                accent_heading: Color::Rgb(215, 175, 135),
+                accent_emphasis: Color::Rgb(175, 175, 175),
+                accent_link: Color::Rgb(135, 175, 175),
+                accent_code: Color::Rgb(175, 175, 135),
+            }),
+        };
+
+        // TrueColor ignores overrides
+        let degraded = ColorProfile::TrueColor.degrade_palette(&palette);
+        assert_eq!(degraded.foreground, palette.foreground, "TrueColor should not use 256-color overrides");
     }
 }
