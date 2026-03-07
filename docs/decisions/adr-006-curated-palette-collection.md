@@ -1,6 +1,6 @@
 # ADR-006: Curated Palette Collection
 
-**Status:** Accepted
+**Status:** Accepted — amended by ADR-015 (PNW flora naming register, collection size 40, default Manzanita)
 
 ## Context
 

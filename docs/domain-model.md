@@ -14,13 +14,15 @@
 | **Scroll Mode** | How the viewport follows the cursor. Two variants: Edge (scroll when cursor nears edges) and Typewriter (cursor stays vertically centered). Orthogonal to Focus Mode. | Focus Mode, Writing Surface |
 | **Typewriter Mode** | A Scroll Mode variant where the cursor stays vertically centered and text scrolls around it, eliminating manual scrolling. Does not contribute dimming. | Scroll Mode |
 | **Fade Config** | A pairing of duration and easing curve that governs how a dimming transition animates. Each dimming source specifies separate configs for fade-in (brightening) and fade-out (dimming). | Dimming, Active Region |
-| **Palette** | A named, curated color system defining foreground, background, dimming endpoints, and accent colors. Designed as a mood instrument — priming a specific affective state rather than serving as decoration. Belongs to an Affective Category. May include hand-tuned 256-color alternate values for graceful degradation. All palettes satisfy Invariant 3. | Affective Category, Color Profile, Perceptual Sort Order |
-| **Affective Category** | A mood-based grouping of palettes along two axes: brightness (Dark, Light) and character (Warm, Cool, Vivid). Examples: "Dark — Warm", "Dark — Vivid", "Light — Cool". The organizing taxonomy for the Palette Browser. | Palette, Palette Browser |
+| **Palette** | A named, curated color system defining foreground, background, dimming endpoints, and accent colors. Designed as a mood instrument — priming a specific affective state rather than serving as decoration. Named after a Pacific Northwest species from the Naming Register, with a Provenance Description documenting the species and its color associations. Belongs to an Affective Category. May include hand-tuned 256-color alternate values for graceful degradation. The default Palette is Manzanita (*Arctostaphylos*), tuned to evoke the species' smooth mahogany-to-cinnamon bark. All palettes satisfy Invariant 3. | Affective Category, Color Profile, Perceptual Sort Order, Naming Register, Provenance Description |
+| **Affective Category** | A mood-based grouping of palettes along two axes: brightness (Dark, Light) and character (Warm, Cool, Vivid, Muted). Eight categories of five palettes each (40 total). Examples: "Dark — Warm", "Dark — Muted", "Light — Cool". The organizing taxonomy for the Palette Browser. Siblings are spread across the available OKLCH hue space for maximum perceptual diversity. | Palette, Palette Browser |
+| **Naming Register** | The constraint that all Palette names are drawn from Pacific Northwest flora — vascular plants, mosses, lichens, and fungi. The register provides traceable provenance, register consistency, and moderate schema congruence with Affective Categories. Named after the same botanical world as the app itself (Zani = Manzanita). A palette cannot be added to the collection unless a PNW species exists whose color associations are moderately congruent with the palette's affect. | Palette, Provenance Description |
+| **Provenance Description** | A botanically accurate one-line note attached to each Palette, documenting the species' scientific name, its appearance, and its Pacific Northwest ecological context. Must reflect actual habitat range and species character, not romanticized sketches — the descriptions should hold up to scrutiny from someone who lives among these plants. Serves the curation test, provides flavor text, and introduces users to the PNW botanical world. | Palette, Naming Register |
 | **Perceptual Sort Order** | Ordering of palettes within an Affective Category by OKLCH hue angle, so adjacent palettes are perceptual neighbors. Produces a smooth browsing experience rather than jarring color jumps. | Affective Category, Palette Browser |
 | **Color Profile** | The terminal's color capability: True Color (24-bit), 256-color, or basic ANSI. Detected at startup; rendering degrades gracefully. | Palette |
 | **Chrome** | Any visible UI element that is not the writer's text: status bars, line numbers, file names, word counts. Hidden by default; summoned on demand. | Settings Layer |
 | **Settings Layer** | The hidden interface for configuration, brought up by hotkey. Invisible during writing. Contains a single "Palette" row that opens the Palette Browser. | Chrome, Palette Browser |
-| **Palette Browser** | A dedicated sub-panel within the Settings Layer for browsing, filtering, and selecting palettes. Organizes palettes by Affective Category with Perceptual Sort Order within each category. Replaces inline palette rows when the collection exceeds a few entries. | Settings Layer, Affective Category, Perceptual Sort Order |
+| **Palette Browser** | A dedicated sub-panel within the Settings Layer for browsing, filtering, and selecting palettes. Organizes palettes by Affective Category with Perceptual Sort Order within each category. The two-level architecture (category → palette) means the writer faces ~8 category headers and ~5 palettes per group, never the full collection at once. | Settings Layer, Affective Category, Perceptual Sort Order |
 | **Local Config** | A `.zani.toml` file in a project directory that overrides global configuration for files opened from that directory or below it. Enables per-project palette binding. Resolved by walking up from the opened file's location. | Config Resolution, Palette |
 | **Config Resolution** | The lookup order for settings: Local Config (`.zani.toml`, walk-up from file) → global config (`~/.config/zani/config.toml`) → built-in default. When the resolved palette differs from the currently active one, a crossfade animation handles the transition. | Local Config, Palette |
 | **Writing Window** | A dedicated terminal window spawned by Zani with writing-optimized settings (font, line height, colors). Separate from the user's development terminal. | Inline Mode |
@@ -41,6 +43,7 @@
 | Theme | Palette | "Theme" implies swappable skins. Palette is the specific color set. |
 | Color Scheme | Palette | Same reasoning as "Theme" — too generic. |
 | Mood / Mood Category | Affective Category | "Mood" is ambiguous (the writer's mood vs. the palette's intended effect). Affective Category is precise. |
+| Plant (as register label) | Flora / Species | The Naming Register includes mosses, lichens, and fungi — "plant" is too narrow. Use "flora" for the register and "species" for individual entries. |
 | Plugin | (n/a) | Zani does not have a plugin system. Features are built in. |
 | Opacity / Transparency (terminal) | Dimming | Terminals don't support true per-character transparency. Dimming uses color interpolation. Note: the internal opacity factor (0.0–1.0) is a rendering calculation, not terminal transparency. |
 
@@ -76,7 +79,11 @@
 - **Scroll Mode** and **Focus Mode** are orthogonal — neither influences the other
 - **Typewriter Mode** is a **Scroll Mode** variant; it contributes zero dimming
 - A **Palette** belongs to one **Affective Category**
+- A **Palette** has exactly one **Provenance Description**
+- A **Palette**'s name is drawn from the **Naming Register**
+- The **Naming Register** constrains palette addition — no palette enters the collection without a corresponding PNW species whose color associations are moderately congruent with the palette's Affective Category
 - An **Affective Category** contains many **Palettes**, sorted by **Perceptual Sort Order**
+- Sibling **Palettes** within an **Affective Category** are spread across OKLCH hue space for maximum perceptual diversity
 - A **Palette** is constrained by the detected **Color Profile**
 - The **Writing Window** is spawned by **Launch**; **Inline Mode** skips it
 - **Autosave** persists the **Document** to disk; independent of **Git Integration**
@@ -98,7 +105,7 @@
 
 2. **Writing is the only default action.** When Zani is open, the only thing to do is write. All other interactions (settings, integrations, focus toggles) require deliberate invocation.
 
-3. **No pure black or white. WCAG AA minimum.** The Palette never uses `#000000` or `#FFFFFF`. All foreground/background color pairs maintain at least a 4.5:1 contrast ratio (WCAG AA). Within these constraints, palettes are free to be warm, cool, vivid, subdued, or anything else.
+3. **No pure black or white. WCAG AA minimum.** The Palette never uses `#000000` or `#FFFFFF`. All foreground/background color pairs maintain at least a 4.5:1 contrast ratio (WCAG AA). Within these constraints, palettes are free to be warm, cool, vivid, muted, or anything else.
 
 4. **Focus dimming is color interpolation, not terminal opacity.** Dimmed text uses per-character RGB interpolation toward the background color. Internally, each character's dimming is expressed as an opacity factor (0.0–1.0) which governs the interpolation amount. This is a rendering calculation, not a terminal transparency feature.
 
@@ -124,6 +131,8 @@
 
 15. **Dimming effects compose by multiplication.** If multiple dimming sources exist, each produces an opacity factor in [0.0, 1.0]. The final opacity is their product. This ensures independent sources can never brighten text — they can only dim further.
 
+16. **Palette names are PNW flora with traceable provenance.** Every Palette is named after a Pacific Northwest species (vascular plants, mosses, lichens, or fungi) whose natural color associations are moderately congruent with the palette's Affective Category. Each name must be traceable to a specific species, register-consistent with the collection, uniquely evocative within its category, and resolvable when seen alongside the actual palette. The Provenance Description must be botanically accurate — reflecting actual habitat range and ecological context, not approximations.
+
 ## Open Questions
 
 1. **Save error visibility.** Autosave failures are only visible in the Settings Layer. A writer whose document fails to save silently will not know unless they open settings. What is the right signal that preserves the "tool disappears" invariant? Options: brief auto-dismissing indicator on the Writing Surface, subtle color shift in the margin, or accept the current behavior as consistent with minimal chrome.
@@ -142,6 +151,10 @@
 
 8. **Project palette binding granularity.** Local Config currently binds a single palette name to a project. A writer might want a category preference or a shortlist of palettes for a project rather than a single locked-in choice — different sessions within the same project may call for different registers. The single-palette binding is the simplest version and enables the "immediately drop into the right palette" experience; the writer can always override in-session. Whether category-level or multi-palette binding is worth the added complexity should be evaluated after the single-palette version is in use. *(Source: Epistemic Gate, /rdd-model phase)*
 
+9. **Provenance description display.** Where does the Provenance Description surface in the UI? Options: only in documentation, in the Palette Browser as a subtitle under each name, or as a detail view accessible from the browser. The "tool disappears" invariant (Invariant 1) argues against clutter; the educational value argues for accessibility. *(Source: Reflection 003, §Decisions from Gate Exchange)*
+
+10. *(Resolved — Zani has no users yet; renaming palettes to PNW species carries no backwards-compatibility burden.)*
+
 ## Amendment Log
 
 | # | Date | Invariant | Change | Propagation |
@@ -149,3 +162,7 @@
 | 1 | 2026-02-26 | Invariant 9 | Changed from "Writing Window is the default" to "Writing Window is opt-in (`--window` flag)". Inline is now the default. | ADR-003 superseded by ADR-007. Writing Window scenarios updated. |
 | 2 | 2026-02-27 | Invariant 4 | Clarified: internal opacity factor (0.0–1.0) is a rendering calculation, not terminal transparency. | ADR-004 unchanged; ADR-008 added. |
 | 3 | 2026-02-27 | Invariants 12–15 | Added: Scroll/Focus orthogonality, Typewriter is scroll-only, chase-based animation, multiplicative dimming composition. | ADR-008 covers the full redesign. Focus Mode concept updated (Typewriter removed). Scroll Mode concept added. Fade Config concept added. |
+| 4 | 2026-03-06 | Affective Category | Expanded character axis from (Warm, Cool, Vivid) to (Warm, Cool, Vivid, Muted). Six categories become eight. Grounded in convergent factor-analytic evidence: Ou et al. (2004), Kobayashi (1981), Valdez & Mehrabian (1994), Jonauskaite & Mohr (2025). Muted is the low-saturation pole of the Activity/Chroma axis — a distinct affective register (contemplative, subdued, reflective), not the absence of vividness. | ADR-009 (palette affective categories) needs update. `AffectiveCategory` enum in `palette.rs` needs `DarkMuted` and `LightMuted` variants. Palette Browser layout gains two additional category sections. |
+| 5 | 2026-03-06 | Invariant 3 | Minor wording: added "muted" to the list of permissible palette characters ("warm, cool, vivid, muted, or anything else"). No substantive change. | None. |
+| 6 | 2026-03-06 | Invariant 16 | Added: Palette names are PNW flora with traceable provenance. Establishes the Naming Register as a constitutional constraint on the collection. All existing palette names (Ember, Hearthstone, etc.) must be renamed to PNW species. | All palette definitions in `palette.rs` must be renamed. Default palette becomes Manzanita (replacing Ember). Config files referencing old names need migration (see Open Question 10). ADR-006 (curated palette collection) needs update to reflect naming register. |
+| 7 | 2026-03-06 | Concepts | Added: Naming Register, Provenance Description. Amended: Palette (name constraint, provenance, Manzanita as default), Affective Category (Muted added, density guideline), Palette Browser (two-level architecture noted). Added alias: "Plant" → "Flora / Species". | New concepts are referenced by Palette; no existing concept definitions contradicted. |

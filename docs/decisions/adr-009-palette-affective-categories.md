@@ -1,6 +1,6 @@
 # ADR-009: Palettes Organized by Affective Category
 
-**Status:** Proposed
+**Status:** Proposed — amended by ADR-014 (character axis expanded from 3 to 4 values)
 
 ## Context
 
@@ -14,6 +14,8 @@ Organize the Palette collection by Affective Category. Each Palette belongs to e
 
 - **Brightness axis:** Dark, Light
 - **Character axis:** Warm, Cool, Vivid
+
+> **Amended by ADR-014:** Character axis expanded to (Warm, Cool, Vivid, Muted), producing eight categories instead of the six listed below.
 
 Producing categories such as "Dark — Warm", "Dark — Cool", "Dark — Vivid", "Light — Warm", "Light — Cool".
 

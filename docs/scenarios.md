@@ -337,7 +337,8 @@
 **Given** the set of all Affective Categories
 **When** the categories are enumerated
 **Then** both Dark and Light brightness levels are represented
-**And** Warm, Cool, and Vivid character types are represented within each brightness level
+**And** Warm, Cool, Vivid, and Muted character types are represented within each brightness level
+**And** the total number of categories is exactly eight
 
 ---
 
@@ -549,3 +550,112 @@
 **And** Config Resolution runs again for a file in the same directory
 **Then** the resolved config has palette "Neon Noir", focus mode Paragraph, and column width 72
 **And** config_source is Local
+
+---
+
+## Feature: Muted Affective Category (ADR-014)
+
+### Scenario: DarkMuted and LightMuted categories exist in the taxonomy
+**Given** the `AffectiveCategory` enum
+**When** all variants are enumerated
+**Then** `DarkMuted` and `LightMuted` are present
+**And** `AffectiveCategory::all()` returns exactly eight categories
+
+### Scenario: DarkMuted is classified as dark
+**Given** the `DarkMuted` Affective Category
+**When** `is_dark()` is called
+**Then** the result is true
+
+### Scenario: Muted categories appear after Vivid in display order
+**Given** the display order returned by `AffectiveCategory::all()`
+**When** the order is inspected
+**Then** `DarkMuted` appears after `DarkVivid`
+**And** `LightMuted` appears after `LightVivid`
+
+### Scenario: Muted categories display correct labels
+**Given** the `DarkMuted` and `LightMuted` Affective Categories
+**When** `label()` is called on each
+**Then** `DarkMuted` returns "Dark — Muted"
+**And** `LightMuted` returns "Light — Muted"
+
+### Scenario: Palette Browser renders Muted category sections
+**Given** the Palette Browser is open
+**When** the writer views the browser contents
+**Then** "Dark — Muted" and "Light — Muted" appear as category headings
+**And** each heading has Palettes listed beneath it
+
+---
+
+## Feature: PNW Flora Naming Register (ADR-015)
+
+### Scenario: Default palette is Manzanita
+**Given** Zani starts with no config files
+**When** the default Palette is loaded
+**Then** the Palette name is "Manzanita"
+**And** the Palette belongs to the DarkWarm Affective Category
+
+### Scenario: Every palette is named after a PNW species
+**Given** the complete Palette collection
+**When** each Palette name is inspected
+**Then** no Palette is named "Ember", "Hearthstone", "Inkwell", "Moonstone", "Neon Noir", "Aurora", "Parchment", "Manuscript", "Glacier", or "Daybreak"
+**And** every Palette name corresponds to a Pacific Northwest species
+
+### Scenario: Collection contains exactly 40 palettes
+**Given** the complete Palette collection returned by `Palette::all()`
+**When** the count is taken
+**Then** the total is 40
+
+### Scenario: Each Affective Category contains exactly 5 palettes
+**Given** the Palette collection grouped by Affective Category
+**When** each category group is counted
+**Then** every Affective Category contains exactly 5 Palettes
+
+### Scenario: Every palette has a Provenance Description
+**Given** the complete Palette collection
+**When** each Palette is inspected
+**Then** every Palette has a non-empty Provenance Description
+**And** every description includes a scientific name in italicized format
+
+### Scenario: Sibling palettes have diverse hue angles
+**Given** an Affective Category containing 5 Palettes
+**When** the OKLCH hue angles of their backgrounds are compared
+**Then** no two siblings have hue angles within 15 degrees of each other
+**And** the palettes span a broad arc of the category's available hue space
+
+### Scenario: Palette name passes the curation test
+**Given** a Palette with name N and Affective Category C
+**When** evaluated against the five-point curation test
+**Then** N is traceable to a specific PNW species
+**And** N's color associations are congruent with C's affect without restating the category label
+**And** N is register-consistent with other names in the collection
+**And** N activates a distinct sensory image from other names in category C
+**And** seeing the Palette's colors alongside N, the connection is resolvable
+
+### Scenario: Provenance Description is botanically accurate
+**Given** a Palette with Provenance Description D
+**When** D is evaluated
+**Then** D references the species' actual habitat range (not a romanticized approximation)
+**And** D includes the scientific name and a one-line ecological context
+
+---
+
+## Integration Scenarios (ADR-014 + ADR-015)
+
+### Scenario: Manzanita default round-trips through config persistence
+**Given** Zani starts with the default Palette (Manzanita)
+**And** no config files exist (config_source is Default)
+**When** the writer quits without changing any settings
+**And** Zani restarts
+**Then** the resolved Palette is still Manzanita
+
+### Scenario: Palette Browser shows 8 categories with 5 palettes each
+**Given** the Palette Browser is open
+**When** the writer scans all category sections
+**Then** eight Affective Category headings are visible
+**And** each heading contains exactly 5 Palette entries
+
+### Scenario: Config file references palette by PNW species name
+**Given** a `.zani.toml` exists with `palette = "Salal"`
+**When** Config Resolution runs
+**Then** the resolved Palette is Salal
+**And** the Palette belongs to the DarkCool Affective Category
