@@ -864,13 +864,13 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
         let sample_area = Rect::new(footer_area.x, sample_y, footer_area.width, 1);
         let bg = Style::default().bg(fp.background);
         let sample_line = Line::from(vec![
-            Span::styled("  Heading", Style::default().fg(fp.accent_heading).bg(fp.background)),
+            Span::styled("  Background", Style::default().fg(fp.background).bg(fp.foreground)),
+            Span::styled("  ", bg),
+            Span::styled("Foreground", Style::default().fg(fp.foreground).bg(fp.background)),
+            Span::styled("  ", bg),
+            Span::styled("Heading", Style::default().fg(fp.accent_heading).bg(fp.background)),
             Span::styled("  ", bg),
             Span::styled("Emphasis", Style::default().fg(fp.accent_emphasis).bg(fp.background)),
-            Span::styled("  ", bg),
-            Span::styled("Link", Style::default().fg(fp.accent_link).bg(fp.background)),
-            Span::styled("  ", bg),
-            Span::styled("Code", Style::default().fg(fp.accent_code).bg(fp.background)),
         ]);
         let sample_paragraph = Paragraph::new(sample_line).style(bg);
         frame.render_widget(sample_paragraph, sample_area);
