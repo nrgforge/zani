@@ -1,16 +1,18 @@
 use ratatui::style::Color;
 
 /// Mood-based grouping of palettes along two axes:
-/// brightness (Dark, Light) and character (Warm, Cool, Vivid).
-/// The organizing taxonomy for the Palette Browser (ADR-009).
+/// brightness (Dark, Light) and character (Warm, Cool, Vivid, Muted).
+/// The organizing taxonomy for the Palette Browser (ADR-009, ADR-014).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AffectiveCategory {
     DarkWarm,
     DarkCool,
     DarkVivid,
+    DarkMuted,
     LightWarm,
     LightCool,
     LightVivid,
+    LightMuted,
 }
 
 impl AffectiveCategory {
@@ -20,9 +22,11 @@ impl AffectiveCategory {
             AffectiveCategory::DarkWarm,
             AffectiveCategory::DarkCool,
             AffectiveCategory::DarkVivid,
+            AffectiveCategory::DarkMuted,
             AffectiveCategory::LightWarm,
             AffectiveCategory::LightCool,
             AffectiveCategory::LightVivid,
+            AffectiveCategory::LightMuted,
         ]
     }
 
@@ -32,15 +36,17 @@ impl AffectiveCategory {
             AffectiveCategory::DarkWarm => "Dark — Warm",
             AffectiveCategory::DarkCool => "Dark — Cool",
             AffectiveCategory::DarkVivid => "Dark — Vivid",
+            AffectiveCategory::DarkMuted => "Dark — Muted",
             AffectiveCategory::LightWarm => "Light — Warm",
             AffectiveCategory::LightCool => "Light — Cool",
             AffectiveCategory::LightVivid => "Light — Vivid",
+            AffectiveCategory::LightMuted => "Light — Muted",
         }
     }
 
     /// Returns true if this is a Dark brightness category.
     pub fn is_dark(&self) -> bool {
-        matches!(self, AffectiveCategory::DarkWarm | AffectiveCategory::DarkCool | AffectiveCategory::DarkVivid)
+        matches!(self, AffectiveCategory::DarkWarm | AffectiveCategory::DarkCool | AffectiveCategory::DarkVivid | AffectiveCategory::DarkMuted)
     }
 }
 
@@ -558,16 +564,51 @@ mod tests {
         assert!(has_dark, "Taxonomy must include Dark brightness categories");
         assert!(has_light, "Taxonomy must include Light brightness categories");
 
-        // Check all three character types exist within each brightness level
+        // Check all four character types exist within each brightness level (ADR-014)
         let dark_labels: Vec<&str> = all_cats.iter().filter(|c| c.is_dark()).map(|c| c.label()).collect();
         assert!(dark_labels.iter().any(|l| l.contains("Warm")));
         assert!(dark_labels.iter().any(|l| l.contains("Cool")));
         assert!(dark_labels.iter().any(|l| l.contains("Vivid")));
+        assert!(dark_labels.iter().any(|l| l.contains("Muted")));
 
         let light_labels: Vec<&str> = all_cats.iter().filter(|c| !c.is_dark()).map(|c| c.label()).collect();
         assert!(light_labels.iter().any(|l| l.contains("Warm")));
         assert!(light_labels.iter().any(|l| l.contains("Cool")));
         assert!(light_labels.iter().any(|l| l.contains("Vivid")));
+        assert!(light_labels.iter().any(|l| l.contains("Muted")));
+    }
+
+    // === Acceptance tests: Muted Affective Category (ADR-014) ===
+
+    #[test]
+    fn dark_muted_and_light_muted_categories_exist() {
+        let all_cats = AffectiveCategory::all();
+        assert!(all_cats.contains(&AffectiveCategory::DarkMuted));
+        assert!(all_cats.contains(&AffectiveCategory::LightMuted));
+        assert_eq!(all_cats.len(), 8);
+    }
+
+    #[test]
+    fn dark_muted_is_classified_as_dark() {
+        assert!(AffectiveCategory::DarkMuted.is_dark());
+        assert!(!AffectiveCategory::LightMuted.is_dark());
+    }
+
+    #[test]
+    fn muted_categories_appear_after_vivid_in_display_order() {
+        let all_cats = AffectiveCategory::all();
+        let dark_vivid_pos = all_cats.iter().position(|c| *c == AffectiveCategory::DarkVivid).unwrap();
+        let dark_muted_pos = all_cats.iter().position(|c| *c == AffectiveCategory::DarkMuted).unwrap();
+        let light_vivid_pos = all_cats.iter().position(|c| *c == AffectiveCategory::LightVivid).unwrap();
+        let light_muted_pos = all_cats.iter().position(|c| *c == AffectiveCategory::LightMuted).unwrap();
+        assert!(dark_muted_pos > dark_vivid_pos, "DarkMuted should appear after DarkVivid");
+        assert!(light_muted_pos > light_vivid_pos, "LightMuted should appear after LightVivid");
+    }
+
+    #[test]
+    fn muted_categories_display_correct_labels() {
+        assert_eq!(AffectiveCategory::DarkMuted.label(), "Dark — Muted");
+        assert_eq!(AffectiveCategory::LightMuted.label(), "Light — Muted");
     }
 
     // === Unit tests for the validation logic ===
