@@ -452,7 +452,6 @@ struct SettingsRow {
 /// Render the Settings Layer overlay centered on screen.
 fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palette: &Palette, area: Rect) {
     let overlay_width = 48u16.min(area.width);
-    let all_palettes = Palette::all();
     let items = SettingsItem::all();
 
     // Build rows with cursor indices, inserting blank separators between groups
@@ -462,7 +461,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
     for (cursor_idx, item) in items.iter().enumerate() {
         let group = match item {
             SettingsItem::EditingMode(_) => "Editing",
-            SettingsItem::Palette(_) => "Palette",
+            SettingsItem::Palette => "Palette",
             SettingsItem::FocusMode(_) => "Focus",
             SettingsItem::ScrollMode(_) => "Scroll",
             SettingsItem::ColumnWidth => "Document",
@@ -488,11 +487,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
                 let marker = if *mode == vm.editing_mode { ">" } else { " " };
                 format!("  {} {}", marker, label)
             }
-            SettingsItem::Palette(idx) => {
-                let p = &all_palettes[*idx];
-                let marker = if p.name == vm.palette_name { ">" } else { " " };
-                // Pad name to 14 chars so swatches align across palette rows
-                format!("  {} {:<14}", marker, p.name)
+            SettingsItem::Palette => {
+                format!("  > {:<14}", vm.palette_name)
             }
             SettingsItem::FocusMode(mode) => {
                 let label = match mode {
@@ -528,9 +524,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         };
 
         let swatches = match item {
-            SettingsItem::Palette(idx) => {
-                let p = &all_palettes[*idx];
-                vec![p.background, p.foreground, p.accent_heading]
+            SettingsItem::Palette => {
+                vec![palette.background, palette.foreground, palette.accent_heading]
             }
             _ => vec![],
         };
@@ -568,13 +563,8 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         is_heading: false,
     });
 
-    // Determine preview palette: if cursor is on a palette row, preview those colors
-    let preview_palette = match SettingsItem::at(vm.settings_cursor) {
-        Some(SettingsItem::Palette(idx)) => {
-            all_palettes.get(idx).copied().unwrap_or(*palette)
-        }
-        _ => *palette,
-    };
+    // Use the current palette for all colors (browser handles palette preview now)
+    let preview_palette = *palette;
 
     // Interpolate colors from background toward full foreground based on opacity.
     // At opacity 1.0 (animation complete or no animation) colors are unchanged.
@@ -802,25 +792,16 @@ mod tests {
     // === Acceptance test: Settings Layer shows Palette selection ===
 
     #[test]
-    fn settings_layer_lists_palettes_with_active_indicated() {
+    fn settings_layer_shows_palette_row_with_current_name() {
         let mut app = App::new(); // default palette is Ember
         app.toggle_settings();
         let buf = render_app(&mut app, 80, 24);
         let text = extract_all_text(&buf);
 
-        // All built-in palette names should be listed
-        for palette in crate::palette::Palette::all() {
-            assert!(
-                text.contains(palette.name),
-                "Settings Layer should list palette '{}'",
-                palette.name
-            );
-        }
-
-        // Active palette should be indicated (with > marker)
+        // Single palette row should show the current palette name
         assert!(
             text.contains("> Ember"),
-            "Active palette 'Ember' should be indicated with '>'"
+            "Palette row should show current palette 'Ember' with '>'"
         );
     }
 
@@ -1021,17 +1002,17 @@ mod tests {
     #[test]
     fn settings_cursor_non_selected_row_has_normal_background() {
         let mut app = App::new();
-        app.toggle_settings(); // cursor at 0 (Ember)
+        app.toggle_settings(); // cursor at Palette row
         let buf = render_app(&mut app, 80, 24);
 
-        // Find the row containing "Inkwell" — should NOT be highlighted
+        // Find the row containing "Off" (focus mode) — should NOT be highlighted
         let area = buf.area;
         for y in area.top()..area.bottom() {
             let mut row_text = String::new();
             for x in area.left()..area.right() {
                 row_text.push_str(buf[(x, y)].symbol());
             }
-            if row_text.contains("Inkwell") {
+            if row_text.contains("Off") {
                 let cell = &buf[(area.left() + 24, y)];
                 assert_eq!(
                     cell.bg, app.palette.background,
@@ -1040,7 +1021,7 @@ mod tests {
                 return;
             }
         }
-        panic!("Could not find 'Inkwell' row in rendered buffer");
+        panic!("Could not find 'Off' row in rendered buffer");
     }
 
     // === File row in Settings ===
@@ -1162,37 +1143,35 @@ mod tests {
     // === Acceptance test: Live palette preview ===
 
     #[test]
-    fn settings_previews_hovered_palette_colors() {
+    fn settings_palette_row_shows_color_swatches() {
         let mut app = App::new(); // default is Ember
         app.toggle_settings();
 
-        // Move cursor to Inkwell (next palette after Ember)
-        app.settings.nav_down();
-        assert_eq!(app.settings.cursor, 3); // Inkwell at index 3
-
-        let inkwell = Palette::inkwell();
         let buf = render_app(&mut app, 80, 24);
 
-        // The overlay border/background should use Inkwell's colors, not Ember's
-        // Find the Settings title row — its border should use Inkwell's dimmed_foreground
+        // Find the palette row and verify it has swatch cells (non-text bg colors)
         let area = buf.area;
+        let palette = app.palette;
         for y in area.top()..area.bottom() {
             let mut row_text = String::new();
             for x in area.left()..area.right() {
                 row_text.push_str(buf[(x, y)].symbol());
             }
-            if row_text.contains("Settings") {
-                // Check that a border character uses the Inkwell background
-                // The block style sets bg to preview_palette.background
-                let border_cell = &buf[(area.left() + (area.width - 48) / 2, y)];
-                assert_eq!(
-                    border_cell.bg, inkwell.background,
-                    "Settings overlay should preview Inkwell's background color"
-                );
+            if row_text.contains("Ember") {
+                // Look for swatch cells with palette background color
+                let mut found_swatch = false;
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    if cell.bg == palette.accent_heading {
+                        found_swatch = true;
+                        break;
+                    }
+                }
+                assert!(found_swatch, "Palette row should show color swatches");
                 return;
             }
         }
-        panic!("Could not find Settings title in rendered buffer");
+        panic!("Could not find palette row in rendered buffer");
     }
 
     // === Inline rename rendering ===
@@ -1202,7 +1181,7 @@ mod tests {
         let mut app = App::new();
         app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        app.settings.cursor = 11; // File
+        app.settings.cursor = 9; // File
         app.rename.open(app.persistence.file_path.as_deref());
 
         let buf = render_app(&mut app, 80, 30);
@@ -1225,7 +1204,7 @@ mod tests {
         app.toggle_settings();
         // Clear the fade-in animation so opacity is 1.0 (fully rendered) for color assertions
         app.animations.transitions.clear();
-        app.settings.cursor = 11; // File
+        app.settings.cursor = 9; // File
         app.rename.open(app.persistence.file_path.as_deref());
         // Cursor at end (position 6), so cursor char is a space
         // Move cursor to start to test on 'a'

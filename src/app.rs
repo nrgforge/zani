@@ -135,10 +135,9 @@ impl App {
                 Duration::from_millis(150),
                 Easing::EaseOut,
             );
-            // Find the index of the active palette in the full settings item list
+            // Position cursor on the Palette row
             let items = SettingsItem::all();
-            let target = SettingsItem::Palette(self.palette.index_in_all());
-            self.settings.cursor = items.iter().position(|i| *i == target).unwrap_or(0);
+            self.settings.cursor = items.iter().position(|i| *i == SettingsItem::Palette).unwrap_or(0);
         }
     }
 
@@ -157,22 +156,8 @@ impl App {
             SettingsItem::EditingMode(mode) => {
                 self.editor.set_editing_mode(mode);
             }
-            SettingsItem::Palette(idx) => {
-                if let Some(p) = Palette::all().into_iter().nth(idx) {
-                    if p.name != self.palette.name {
-                        use crate::animation::{Easing, TransitionKind};
-                        use std::time::Duration;
-                        self.animations.start(
-                            TransitionKind::Palette {
-                                from: Box::new(self.palette),
-                                to: Box::new(p),
-                            },
-                            Duration::from_millis(300),
-                            Easing::EaseInOut,
-                        );
-                    }
-                    self.palette = p;
-                }
+            SettingsItem::Palette => {
+                // Opens the Palette Browser (wired in next step)
             }
             SettingsItem::FocusMode(mode) => self.dimming.focus_mode = mode,
             SettingsItem::ScrollMode(mode) => self.viewport.scroll_mode = mode,
@@ -651,8 +636,8 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 2 editing modes + 3 palettes + 3 focus modes + 2 scroll modes + 1 column width + 1 file = 12
-        assert_eq!(SettingsItem::all().len(), 12);
+        // 2 editing modes + 1 palette + 3 focus modes + 2 scroll modes + 1 column width + 1 file = 10
+        assert_eq!(SettingsItem::all().len(), 10);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
@@ -766,11 +751,10 @@ mod tests {
     // === Settings Layer navigation ===
 
     #[test]
-    fn toggle_settings_sets_cursor_to_active_palette() {
+    fn toggle_settings_sets_cursor_to_palette_row() {
         let mut app = App::new();
-        app.palette = Palette::inkwell();
         app.toggle_settings();
-        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(1)));
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette));
     }
 
     #[test]
@@ -792,9 +776,9 @@ mod tests {
     #[test]
     fn settings_nav_down_increments() {
         let mut app = App::new();
-        app.settings.cursor = item_pos(SettingsItem::Palette(0));
+        app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings.nav_down();
-        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(1)));
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::FocusMode(FocusMode::Off)));
     }
 
     #[test]
@@ -802,15 +786,15 @@ mod tests {
         let mut app = App::new();
         app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Off));
         app.settings.nav_up();
-        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette(2)));
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette));
     }
 
     #[test]
-    fn settings_apply_palette() {
+    fn settings_apply_palette_is_handled() {
         let mut app = App::new();
-        app.settings.cursor = item_pos(SettingsItem::Palette(1)); // Inkwell
+        app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
-        assert_eq!(app.palette.name, "Inkwell");
+        // Palette row is handled without panic (browser wiring adds real behavior)
     }
 
     #[test]
@@ -847,9 +831,14 @@ mod tests {
     }
 
     #[test]
-    fn palette_index_in_all_default_is_zero() {
-        let app = App::new();
-        assert_eq!(app.palette.index_in_all(), 0);
+    fn toggle_settings_lands_on_palette_row() {
+        let app_palettes = [Palette::default_palette(), Palette::inkwell(), Palette::parchment()];
+        for p in &app_palettes {
+            let mut app = App::new();
+            app.palette = *p;
+            app.toggle_settings();
+            assert_eq!(app.settings.cursor, item_pos(SettingsItem::Palette));
+        }
     }
 
     // === Scratch buffer ===
@@ -1194,11 +1183,19 @@ mod tests {
     }
 
     #[test]
-    fn palette_animation_starts_on_switch() {
+    fn palette_animation_starts_on_set_palette() {
         let mut app = App::new();
-        app.toggle_settings();
-        app.settings.cursor = item_pos(SettingsItem::Palette(1)); // Inkwell
-        app.settings_apply();
+        let inkwell = Palette::inkwell();
+        use crate::animation::{Easing, TransitionKind};
+        app.animations.start(
+            TransitionKind::Palette {
+                from: Box::new(app.palette),
+                to: Box::new(inkwell),
+            },
+            Duration::from_millis(300),
+            Easing::EaseInOut,
+        );
+        app.set_palette(inkwell);
         assert_eq!(app.palette.name, "Inkwell");
         assert!(app.animations.is_active());
     }

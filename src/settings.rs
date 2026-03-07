@@ -10,8 +10,8 @@ use crate::scroll_mode::ScrollMode;
 pub enum SettingsItem {
     /// An editing mode choice (Vim or Standard).
     EditingMode(EditingMode),
-    /// A palette choice (index into Palette::all()).
-    Palette(usize),
+    /// The palette row (opens Palette Browser on Enter).
+    Palette,
     /// A focus mode choice.
     FocusMode(FocusMode),
     /// A scroll mode choice.
@@ -22,12 +22,10 @@ pub enum SettingsItem {
     File,
 }
 
-const ALL_ITEMS: [SettingsItem; 12] = [
+const ALL_ITEMS: [SettingsItem; 10] = [
     SettingsItem::EditingMode(EditingMode::Vim),
     SettingsItem::EditingMode(EditingMode::Standard),
-    SettingsItem::Palette(0),
-    SettingsItem::Palette(1),
-    SettingsItem::Palette(2),
+    SettingsItem::Palette,
     SettingsItem::FocusMode(FocusMode::Off),
     SettingsItem::FocusMode(FocusMode::Sentence),
     SettingsItem::FocusMode(FocusMode::Paragraph),
