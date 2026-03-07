@@ -316,3 +316,166 @@
 **When** Autosave triggers
 **Then** the file on disk contains the Buffer's content (with smart typography characters)
 **And** no Markdown Styling or Dimming information is written to disk
+
+---
+
+## Feature: Palette Affective Categories (ADR-009)
+
+### Scenario: Every palette belongs to exactly one Affective Category
+**Given** the complete Palette collection
+**When** each Palette is inspected
+**Then** every Palette has an Affective Category assignment
+**And** no Palette belongs to more than one category
+
+### Scenario: Palettes within a category are sorted by Perceptual Sort Order
+**Given** an Affective Category containing multiple Palettes
+**When** the Palettes are listed in their category order
+**Then** each adjacent pair has OKLCH hue angles that are closer to each other than to non-adjacent pairs
+**And** scrolling through the list produces a smooth perceptual gradient
+
+### Scenario: Affective Category taxonomy covers brightness and character axes
+**Given** the set of all Affective Categories
+**When** the categories are enumerated
+**Then** both Dark and Light brightness levels are represented
+**And** Warm, Cool, and Vivid character types are represented within each brightness level
+
+---
+
+## Feature: Palette Browser (ADR-010)
+
+### Scenario: Settings Layer shows a single Palette entry instead of inline rows
+**Given** the Settings Layer is visible
+**When** the writer views the Palette section
+**Then** a single row reads "Palette: [current palette name]"
+**And** no inline palette choices are listed
+
+### Scenario: Selecting the Palette row opens the Palette Browser
+**Given** the Settings Layer is visible and the cursor is on the Palette row
+**When** the writer presses Enter
+**Then** the Palette Browser sub-panel opens
+**And** Palettes are displayed grouped by Affective Category
+
+### Scenario: Palette Browser groups palettes by Affective Category
+**Given** the Palette Browser is open
+**When** the writer views the browser contents
+**Then** Palettes appear under their Affective Category headings
+**And** within each category, Palettes are ordered by Perceptual Sort Order
+
+### Scenario: Applying a palette from the browser triggers crossfade
+**Given** the Palette Browser is open and the writer is on a Palette different from the current one
+**When** the writer selects that Palette
+**Then** the Writing Surface transitions from the old Palette to the new Palette via the 300ms crossfade animation
+**And** the Palette Browser reflects the newly active Palette
+
+### Scenario: Esc from the Palette Browser returns to the Settings Layer
+**Given** the Palette Browser is open
+**When** the writer presses Esc
+**Then** the Palette Browser closes
+**And** the Settings Layer is visible with the Palette row showing the current palette name
+
+### Scenario: Palette Browser indicates Local Config provenance
+**Given** a Local Config binds "Neon Noir" to the current project
+**And** the global config specifies "Ember"
+**When** the Palette Browser is open
+**Then** the active Palette displays as "Neon Noir (project)"
+**And** a palette set only in global config would display as "[name] (global)"
+
+---
+
+## Feature: Local Config (ADR-011)
+
+### Scenario: Local Config overrides global config palette
+**Given** a `.zani.toml` exists in the project directory with `palette = "Inkwell"`
+**And** the global config specifies `palette = "Ember"`
+**When** the writer opens a file in that project directory
+**Then** Config Resolution resolves to "Inkwell"
+**And** the Writing Surface renders with the Inkwell Palette
+
+### Scenario: Walk-up search finds nearest Local Config
+**Given** a `.zani.toml` exists at `/projects/novel/` with `palette = "Parchment"`
+**And** no `.zani.toml` exists at `/projects/novel/chapters/`
+**When** the writer opens `/projects/novel/chapters/chapter1.md`
+**Then** Config Resolution walks up from `chapters/` to `novel/` and finds the `.zani.toml`
+**And** the resolved Palette is "Parchment"
+
+### Scenario: Missing Local Config fields fall through to global config
+**Given** a `.zani.toml` exists with only `palette = "Inkwell"` (no other fields)
+**And** the global config specifies `column_width = 72` and `focus_mode = "paragraph"`
+**When** Config Resolution runs
+**Then** the resolved palette is "Inkwell" (from local)
+**And** the resolved column_width is 72 (from global)
+**And** the resolved focus_mode is Paragraph (from global)
+
+### Scenario: No Local Config falls through to global config
+**Given** no `.zani.toml` exists in any ancestor directory of the opened file
+**And** the global config specifies `palette = "Ember"`
+**When** Config Resolution runs
+**Then** the resolved Palette is "Ember" (from global config)
+
+### Scenario: Opening a file in a different project triggers palette crossfade
+**Given** the writer has "Ember" active (from the current project's Local Config)
+**When** the writer opens a file in a different project whose Local Config specifies "Neon Noir"
+**Then** the Writing Surface crossfades from Ember to Neon Noir via the 300ms animation
+
+### Scenario: Palette Browser offers Bind to project
+**Given** the Palette Browser is open and the writer selects a new Palette
+**When** the writer chooses "Bind to project"
+**Then** a `.zani.toml` file is written in the nearest project directory (or the file's directory)
+**And** the file contains `palette = "[selected palette name]"`
+
+---
+
+## Feature: Hybrid 256-Color Degradation (ADR-012)
+
+### Scenario: Hand-tuned 256-color values are used when available
+**Given** a Palette with hand-tuned 256-color alternate values
+**And** the detected Color Profile is 256-color
+**When** Degrade runs for this Palette
+**Then** the hand-tuned values are used instead of automatic nearest-color mapping
+
+### Scenario: Automatic mapping is used when no hand-tuned values exist
+**Given** a Palette without hand-tuned 256-color alternate values
+**And** the detected Color Profile is 256-color
+**When** Degrade runs for this Palette
+**Then** the automatic `nearest_256_color` mapping applies to each color
+
+### Scenario: Hand-tuned 256-color values satisfy Invariant 3
+**Given** a Palette with hand-tuned 256-color alternate values
+**When** the hand-tuned foreground and background colors are measured
+**Then** every foreground/background pair has a contrast ratio of at least 4.5:1
+**And** no color is pure black `rgb(0, 0, 0)` or pure white `rgb(255, 255, 255)`
+
+### Scenario: Basic ANSI focuses on readability
+**Given** the detected Color Profile is basic ANSI (16 colors)
+**When** Degrade runs for any Palette
+**Then** colors map to the 16 ANSI colors prioritizing contrast and readability
+**And** no mood-specific accent tuning is applied
+
+---
+
+## Integration Scenarios (ADR-009 through ADR-012)
+
+### Scenario: Config Resolution feeds the correct Palette to the Palette Browser
+**Given** a Local Config binds "Inkwell" to the current project
+**When** the writer opens the Palette Browser
+**Then** "Inkwell" is marked as the active Palette
+**And** the Affective Category containing Inkwell is expanded or highlighted
+
+### Scenario: Palette selected in browser persists via Local Config Bind
+**Given** the Palette Browser is open in a project with an existing Local Config
+**When** the writer selects "Neon Noir" and chooses "Bind to project"
+**Then** the `.zani.toml` is updated with `palette = "Neon Noir"`
+**And** subsequent file opens in this project resolve to "Neon Noir" via Config Resolution
+
+### Scenario: 256-color degradation applies to the resolved Palette
+**Given** the detected Color Profile is 256-color
+**And** Config Resolution resolves to a Palette with hand-tuned 256-color values
+**When** the Writing Surface renders
+**Then** the hand-tuned 256-color values are used for all Palette colors
+**And** Focus Mode Dimming interpolates between the 256-color values
+
+### Scenario: Palette validation runs on both True Color and 256-color values
+**Given** a Palette with both True Color values and hand-tuned 256-color alternates
+**When** `validate()` is called
+**Then** both the True Color color pairs and the 256-color color pairs pass Invariant 3
+**And** validation failure in either set produces a PaletteError

@@ -23,3 +23,15 @@ The essay distinguishes between well-supported findings and contested ones:
 - **Contested:** Specific hue effects on creativity — the Mehta & Zhu (2009) red/blue finding failed replication (Steele 2014). The domain model and downstream decisions should not depend on hue-specific creativity claims.
 
 This distinction matters for palette design: the saturation axis and warmth/coolness axis are the reliable levers, not specific hue assignments like "blue for creativity."
+
+## The Heart of the Model: Palette as Creative Register
+
+During domain modeling, the core concept crystallized: the heart of the model is the Palette → Affective Category → writer's intended mindset chain. The palette is not just colors — it is a creative register selector. The writer chooses the mindset they want to cultivate, and the palette primes it.
+
+This surfaced a subtlety about project binding. The essay proposes binding a single palette to a project via `.zani.toml`. But creative work within a project is not monolithic — different sessions may call for different registers. A writer might want a project associated with an affective category or a shortlist of palettes rather than a single locked-in choice.
+
+The resolution for now: start with single-palette binding (simplest version, enables the "immediately drop in" experience), and note the looser binding as an open question. The vocabulary is forward-compatible — Local Config currently takes a palette name, but nothing prevents it from accepting a category or list in the future. The key insight is that binding granularity is a spectrum, not a binary, and the right level should be discovered through use rather than designed upfront. *(Source: Epistemic Gate, /rdd-model phase)*
+
+## Palette Browser as Visual Navigation
+
+The ADRs define what the Palette Browser shows (categories, perceptual sort order) but the browsing experience is inherently visual and hierarchical. The writer needs to navigate *by affect first* — choosing the register they want — and then explore palettes within that register visually. This is not a flat list with category headers; it's a two-level navigation where the first level (Affective Category) is the writer's intentional choice and the second level (palettes within category) is an exploratory, perceptual experience. The interaction design — how preview/crossfade interacts with browsing speed, whether categories are collapsed/expanded or tabbed, key bindings — belongs in the architecture phase. *(Source: Epistemic Gate, /rdd-decide phase)*
