@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::animation::AnimationManager;
 use crate::buffer::Buffer;
-use crate::config::Config;
+use crate::config::{Config, ConfigSource};
 use crate::color_profile::ColorProfile;
 use crate::dimming::DimmingState;
 use crate::editing_mode::EditingMode;
@@ -48,6 +48,7 @@ pub struct App {
     pub(crate) color_profile: ColorProfile,
     pub(crate) settings: SettingsState,
     pub(crate) palette_browser: PaletteBrowserState,
+    pub(crate) config_source: ConfigSource,
     should_quit: bool,
     pub(crate) persistence: Persistence,
     pub(crate) rename: RenameState,
@@ -80,6 +81,7 @@ impl App {
             color_profile: ColorProfile::TrueColor,
             settings: SettingsState::new(),
             palette_browser: PaletteBrowserState::new(),
+            config_source: ConfigSource::Default,
             should_quit: false,
             persistence: Persistence::new(),
             rename: RenameState::new(),
@@ -604,6 +606,7 @@ impl App {
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
     pub fn palette_browser(&self) -> &PaletteBrowserState { &self.palette_browser }
+    pub fn config_source(&self) -> ConfigSource { self.config_source }
 
     pub fn external_change_pending(&self) -> bool { self.external_change_pending }
     pub fn scratch_quit_active(&self) -> bool { self.scratch_quit.active }

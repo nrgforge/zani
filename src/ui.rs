@@ -389,6 +389,7 @@ pub struct DrawContext<'a> {
     pub palette_browser_category_idx: usize,
     pub palette_browser_palette_idx: usize,
     pub palette_browser_active_name: String,
+    pub config_source: crate::config::ConfigSource,
     // Conflict
     pub external_change_pending: bool,
     // Inline rename (standalone, outside settings)
@@ -440,6 +441,7 @@ impl<'a> DrawContext<'a> {
             palette_browser_category_idx: app.palette_browser.category_idx,
             palette_browser_palette_idx: app.palette_browser.palette_idx,
             palette_browser_active_name: app.palette_browser.active_palette_name().to_string(),
+            config_source: app.config_source,
             external_change_pending: app.external_change_pending(),
             rename_active: app.rename.active,
             rename_buf: app.rename.buf.clone(),
@@ -757,7 +759,16 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
             let is_active = p.name == ctx.palette_browser_active_name;
 
             let marker = if is_active { ">" } else { " " };
-            let text = format!("  {} {:<14}", marker, p.name);
+            let suffix = if is_active {
+                match ctx.config_source {
+                    crate::config::ConfigSource::Local => " (project)",
+                    crate::config::ConfigSource::Global => " (global)",
+                    crate::config::ConfigSource::Default => "",
+                }
+            } else {
+                ""
+            };
+            let text = format!("  {} {}{}", marker, p.name, suffix);
 
             let style = if is_focused { cursor_style } else { normal_style };
 
@@ -1328,6 +1339,46 @@ mod tests {
         assert!(
             text.contains("> Ember"),
             "Active palette should be marked with '>'"
+        );
+    }
+
+    #[test]
+    fn palette_browser_shows_project_provenance() {
+        let mut app = App::new();
+        app.config_source = crate::config::ConfigSource::Local;
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply(); // open browser
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("(project)"),
+            "Local config source should show '(project)' suffix"
+        );
+    }
+
+    #[test]
+    fn palette_browser_shows_global_provenance() {
+        let mut app = App::new();
+        app.config_source = crate::config::ConfigSource::Global;
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("(global)"),
+            "Global config source should show '(global)' suffix"
         );
     }
 
