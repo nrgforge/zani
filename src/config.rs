@@ -425,8 +425,9 @@ mod tests {
         let file = dir.path().join("doc.md");
         fs::write(&file, "test").unwrap();
 
+        let global = Config::load();
         let (config, _) = Config::load_for_path(&file);
-        assert_eq!(config.palette, Config::default().palette, "Should fall through to global/default");
+        assert_eq!(config.palette, global.palette, "Should fall through to global/default");
     }
 
     #[test]

@@ -67,6 +67,11 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
         draw_settings_layer(frame, vm, ctx.base_palette, area);
     }
 
+    // Palette Browser overlay (over settings when open)
+    if ctx.palette_browser_open {
+        draw_palette_browser(frame, ctx, area);
+    }
+
     // Find overlay bar at top of screen
     if let Some(fs) = ctx.find_state {
         let find_opacity = ctx.find_opacity.unwrap_or(1.0);
@@ -378,6 +383,12 @@ pub struct DrawContext<'a> {
     // Settings
     pub settings_visible: bool,
     pub settings_vm: Option<SettingsViewModel>,
+    // Palette browser
+    pub palette_browser_open: bool,
+    pub palette_browser_groups: Vec<(crate::palette::AffectiveCategory, Vec<Palette>)>,
+    pub palette_browser_category_idx: usize,
+    pub palette_browser_palette_idx: usize,
+    pub palette_browser_active_name: String,
     // Conflict
     pub external_change_pending: bool,
     // Inline rename (standalone, outside settings)
@@ -424,6 +435,11 @@ impl<'a> DrawContext<'a> {
             find_opacity: app.animations.find_overlay_progress(),
             settings_visible: app.settings.visible,
             settings_vm,
+            palette_browser_open: app.palette_browser.open,
+            palette_browser_groups: app.palette_browser.groups().to_vec(),
+            palette_browser_category_idx: app.palette_browser.category_idx,
+            palette_browser_palette_idx: app.palette_browser.palette_idx,
+            palette_browser_active_name: app.palette_browser.active_palette_name().to_string(),
             external_change_pending: app.external_change_pending(),
             rename_active: app.rename.active,
             rename_buf: app.rename.buf.clone(),
@@ -699,6 +715,75 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         .title(" Settings ")
         .border_style(Style::default().fg(effective_dim))
         .style(Style::default().bg(preview_palette.background));
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .style(normal_style)
+        .block(block);
+
+    frame.render_widget(paragraph, overlay_area);
+}
+
+/// Render the Palette Browser overlay centered on screen.
+fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rect) {
+    let palette = ctx.base_palette;
+    let overlay_width = 48u16.min(area.width);
+
+    let normal_style = Style::default()
+        .fg(palette.foreground)
+        .bg(palette.background);
+    let dim_style = Style::default()
+        .fg(palette.dimmed_foreground)
+        .bg(palette.background);
+    let cursor_style = Style::default()
+        .fg(palette.background)
+        .bg(palette.accent_heading);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (gi, (category, palettes)) in ctx.palette_browser_groups.iter().enumerate() {
+        // Category heading
+        if gi > 0 {
+            lines.push(Line::from(Span::styled(String::new(), normal_style)));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {}", category.label()),
+            dim_style,
+        )));
+
+        // Palettes in this category
+        for (pi, p) in palettes.iter().enumerate() {
+            let is_focused = gi == ctx.palette_browser_category_idx
+                && pi == ctx.palette_browser_palette_idx;
+            let is_active = p.name == ctx.palette_browser_active_name;
+
+            let marker = if is_active { ">" } else { " " };
+            let text = format!("  {} {:<14}", marker, p.name);
+
+            let style = if is_focused { cursor_style } else { normal_style };
+
+            // Multi-span line: label + color swatches
+            let mut spans = vec![Span::styled(text, style)];
+            spans.push(Span::styled(" ", style));
+            for color in [p.background, p.foreground, p.accent_heading] {
+                spans.push(Span::styled("  ", Style::default().bg(color)));
+                spans.push(Span::styled(" ", style));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    let content_rows = lines.len();
+    let overlay_height = (content_rows as u16 + 2).min(area.height);
+    let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_area);
+
+    let block = Block::bordered()
+        .title(" Palette Browser ")
+        .border_style(Style::default().fg(palette.dimmed_foreground))
+        .style(Style::default().bg(palette.background));
 
     let paragraph = Paragraph::new(Text::from(lines))
         .style(normal_style)
@@ -1172,6 +1257,78 @@ mod tests {
             }
         }
         panic!("Could not find palette row in rendered buffer");
+    }
+
+    // === Palette Browser rendering (ADR-010) ===
+
+    #[test]
+    fn palette_browser_shows_category_headings() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply(); // open browser
+        assert!(app.palette_browser.open);
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        // Should show "Palette Browser" title
+        assert!(text.contains("Palette Browser"), "Should show browser title");
+
+        // Should show at least one affective category label
+        let categories = crate::palette::AffectiveCategory::all();
+        let mut found_category = false;
+        for cat in categories {
+            if text.contains(cat.label()) {
+                found_category = true;
+                break;
+            }
+        }
+        assert!(found_category, "Should show at least one category heading");
+    }
+
+    #[test]
+    fn palette_browser_shows_all_palette_names() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        for palette in crate::palette::Palette::all() {
+            assert!(
+                text.contains(palette.name),
+                "Browser should show palette '{}'",
+                palette.name
+            );
+        }
+    }
+
+    #[test]
+    fn palette_browser_marks_active_palette() {
+        let mut app = App::new(); // Ember is default
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains("> Ember"),
+            "Active palette should be marked with '>'"
+        );
     }
 
     // === Inline rename rendering ===

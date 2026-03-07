@@ -17,6 +17,7 @@ use crate::markdown_styling::CharStyle;
 use crate::palette::Palette;
 use crate::persistence::Persistence;
 use crate::scroll_mode::ScrollMode;
+use crate::palette_browser::PaletteBrowserState;
 use crate::settings::{RenameState, ScratchQuitAction, ScratchQuitState, SettingsItem, SettingsState};
 use crate::vim_bindings::{Action, CursorShape, Mode};
 use crate::viewport::Viewport;
@@ -46,6 +47,7 @@ pub struct App {
     pub(crate) dimming: DimmingState,
     pub(crate) color_profile: ColorProfile,
     pub(crate) settings: SettingsState,
+    pub(crate) palette_browser: PaletteBrowserState,
     should_quit: bool,
     pub(crate) persistence: Persistence,
     pub(crate) rename: RenameState,
@@ -77,6 +79,7 @@ impl App {
             dimming: DimmingState::new(),
             color_profile: ColorProfile::TrueColor,
             settings: SettingsState::new(),
+            palette_browser: PaletteBrowserState::new(),
             should_quit: false,
             persistence: Persistence::new(),
             rename: RenameState::new(),
@@ -157,7 +160,7 @@ impl App {
                 self.editor.set_editing_mode(mode);
             }
             SettingsItem::Palette => {
-                // Opens the Palette Browser (wired in next step)
+                self.palette_browser.open(self.palette.name);
             }
             SettingsItem::FocusMode(mode) => self.dimming.focus_mode = mode,
             SettingsItem::ScrollMode(mode) => self.viewport.scroll_mode = mode,
@@ -432,6 +435,12 @@ impl App {
 
     /// Handle key input while the Settings Layer is open.
     fn handle_settings_key(&mut self, code: KeyCode) {
+        // Route to palette browser when open
+        if self.palette_browser.open {
+            self.handle_palette_browser_key(code);
+            return;
+        }
+
         match code {
             KeyCode::Esc => self.settings.dismiss(),
             KeyCode::Up | KeyCode::Char('k') => self.settings.nav_up(),
@@ -449,6 +458,34 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => {
                 if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
                     self.viewport.adjust_column_width(1);
+                    self.save_config();
+                }
+            }
+            _ => {} // swallow all other keys
+        }
+    }
+
+    /// Handle key input while the Palette Browser is open.
+    fn handle_palette_browser_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.palette_browser.close(),
+            KeyCode::Up | KeyCode::Char('k') => self.palette_browser.nav_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.palette_browser.nav_down(),
+            KeyCode::Enter => {
+                if let Some(p) = self.palette_browser.focused_palette() {
+                    if p.name != self.palette.name {
+                        use crate::animation::{Easing, TransitionKind};
+                        self.animations.start(
+                            TransitionKind::Palette {
+                                from: Box::new(self.palette),
+                                to: Box::new(p),
+                            },
+                            Duration::from_millis(300),
+                            Easing::EaseInOut,
+                        );
+                    }
+                    self.palette = p;
+                    self.palette_browser.set_active(p.name);
                     self.save_config();
                 }
             }
@@ -566,6 +603,7 @@ impl App {
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
+    pub fn palette_browser(&self) -> &PaletteBrowserState { &self.palette_browser }
 
     pub fn external_change_pending(&self) -> bool { self.external_change_pending }
     pub fn scratch_quit_active(&self) -> bool { self.scratch_quit.active }
@@ -790,11 +828,63 @@ mod tests {
     }
 
     #[test]
-    fn settings_apply_palette_is_handled() {
+    fn settings_enter_on_palette_opens_browser() {
         let mut app = App::new();
+        app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
-        // Palette row is handled without panic (browser wiring adds real behavior)
+        assert!(app.palette_browser.open, "Enter on Palette row should open browser");
+    }
+
+    #[test]
+    fn browser_esc_returns_to_settings() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::Palette);
+        app.settings_apply();
+        assert!(app.palette_browser.open);
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.palette_browser.open, "Esc should close browser");
+        assert!(app.settings.visible, "Settings should remain visible");
+    }
+
+    #[test]
+    fn browser_enter_applies_palette_with_crossfade() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::Palette);
+        app.settings_apply(); // open browser
+
+        // Navigate to a different palette
+        let initial = app.palette.name.to_string();
+        app.palette_browser.nav_down();
+        let focused = app.palette_browser.focused_palette().unwrap();
+        if focused.name == initial {
+            app.palette_browser.nav_down(); // skip if same
+        }
+        let target = app.palette_browser.focused_palette().unwrap();
+
+        // Apply via Enter
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.palette.name, target.name, "Palette should switch to selected");
+        assert!(app.animations.is_active(), "Crossfade animation should start");
+    }
+
+    #[test]
+    fn browser_nav_routes_through_app() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::Palette);
+        app.settings_apply(); // open browser
+
+        let initial_cat = app.palette_browser.category_idx;
+        let initial_pal = app.palette_browser.palette_idx;
+
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE);
+        let moved = app.palette_browser.category_idx != initial_cat
+            || app.palette_browser.palette_idx != initial_pal;
+        assert!(moved, "Down key should navigate in browser");
     }
 
     #[test]

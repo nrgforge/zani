@@ -151,12 +151,9 @@ mod tests {
         let mut browser = PaletteBrowserState::new();
         browser.open("Ember");
 
-        let initial = browser.focused_palette().unwrap().name.to_string();
         browser.nav_down();
         // Should have moved — either to next palette in category or next category
-        // (depends on how many palettes are in Ember's category)
         let after = browser.focused_palette().unwrap();
-        // Just verify we didn't crash and have a valid palette
         assert!(!after.name.is_empty());
 
         // Navigate all the way through
