@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::buffer::Buffer;
@@ -744,9 +744,11 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
 }
 
 /// Render the Palette Browser overlay centered on screen.
+/// Uses scrolling to handle 40+ palettes and shows provenance in a fixed footer.
 fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rect) {
     let palette = ctx.base_palette;
     let overlay_width = 48u16.min(area.width);
+    let footer_height: u16 = 5; // separator + provenance text
 
     let normal_style = Style::default()
         .fg(palette.foreground)
@@ -759,6 +761,8 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
         .bg(palette.accent_heading);
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut focused_line_idx: usize = 0;
+    let mut focused_palette: Option<&Palette> = None;
 
     for (gi, (category, palettes)) in ctx.palette_browser_groups.iter().enumerate() {
         // Category heading
@@ -776,6 +780,11 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
                 && pi == ctx.palette_browser_palette_idx;
             let is_active = p.name == ctx.palette_browser_active_name;
 
+            if is_focused {
+                focused_line_idx = lines.len();
+                focused_palette = Some(p);
+            }
+
             let marker = if is_active { ">" } else { " " };
             let suffix = if is_active {
                 match ctx.config_source {
@@ -790,8 +799,14 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
 
             let style = if is_focused { cursor_style } else { normal_style };
 
-            // Multi-span line: label + color swatches
-            let mut spans = vec![Span::styled(text, style)];
+            // Right-align swatches: pad name to fill remaining space
+            // Swatch block: " " + 3 * ("  " + " ") = 10 chars
+            let swatch_width: usize = 10;
+            let inner_width = (overlay_width as usize).saturating_sub(2); // minus borders
+            let name_width = inner_width.saturating_sub(swatch_width);
+            let padded = format!("{:<width$}", text, width = name_width);
+
+            let mut spans = vec![Span::styled(padded, style)];
             spans.push(Span::styled(" ", style));
             for color in [p.background, p.foreground, p.accent_heading] {
                 spans.push(Span::styled("  ", Style::default().bg(color)));
@@ -801,24 +816,82 @@ fn draw_palette_browser(frame: &mut ratatui::Frame, ctx: &DrawContext, area: Rec
         }
     }
 
-    let content_rows = lines.len();
-    let overlay_height = (content_rows as u16 + 2).min(area.height);
+    // Full-height overlay, centered horizontally
+    let overlay_height = area.height;
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
-    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+    let overlay_area = Rect::new(x, area.y, overlay_width, overlay_height);
 
     frame.render_widget(Clear, overlay_area);
 
+    // Border
     let block = Block::bordered()
         .title(" Palette Browser ")
         .border_style(Style::default().fg(palette.dimmed_foreground))
         .style(Style::default().bg(palette.background));
+    let inner_area = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
 
-    let paragraph = Paragraph::new(Text::from(lines))
+    // Split inner area: scrollable list on top, fixed footer on bottom
+    let list_height = inner_area.height.saturating_sub(footer_height);
+    let list_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, list_height);
+    let footer_area = Rect::new(
+        inner_area.x,
+        inner_area.y + list_height,
+        inner_area.width,
+        footer_height.min(inner_area.height),
+    );
+
+    // Compute scroll offset to keep focused line visible
+    let scroll_offset = if focused_line_idx as u16 >= list_height {
+        let max_scroll = (lines.len() as u16).saturating_sub(list_height);
+        let target = (focused_line_idx as u16).saturating_sub(list_height / 2);
+        target.min(max_scroll)
+    } else {
+        0
+    };
+
+    // Render scrollable palette list
+    let list_paragraph = Paragraph::new(Text::from(lines))
         .style(normal_style)
-        .block(block);
+        .scroll((scroll_offset, 0));
+    frame.render_widget(list_paragraph, list_area);
 
-    frame.render_widget(paragraph, overlay_area);
+    // Render provenance footer
+    if let Some(fp) = focused_palette {
+        // Separator line
+        let sep_area = Rect::new(footer_area.x, footer_area.y, footer_area.width, 1);
+        let rule = "─".repeat(footer_area.width as usize);
+        let sep = Paragraph::new(Line::from(Span::styled(rule, dim_style)));
+        frame.render_widget(sep, sep_area);
+
+        // Provenance text: palette name + description
+        let prov_height = footer_area.height.saturating_sub(1);
+        if prov_height > 0 {
+            let prov_area = Rect::new(
+                footer_area.x,
+                footer_area.y + 1,
+                footer_area.width,
+                prov_height,
+            );
+            let prov_text = if fp.provenance.is_empty() {
+                Text::from(Line::from(Span::styled(fp.name, normal_style)))
+            } else {
+                Text::from(vec![
+                    Line::from(vec![
+                        Span::styled(fp.name, normal_style),
+                        Span::styled(
+                            format!("  {}", fp.provenance),
+                            dim_style,
+                        ),
+                    ]),
+                ])
+            };
+            let prov_paragraph = Paragraph::new(prov_text)
+                .style(dim_style)
+                .wrap(Wrap { trim: true });
+            frame.render_widget(prov_paragraph, prov_area);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1329,8 +1402,8 @@ mod tests {
             .unwrap();
         app.settings_apply();
 
-        // 40 palettes + 8 category headers + spacers need a tall terminal
-        let buf = render_app(&mut app, 80, 60);
+        // 40 palettes + 8 category headers + spacers + border + footer need a tall terminal
+        let buf = render_app(&mut app, 80, 70);
         let text = extract_all_text(&buf);
 
         for palette in crate::palette::Palette::all() {
@@ -1398,6 +1471,58 @@ mod tests {
         assert!(
             text.contains("(global)"),
             "Global config source should show '(global)' suffix"
+        );
+    }
+
+    // === Acceptance tests: Scrolling + Provenance (ADR-015) ===
+
+    #[test]
+    fn palette_browser_shows_focused_provenance() {
+        let mut app = App::new(); // default is Manzanita
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply(); // open browser, cursor on Manzanita
+
+        let buf = render_app(&mut app, 80, 30);
+        let text = extract_all_text(&buf);
+
+        // The provenance for Manzanita should appear in the footer
+        let focused = app.palette_browser.focused_palette().unwrap();
+        // Check for a substring of the provenance (word-wrapped, so check a key phrase)
+        assert!(
+            text.contains("Arctostaphylos"),
+            "Footer should show provenance for focused palette '{}', got: ...{}...",
+            focused.name,
+            &text[text.len().saturating_sub(200)..],
+        );
+    }
+
+    #[test]
+    fn palette_browser_scrolls_to_offscreen_palette() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = crate::settings::SettingsItem::all()
+            .iter()
+            .position(|i| *i == SettingsItem::Palette)
+            .unwrap();
+        app.settings_apply();
+
+        // Navigate well past the first screenful (use a short terminal)
+        for _ in 0..35 {
+            app.palette_browser.nav_down();
+        }
+
+        let focused = app.palette_browser.focused_palette().unwrap();
+        let buf = render_app(&mut app, 80, 24);
+        let text = extract_all_text(&buf);
+
+        assert!(
+            text.contains(focused.name),
+            "Scrolling should keep focused palette '{}' visible",
+            focused.name,
         );
     }
 

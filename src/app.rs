@@ -539,28 +539,42 @@ impl App {
     /// Handle key input while the Palette Browser is open.
     fn handle_palette_browser_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Esc => self.palette_browser.close(),
-            KeyCode::Up | KeyCode::Char('k') => self.palette_browser.nav_up(),
-            KeyCode::Down | KeyCode::Char('j') => self.palette_browser.nav_down(),
+            KeyCode::Esc => {
+                self.save_config();
+                self.palette_browser.close();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.palette_browser.nav_up();
+                self.apply_focused_palette();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.palette_browser.nav_down();
+                self.apply_focused_palette();
+            }
             KeyCode::Enter => {
-                if let Some(p) = self.palette_browser.focused_palette() {
-                    if p.name != self.palette.name {
-                        use crate::animation::{Easing, TransitionKind};
-                        self.animations.start(
-                            TransitionKind::Palette {
-                                from: Box::new(self.palette),
-                                to: Box::new(p),
-                            },
-                            Duration::from_millis(300),
-                            Easing::EaseInOut,
-                        );
-                    }
-                    self.palette = p;
-                    self.palette_browser.set_active(p.name);
-                    self.save_config();
-                }
+                self.save_config();
+                self.palette_browser.close();
             }
             _ => {} // swallow all other keys
+        }
+    }
+
+    /// Apply the currently focused palette with crossfade animation.
+    fn apply_focused_palette(&mut self) {
+        if let Some(p) = self.palette_browser.focused_palette() {
+            if p.name != self.palette.name {
+                use crate::animation::{Easing, TransitionKind};
+                self.animations.start(
+                    TransitionKind::Palette {
+                        from: Box::new(self.palette),
+                        to: Box::new(p),
+                    },
+                    Duration::from_millis(300),
+                    Easing::EaseInOut,
+                );
+                self.palette = p;
+            }
+            self.palette_browser.set_active(p.name);
         }
     }
 
@@ -923,25 +937,37 @@ mod tests {
     }
 
     #[test]
-    fn browser_enter_applies_palette_with_crossfade() {
+    fn browser_nav_applies_palette_with_crossfade() {
         let mut app = App::new();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply(); // open browser
 
-        // Navigate to a different palette
         let initial = app.palette.name.to_string();
-        app.palette_browser.nav_down();
+
+        // Navigate down via handle_key — should auto-apply the focused palette
+        app.handle_key(KeyCode::Down, KeyModifiers::NONE);
         let focused = app.palette_browser.focused_palette().unwrap();
         if focused.name == initial {
-            app.palette_browser.nav_down(); // skip if same
+            app.handle_key(KeyCode::Down, KeyModifiers::NONE);
         }
         let target = app.palette_browser.focused_palette().unwrap();
 
-        // Apply via Enter
-        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(app.palette.name, target.name, "Palette should switch to selected");
+        assert_eq!(app.palette.name, target.name, "Palette should auto-apply on navigate");
         assert!(app.animations.is_active(), "Crossfade animation should start");
+    }
+
+    #[test]
+    fn browser_enter_closes_and_saves() {
+        let mut app = App::new();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::Palette);
+        app.settings_apply();
+        assert!(app.palette_browser.open);
+
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.palette_browser.open, "Enter should close browser");
+        assert!(app.settings.visible, "Settings should remain visible");
     }
 
     #[test]
