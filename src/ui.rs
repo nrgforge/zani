@@ -561,7 +561,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
 
         let swatches = match item {
             SettingsItem::Palette => {
-                vec![palette.background, palette.foreground, palette.accent_heading]
+                vec![palette.background, palette.foreground, palette.accent_heading, palette.accent_emphasis]
             }
             _ => vec![],
         };
@@ -708,15 +708,12 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
             if row.swatches.is_empty() {
                 Line::from(Span::styled(row.text.clone(), style))
             } else {
-                // Multi-span line: label + color swatches
                 let mut spans = vec![Span::styled(row.text.clone(), style)];
-                spans.push(Span::styled(" ", style));
                 for color in &row.swatches {
                     spans.push(Span::styled(
                         "  ",
                         Style::default().bg(*color),
                     ));
-                    spans.push(Span::styled(" ", style));
                 }
                 Line::from(spans)
             }
