@@ -1,6 +1,6 @@
 # ADR-015: PNW Flora Naming Register and Collection Structure
 
-**Status:** Proposed
+**Status:** Proposed — amended by ADR-016 (species validation remediation) and ADR-017 (Flora Reference)
 
 ## Context
 
@@ -20,7 +20,9 @@ Zani's name derives from Manzanita (*Arctostaphylos*), a Pacific Northwest genus
 
 ### Naming Register
 
-Every Palette is named after a Pacific Northwest species — vascular plants, mosses, lichens, or fungi — whose natural color associations are moderately congruent with the palette's Affective Category. This is Invariant 16 in the domain model.
+Every Palette is named after a Cascadia bioregion species — vascular plants, mosses, lichens, or fungi — whose Signature Colors (verified against external botanical sources and documented in the Flora Reference) are moderately congruent with the palette's color composition. This is Invariant 16 in the domain model.
+
+> **Amended by ADR-016/017:** Invariant 16 was strengthened to require external botanical verification and essence-driven composition. "Pacific Northwest" replaced by "Cascadia bioregion" (alias). "Natural color associations" replaced by "Signature Colors" (domain vocabulary). Flora Reference (ADR-017) provides the verification source.
 
 Each name must satisfy the five-point curation test:
 1. **Traceable** — points to a specific species with a real appearance
@@ -33,7 +35,9 @@ Single-word names are preferred (Madrone, Salal, Cascara, Hemlock, Yarrow, Lupin
 
 ### Provenance Descriptions
 
-Each Palette carries a Provenance Description: a botanically accurate one-line note documenting the species' scientific name, appearance, and Pacific Northwest ecological context. Descriptions must reflect actual habitat range and species character — not romanticized sketches. They must hold up to scrutiny from someone who lives among these plants.
+Each Palette carries a Provenance Description: a botanically accurate one-line note documenting the species' scientific name, appearance, and Cascadia bioregion ecological context. Descriptions must be grounded in external botanical sources (Oregon Flora Project, USDA PLANTS, USFS, field guides) — reflecting actual habitat range and species character, not rationalizing the palette's colors after the fact. They must hold up to scrutiny from someone who lives among these plants.
+
+> **Amended by ADR-016/017:** Strengthened grounding requirement per Invariant 16. Provenance Descriptions must be consistent with the Flora Reference (ADR-017), which is the source of truth for species' documented appearance.
 
 ### Collection Structure
 

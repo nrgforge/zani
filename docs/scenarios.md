@@ -594,11 +594,11 @@
 **Then** the Palette name is "Manzanita"
 **And** the Palette belongs to the DarkWarm Affective Category
 
-### Scenario: Every palette is named after a PNW species
+### Scenario: Every palette is named after a Cascadia bioregion species
 **Given** the complete Palette collection
 **When** each Palette name is inspected
-**Then** no Palette is named "Ember", "Hearthstone", "Inkwell", "Moonstone", "Neon Noir", "Aurora", "Parchment", "Manuscript", "Glacier", or "Daybreak"
-**And** every Palette name corresponds to a Pacific Northwest species
+**Then** no Palette is named "Ember", "Hearthstone", "Inkwell", "Moonstone", "Neon Noir", "Aurora", "Parchment", "Manuscript", "Glacier", "Daybreak", "Balsamroot", "Reindeer Lichen", or "Columbine"
+**And** every Palette name corresponds to a Cascadia bioregion species
 
 ### Scenario: Collection contains exactly 40 palettes
 **Given** the complete Palette collection returned by `Palette::all()`
@@ -625,7 +625,7 @@
 ### Scenario: Palette name passes the curation test
 **Given** a Palette with name N and Affective Category C
 **When** evaluated against the five-point curation test
-**Then** N is traceable to a specific PNW species
+**Then** N is traceable to a specific Cascadia bioregion species
 **And** N's color associations are congruent with C's affect without restating the category label
 **And** N is register-consistent with other names in the collection
 **And** N activates a distinct sensory image from other names in category C
@@ -654,8 +654,111 @@
 **Then** eight Affective Category headings are visible
 **And** each heading contains exactly 5 Palette entries
 
-### Scenario: Config file references palette by PNW species name
+### Scenario: Config file references palette by Cascadia species name
 **Given** a `.zani.toml` exists with `palette = "Salal"`
 **When** Config Resolution runs
 **Then** the resolved Palette is Salal
 **And** the Palette belongs to the DarkVivid Affective Category
+
+---
+
+## Feature: Species-Color Validation Remediation (ADR-016)
+
+### Scenario: Replaced species have correct names in collection
+**Given** the complete Palette collection
+**When** each Palette name in Light Warm is inspected
+**Then** "Bracken" is present (replacing Oregon Sunshine's former slot)
+**And** "Licorice Fern" is present (replacing Balsamroot)
+**And** "Balsamroot" is not present
+**And** "Oregon Sunshine" is present in Light Vivid (not Light Warm)
+
+### Scenario: Silver Fir replaces Reindeer Lichen in Light Muted
+**Given** the Palette collection filtered to LightMuted
+**When** the Palette names are inspected
+**Then** "Silver Fir" is present
+**And** "Reindeer Lichen" is not present
+
+### Scenario: Oregon Sunshine belongs to Light Vivid with redesigned colors
+**Given** the Palette named "Oregon Sunshine"
+**When** its Affective Category is inspected
+**Then** the category is LightVivid
+**And** at least one accent color has an OKLCH hue angle in the yellow range (70°–100°)
+
+### Scenario: Columbine is not in the collection
+**Given** the complete Palette collection
+**When** `Palette::by_name("Columbine")` is called
+**Then** the result is None
+
+### Scenario: Light Vivid hue distribution is clean after reorganization
+**Given** the 5 Palettes in Light Vivid after reorganization
+**When** the OKLCH hue angles of their accent_heading colors are compared
+**Then** no two palettes have hue angles within 15 degrees of each other
+**And** the five palettes span red, orange, yellow, magenta-pink, and blue-violet
+
+### Scenario: Jack-o'-Lantern provenance uses correct species
+**Given** the Palette named "Jack-o'-Lantern"
+**When** its Provenance Description is inspected
+**Then** the scientific name contains "olivascens" (not "olearius")
+
+### Scenario: Replaced palettes have botanically grounded provenance
+**Given** the Palettes named "Bracken", "Licorice Fern", and "Silver Fir"
+**When** each Provenance Description is inspected
+**Then** each includes the correct scientific name
+**And** each references the species' actual Cascadia bioregion habitat
+**And** no description rationalizes the palette colors — it describes the species
+
+### Scenario: Corrected provenance texts match external sources
+**Given** the Palettes named "Oakmoss", "Witch's Hair", "Partridgefoot", and "Lupine"
+**When** their Provenance Descriptions are inspected
+**Then** Oakmoss does not describe its thallus as "teal"
+**And** Witch's Hair does not describe its thallus as "olive-black"
+**And** Partridgefoot does not describe its foliage as "gray-green"
+**And** Lupine does not claim "silvery sheen"
+
+### Scenario: Collection remains at 40 palettes after remediation
+**Given** the complete Palette collection after all ADR-016 changes
+**When** the count is taken
+**Then** the total is 40
+**And** each of the 8 Affective Categories contains exactly 5 Palettes
+
+---
+
+## Feature: Flora Reference (ADR-017)
+
+### Scenario: Flora Reference documents all collection species
+**Given** the Flora Reference at `docs/flora-reference.md`
+**When** the species entries are counted
+**Then** every species in the Palette collection has a corresponding entry
+**And** no entry exists for retired species (Columbine, Balsamroot, Reindeer Lichen)
+
+### Scenario: Flora Reference entries contain required fields
+**Given** a Flora Reference entry for any species
+**When** the entry is inspected
+**Then** it includes the common name and scientific name
+**And** it includes Signature Colors with at least one source citation
+**And** it includes an Essence Mode (Feature, Throughline, or Place)
+**And** it includes the geographic range within the Cascadia bioregion
+**And** it includes the palette assignment (Affective Category and slot rationale)
+
+### Scenario: Provenance Description is consistent with Flora Reference
+**Given** any Palette in the collection
+**When** its Provenance Description is compared to the corresponding Flora Reference entry
+**Then** the scientific name matches
+**And** the habitat description is consistent
+**And** the color language does not contradict the documented Signature Colors
+
+---
+
+## Integration Scenarios (ADR-016 + ADR-017)
+
+### Scenario: New species pass the existing validation infrastructure
+**Given** the Palettes named "Bracken", "Licorice Fern", "Silver Fir", and "Oregon Sunshine"
+**When** `Palette::validate()` is called on each
+**Then** all pass Invariant 3 (no pure black/white, WCAG AA 4.5:1 minimum)
+**And** no PaletteError is returned
+
+### Scenario: Sibling hue diversity holds after Light Warm and Light Vivid changes
+**Given** the 5 Palettes in Light Warm after replacement (Oatgrass, Bracken, White Oak, Ponderosa, Licorice Fern)
+**And** the 5 Palettes in Light Vivid after reorganization (Paintbrush, Tiger Lily, Oregon Sunshine, Farewell, Camas)
+**When** the OKLCH hue diversity test runs for each category
+**Then** no two siblings in either category have background hue angles within 15 degrees of each other
