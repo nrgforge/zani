@@ -1,12 +1,12 @@
 # ADR-009: Palettes Organized by Affective Category
 
-**Status:** Proposed — amended by ADR-014 (character axis expanded from 3 to 4 values)
+**Status:** Proposed — amended by ADR-014 (character axis expanded from 3 to 4 values), ADR-018 (Chroma Targets per category)
 
 ## Context
 
 Essay 002 established that palette selection is a mood-instrument function — the subconscious pathway is color → affect → cognition (El-Nasr emotional affordances, Wilms & Oberfeld saturation findings). The existing flat list of three palettes (ADR-006) provides no structure for a larger collection. The domain model defines Affective Category as a two-axis taxonomy (brightness x character) and Perceptual Sort Order as OKLCH hue-angle ordering within each category.
 
-Saturation is the primary arousal lever, not hue (Wilms & Oberfeld 2018). Warmth drives approach-oriented positive affect. These two axes — saturation/energy and warmth/coolness — map onto the character dimension of the taxonomy.
+Chroma is the primary arousal lever, not hue (Wilms & Oberfeld 2018). Warmth drives approach-oriented positive affect. These two axes — chroma/energy and warmth/coolness — map onto the character dimension of the taxonomy.
 
 ## Decision
 
@@ -40,3 +40,5 @@ Within each Affective Category, Palettes are ordered by Perceptual Sort Order �
 **Neutral:**
 - OKLCH hue angle is used only for sort-order computation, not stored as Palette data. Palettes remain stored as RGB values.
 - The category taxonomy is fixed at the code level. Adding a new category axis (e.g., "Muted") requires a code change, not configuration.
+
+> **Amended by ADR-018:** Each Affective Category now has a Chroma Target — a ΔE2000 range from neutral — that its palette backgrounds must achieve. This ensures the character axis is chromatically expressed in the dominant visual field (backgrounds), not only in accent punctuation. See Invariant 18.

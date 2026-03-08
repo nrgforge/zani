@@ -762,3 +762,79 @@
 **And** the 5 Palettes in Light Vivid after reorganization (Paintbrush, Tiger Lily, Oregon Sunshine, Farewell, Camas)
 **When** the OKLCH hue diversity test runs for each category
 **Then** no two siblings in either category have background hue angles within 15 degrees of each other
+
+---
+
+## Feature: Chroma Targets for Affective Categories (ADR-018)
+
+### Scenario: Every palette background falls within its category's Chroma Target range
+**Given** the complete Palette collection
+**When** each Palette's background ΔE2000 from nearest-lightness neutral gray is measured
+**Then** every Light Vivid palette has ΔE2000 between 10 and 20
+**And** every Light Warm palette has ΔE2000 between 5 and 10
+**And** every Light Cool palette has ΔE2000 between 5 and 10
+**And** every Light Muted palette has ΔE2000 between 2 and 5
+**And** every Dark Vivid palette has ΔE2000 between 6 and 10
+**And** every Dark Warm palette has ΔE2000 between 5 and 9
+**And** every Dark Cool palette has ΔE2000 between 4 and 8
+**And** every Dark Muted palette has ΔE2000 between 1 and 4
+
+### Scenario: Category mean ΔE2000 follows the chromatic hierarchy
+**Given** the Palette collection grouped by Affective Category
+**When** the mean background ΔE2000 is computed for each category
+**Then** Light Vivid mean > Light Warm mean
+**And** Light Warm mean >= Light Cool mean
+**And** Light Cool mean > Light Muted mean
+**And** Dark Vivid mean > Dark Warm mean
+**And** Dark Warm mean >= Dark Cool mean
+**And** Dark Cool mean > Dark Muted mean
+
+### Scenario: No palette crosses downward into a lower category's perceptual band
+**Given** the complete Palette collection
+**When** each Palette's background ΔE2000 is measured
+**Then** no Light Vivid palette has ΔE2000 below 10
+**And** no Light Warm or Light Cool palette has ΔE2000 below 5
+**And** no Dark Vivid palette has ΔE2000 below 6
+**And** no Dark Warm palette has ΔE2000 below 5
+**And** no Dark Cool palette has ΔE2000 below 4
+
+### Scenario: Dark Vivid palettes compensate with high accent chroma
+**Given** the 5 Palettes in Dark Vivid
+**When** the mean accent chroma (across accent_heading, accent_emphasis, accent_link, accent_code) is computed for each palette
+**Then** every Dark Vivid palette's accent chroma mean substantially exceeds the Dark Muted category's accent chroma mean
+
+### Scenario: Retuned palettes preserve WCAG AA contrast
+**Given** the complete Palette collection after Chroma Target retuning
+**When** all foreground/accent vs. background color pairs are measured
+**Then** every pair has a contrast ratio of at least 4.5:1 (Invariant 3)
+
+### Scenario: Retuned palettes maintain sibling hue diversity
+**Given** any Affective Category after Chroma Target retuning
+**When** the OKLCH hue angles of the 5 palette backgrounds are compared
+**Then** no two siblings have hue angles within 15 degrees of each other
+
+### Scenario: Light Vivid backgrounds read as "colored paper"
+**Given** the 5 Palettes in Light Vivid after retuning
+**When** each background is compared to its nearest-lightness neutral gray
+**Then** every background registers in the "vivid" perceptual band (ΔE2000 ≥ 10)
+**And** no background exceeds the readability ceiling (ΔE2000 ≤ 20)
+
+### Scenario: Light Muted backgrounds read as "barely there"
+**Given** the 5 Palettes in Light Muted after retuning
+**When** each background is compared to its nearest-lightness neutral gray
+**Then** every background registers in the "barely tinted" to "noticeably tinted" perceptual band (ΔE2000 2–5)
+
+---
+
+## Integration Scenarios (ADR-018)
+
+### Scenario: Chroma Target conformance coexists with species Signature Color fidelity
+**Given** any Palette after Chroma Target retuning
+**When** the retuned background is compared to the species' documented Signature Colors in the Flora Reference
+**Then** the background's OKLCH hue is within the hue family of the species' dominant Signature Color
+**And** the background's chroma falls within the Chroma Target range for its Affective Category
+
+### Scenario: Palette validation catches Chroma Target violations
+**Given** a hypothetical Palette with background ΔE2000 outside its category's Chroma Target range
+**When** palette validation runs
+**Then** a validation error is reported identifying the palette, its category, and the ΔE2000 deviation
