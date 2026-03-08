@@ -1000,6 +1000,112 @@ mod tests {
         );
     }
 
+    // === Acceptance tests: Chroma Targets for Affective Categories (ADR-018) ===
+
+    #[test]
+    fn every_palette_background_within_chroma_target() {
+        // Scenarios: "Every palette background falls within its category's Chroma Target range",
+        // "No palette crosses downward into a lower category's perceptual band",
+        // "Light Vivid backgrounds read as colored paper",
+        // "Light Muted backgrounds read as barely there"
+        let mut violations = Vec::new();
+        for palette in Palette::all() {
+            let de = bg_delta_e(&palette.background);
+            let (min_de, max_de) = palette.category.chroma_target();
+            if de < min_de || de > max_de {
+                violations.push(format!(
+                    "{:?} '{}': ΔE2000 {:.2} outside [{}, {}]",
+                    palette.category, palette.name, de, min_de, max_de
+                ));
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "Chroma Target violations (Invariant 18):\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn category_mean_delta_e_follows_chromatic_hierarchy() {
+        let grouped = Palette::all_by_category();
+        let mean_de = |cat: AffectiveCategory| -> f64 {
+            let palettes = &grouped.iter()
+                .find(|(c, _)| *c == cat)
+                .unwrap()
+                .1;
+            let sum: f64 = palettes.iter().map(|p| bg_delta_e(&p.background)).sum();
+            sum / palettes.len() as f64
+        };
+
+        let lv = mean_de(AffectiveCategory::LightVivid);
+        let lw = mean_de(AffectiveCategory::LightWarm);
+        let lc = mean_de(AffectiveCategory::LightCool);
+        let lm = mean_de(AffectiveCategory::LightMuted);
+        let dv = mean_de(AffectiveCategory::DarkVivid);
+        let dw = mean_de(AffectiveCategory::DarkWarm);
+        let dc = mean_de(AffectiveCategory::DarkCool);
+        let dm = mean_de(AffectiveCategory::DarkMuted);
+
+        assert!(lv > lw, "Light Vivid mean ({:.2}) must > Light Warm mean ({:.2})", lv, lw);
+        assert!(lw >= lc, "Light Warm mean ({:.2}) must >= Light Cool mean ({:.2})", lw, lc);
+        assert!(lc > lm, "Light Cool mean ({:.2}) must > Light Muted mean ({:.2})", lc, lm);
+        assert!(dv > dw, "Dark Vivid mean ({:.2}) must > Dark Warm mean ({:.2})", dv, dw);
+        assert!(dw >= dc, "Dark Warm mean ({:.2}) must >= Dark Cool mean ({:.2})", dw, dc);
+        assert!(dc > dm, "Dark Cool mean ({:.2}) must > Dark Muted mean ({:.2})", dc, dm);
+    }
+
+    #[test]
+    fn dark_vivid_accent_chroma_exceeds_dark_muted() {
+        let grouped = Palette::all_by_category();
+
+        let accent_chroma_mean = |palette: &Palette| -> f64 {
+            let accents = [
+                &palette.accent_heading,
+                &palette.accent_emphasis,
+                &palette.accent_link,
+                &palette.accent_code,
+            ];
+            let sum: f64 = accents.iter().map(|c| {
+                if let Color::Rgb(r, g, b) = c {
+                    oklch_chroma(*r, *g, *b)
+                } else {
+                    0.0
+                }
+            }).sum();
+            sum / 4.0
+        };
+
+        let dv_palettes = &grouped.iter()
+            .find(|(c, _)| *c == AffectiveCategory::DarkVivid).unwrap().1;
+        let dm_palettes = &grouped.iter()
+            .find(|(c, _)| *c == AffectiveCategory::DarkMuted).unwrap().1;
+
+        let dm_category_mean: f64 = dm_palettes.iter()
+            .map(|p| accent_chroma_mean(p)).sum::<f64>() / dm_palettes.len() as f64;
+
+        for palette in dv_palettes.iter() {
+            let ac = accent_chroma_mean(palette);
+            assert!(
+                ac > dm_category_mean,
+                "Dark Vivid '{}' accent chroma mean ({:.4}) must exceed \
+                 Dark Muted category mean ({:.4})",
+                palette.name, ac, dm_category_mean
+            );
+        }
+    }
+
+    #[test]
+    fn validate_chroma_target_catches_violations() {
+        let mut palette = Palette::default_palette();
+        palette.category = AffectiveCategory::LightVivid;
+        palette.background = Color::Rgb(200, 200, 200); // neutral gray — ΔE2000 ≈ 0
+        assert!(matches!(
+            palette.validate_chroma_target(),
+            Err(PaletteError::ChromaTargetViolation { .. })
+        ));
+    }
+
     #[test]
     fn corrected_provenances_match_botanical_sources() {
         let all = Palette::all();
