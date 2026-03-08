@@ -642,6 +642,7 @@ mod tests {
         let old_names = [
             "Ember", "Hearthstone", "Inkwell", "Moonstone", "Neon Noir",
             "Aurora", "Parchment", "Manuscript", "Glacier", "Daybreak",
+            "Balsamroot", "Reindeer Lichen", "Columbine",
         ];
         for palette in Palette::all() {
             assert!(
@@ -712,6 +713,121 @@ mod tests {
             violations.is_empty(),
             "Hue diversity violations:\n{}",
             violations.join("\n")
+        );
+    }
+
+    // === Acceptance tests: Species-Color Validation Remediation (ADR-016) ===
+
+    #[test]
+    fn bracken_replaces_oregon_sunshine_in_light_warm() {
+        let all = Palette::all();
+        let bracken = all.iter().find(|p| p.name == "Bracken");
+        assert!(bracken.is_some(), "Bracken should exist in the collection");
+        let b = bracken.unwrap();
+        assert_eq!(b.category, AffectiveCategory::LightWarm);
+        assert!(
+            b.provenance.contains("Pteridium aquilinum"),
+            "Bracken provenance should reference Pteridium aquilinum"
+        );
+    }
+
+    #[test]
+    fn licorice_fern_replaces_balsamroot_in_light_warm() {
+        let all = Palette::all();
+        let fern = all.iter().find(|p| p.name == "Licorice Fern");
+        assert!(fern.is_some(), "Licorice Fern should exist in the collection");
+        let f = fern.unwrap();
+        assert_eq!(f.category, AffectiveCategory::LightWarm);
+        assert!(
+            f.provenance.contains("Polypodium glycyrrhiza"),
+            "Licorice Fern provenance should reference Polypodium glycyrrhiza"
+        );
+    }
+
+    #[test]
+    fn silver_fir_replaces_reindeer_lichen_in_light_muted() {
+        let all = Palette::all();
+        let fir = all.iter().find(|p| p.name == "Silver Fir");
+        assert!(fir.is_some(), "Silver Fir should exist in the collection");
+        let f = fir.unwrap();
+        assert_eq!(f.category, AffectiveCategory::LightMuted);
+        assert!(
+            f.provenance.contains("Abies amabilis"),
+            "Silver Fir provenance should reference Abies amabilis"
+        );
+    }
+
+    #[test]
+    fn oregon_sunshine_in_light_vivid_with_yellow_hue() {
+        let all = Palette::all();
+        let sunshine = all.iter().find(|p| p.name == "Oregon Sunshine");
+        assert!(
+            sunshine.is_some(),
+            "Oregon Sunshine should exist in the collection"
+        );
+        let s = sunshine.unwrap();
+        assert_eq!(s.category, AffectiveCategory::LightVivid);
+        assert!(
+            s.provenance.contains("Eriophyllum lanatum"),
+            "Oregon Sunshine provenance should reference Eriophyllum lanatum"
+        );
+        // Background hue should be in the yellow range (roughly 70°–120° OKLCH)
+        assert!(
+            s.sort_key > 70.0 && s.sort_key < 120.0,
+            "Oregon Sunshine background hue {:.1}° should be in yellow range",
+            s.sort_key
+        );
+    }
+
+    #[test]
+    fn columbine_retired_from_collection() {
+        let all = Palette::all();
+        assert!(
+            !all.iter().any(|p| p.name == "Columbine"),
+            "Columbine should not be in the collection after retirement"
+        );
+    }
+
+    #[test]
+    fn jack_o_lantern_provenance_uses_olivascens() {
+        let all = Palette::all();
+        let jol = all.iter().find(|p| p.name == "Jack-o'-Lantern").unwrap();
+        assert!(
+            jol.provenance.contains("olivascens"),
+            "Jack-o'-Lantern should reference O. olivascens, not O. olearius"
+        );
+        assert!(
+            !jol.provenance.contains("olearius"),
+            "Jack-o'-Lantern should not reference O. olearius"
+        );
+    }
+
+    #[test]
+    fn corrected_provenances_match_botanical_sources() {
+        let all = Palette::all();
+
+        let oakmoss = all.iter().find(|p| p.name == "Oakmoss").unwrap();
+        assert!(
+            !oakmoss.provenance.contains("teal"),
+            "Oakmoss provenance should not say 'teal' (real color is gray-green to olive)"
+        );
+
+        let witchs_hair = all.iter().find(|p| p.name == "Witch's Hair").unwrap();
+        assert!(
+            !witchs_hair.provenance.contains("olive-black"),
+            "Witch's Hair provenance should not say 'olive-black' (real color is pale yellow-green)"
+        );
+
+        let partridgefoot = all.iter().find(|p| p.name == "Partridgefoot").unwrap();
+        assert!(
+            !partridgefoot.provenance.contains("gray-green"),
+            "Partridgefoot provenance should not say 'gray-green' (USDA says glossy green)"
+        );
+
+        let lupine = all.iter().find(|p| p.name == "Lupine").unwrap();
+        assert!(
+            !lupine.provenance.contains("silvery"),
+            "Lupine provenance should not say 'silvery' (L. latifolius is not silvery)"
         );
     }
 }

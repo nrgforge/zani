@@ -41,10 +41,10 @@ pub(super) fn all_palettes() -> Vec<Palette> {
         map_lichen(),
         // Light — Warm
         oatgrass(),
-        oregon_sunshine(),
+        bracken(),
         white_oak(),
         ponderosa(),
-        balsamroot(),
+        licorice_fern(),
         // Light — Cool
         cascade_aster(),
         pearly_everlasting(),
@@ -53,8 +53,8 @@ pub(super) fn all_palettes() -> Vec<Palette> {
         phlox(),
         // Light — Vivid
         paintbrush(),
-        columbine(),
         tiger_lily(),
+        oregon_sunshine(),
         farewell(),
         camas(),
         // Light — Muted
@@ -62,7 +62,7 @@ pub(super) fn all_palettes() -> Vec<Palette> {
         oceanspray(),
         goatsbeard(),
         fringecup(),
-        reindeer_lichen(),
+        silver_fir(),
     ]
 }
 
@@ -464,11 +464,11 @@ fn oatgrass() -> Palette {
     }
 }
 
-/// Woolly perennial with bright yellow daisy-like flower heads.
-fn oregon_sunshine() -> Palette {
+/// Light green fronds turning golden-brown in autumn.
+fn bracken() -> Palette {
     Palette {
-        name: "Oregon Sunshine",
-        provenance: "Eriophyllum lanatum — woolly perennial with bright yellow daisy-like flower heads on dry rocky slopes and road cuts from the Siskiyous through the Columbia Gorge, blooming May through July.",
+        name: "Bracken",
+        provenance: "Pteridium aquilinum — deciduous fern with characteristically light green fronds on straw-brown stipes, turning amber-gold in autumn, widespread on dry open slopes from Alaska to California.",
         foreground: Color::Rgb(52, 45, 32),
         background: Color::Rgb(230, 242, 205),
         dimmed_foreground: Color::Rgb(170, 164, 148),
@@ -518,11 +518,11 @@ fn ponderosa() -> Palette {
     }
 }
 
-/// Large sunflower-like blooms in warm amber-gold.
-fn balsamroot() -> Palette {
+/// Bright green fronds with golden-brown sori on mossy bigleaf maples.
+fn licorice_fern() -> Palette {
     Palette {
-        name: "Balsamroot",
-        provenance: "Balsamorhiza sagittata — large sunflower-like blooms in warm amber-gold on stout stems above arrow-shaped basal leaves, abundant on dry slopes from the Rogue Valley through eastern Washington.",
+        name: "Licorice Fern",
+        provenance: "Polypodium glycyrrhiza — epiphytic fern with bright green fronds and golden-brown to cinnamon sori, growing on mossy bigleaf maples in moist forests from Alaska to coastal California.",
         foreground: Color::Rgb(55, 45, 30),
         background: Color::Rgb(218, 242, 210),
         dimmed_foreground: Color::Rgb(170, 162, 140),
@@ -652,20 +652,20 @@ fn paintbrush() -> Palette {
     }
 }
 
-/// Nodding flowers with red-orange sepals and yellow petals.
-fn columbine() -> Palette {
+/// Bright golden-yellow daisy-like flower heads on dry rocky slopes.
+fn oregon_sunshine() -> Palette {
     Palette {
-        name: "Columbine",
-        provenance: "Aquilegia formosa — nodding flowers with red-orange sepals and yellow petals, blooming in moist seeps and open woodland edges from British Columbia through the Siskiyous.",
-        foreground: Color::Rgb(48, 40, 32),
-        background: Color::Rgb(240, 236, 228),
-        dimmed_foreground: Color::Rgb(162, 158, 148),
-        accent_heading: Color::Rgb(170, 62, 25),
-        accent_emphasis: Color::Rgb(125, 102, 12),
-        accent_link: Color::Rgb(18, 95, 112),
-        accent_code: Color::Rgb(88, 78, 62),
+        name: "Oregon Sunshine",
+        provenance: "Eriophyllum lanatum — woolly perennial with bright golden-yellow daisy-like flower heads on dry rocky slopes and road cuts from the Siskiyous through the Columbia Gorge, blooming May through July.",
+        foreground: Color::Rgb(45, 38, 28),
+        background: Color::Rgb(248, 242, 218),
+        dimmed_foreground: Color::Rgb(168, 162, 142),
+        accent_heading: Color::Rgb(130, 95, 0),
+        accent_emphasis: Color::Rgb(125, 100, 10),
+        accent_link: Color::Rgb(15, 85, 95),
+        accent_code: Color::Rgb(88, 78, 52),
         category: AffectiveCategory::LightVivid,
-        sort_key: oklch_hue(240, 236, 228),
+        sort_key: oklch_hue(248, 242, 218),
         color_256: None,
     }
 }
@@ -800,11 +800,11 @@ fn fringecup() -> Palette {
     }
 }
 
-/// Fruticose lichen forming pale silvery-green cushions on thin soils.
-fn reindeer_lichen() -> Palette {
+/// Silvery needle undersides and deep purple mature cones.
+fn silver_fir() -> Palette {
     Palette {
-        name: "Reindeer Lichen",
-        provenance: "Cladonia rangiferina — fruticose lichen forming pale silvery-green to gray cushions on thin soils and rotting wood in open conifer forests, especially on drier east-slope Cascades.",
+        name: "Silver Fir",
+        provenance: "Abies amabilis — Pacific silver fir with conspicuous silvery-white needle undersides and smooth gray bark, deep purple mature cones, defining the mid-elevation Cascades from southeast Alaska to Oregon.",
         foreground: Color::Rgb(42, 48, 42),
         background: Color::Rgb(225, 232, 238),
         dimmed_foreground: Color::Rgb(155, 162, 152),
