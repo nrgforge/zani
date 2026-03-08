@@ -1,4 +1,4 @@
-//! Palette collection: the 40 curated palettes named after PNW flora (ADR-015).
+//! Palette collection: the 40 curated palettes named after Cascadia bioregion flora (ADR-015, ADR-016).
 //! This file is separated from the palette logic so palette data is easy to
 //! alter and review independently.
 //!
@@ -186,7 +186,7 @@ fn sitka() -> Palette {
 fn oakmoss() -> Palette {
     Palette {
         name: "Oakmoss",
-        provenance: "Evernia prunastri — fruticose lichen draping Oregon white oak branches in the Willamette and Rogue valleys, thallus muted teal-green above and pale beneath.",
+        provenance: "Evernia prunastri — fruticose lichen draping Oregon white oak branches in the Willamette and Rogue valleys, thallus gray-green to olive above and pale beneath.",
         foreground: Color::Rgb(208, 218, 215),
         background: Color::Rgb(26, 34, 32),
         dimmed_foreground: Color::Rgb(90, 100, 98),
@@ -240,7 +240,7 @@ fn elderberry() -> Palette {
 fn witchs_hair() -> Palette {
     Palette {
         name: "Witch's Hair",
-        provenance: "Alectoria sarmentosa — pendant lichen hanging in dark curtains from conifer branches in old-growth forests of the Cascades and Coast Range, thallus olive-black to deep greenish-brown.",
+        provenance: "Alectoria sarmentosa — pendant lichen hanging from conifer branches in old-growth forests of the Cascades and Coast Range, thallus pale yellow-green to straw-colored.",
         foreground: Color::Rgb(212, 218, 208),
         background: Color::Rgb(28, 32, 26),
         dimmed_foreground: Color::Rgb(92, 100, 88),
@@ -298,7 +298,7 @@ fn lobaria() -> Palette {
 fn jack_o_lantern() -> Palette {
     Palette {
         name: "Jack-o'-Lantern",
-        provenance: "Omphalotus olearius — bioluminescent orange mushroom growing in dense clusters at the base of hardwoods, gills glow faintly in darkness, occasional in Oregon's Coast Range and Siskiyou foothills.",
+        provenance: "Omphalotus olivascens — bioluminescent orange mushroom growing in dense clusters at the base of hardwoods, gills glow faintly in darkness, occasional in Oregon's Coast Range and Siskiyou foothills.",
         foreground: Color::Rgb(228, 222, 215),
         background: Color::Rgb(26, 20, 16),
         dimmed_foreground: Color::Rgb(98, 88, 82),
@@ -580,7 +580,7 @@ fn pearly_everlasting() -> Palette {
 fn partridgefoot() -> Palette {
     Palette {
         name: "Partridgefoot",
-        provenance: "Luetkea pectinata — low mat-forming alpine plant with finely divided fernlike leaves in cool gray-green and small creamy racemes, common in snowmelt zones in the Cascades and Olympics.",
+        provenance: "Luetkea pectinata — low mat-forming alpine plant with finely divided fernlike leaves in glossy green and small creamy racemes, common in snowmelt zones in the Cascades and Olympics.",
         foreground: Color::Rgb(38, 48, 44),
         background: Color::Rgb(228, 236, 232),
         dimmed_foreground: Color::Rgb(150, 162, 158),
@@ -598,7 +598,7 @@ fn partridgefoot() -> Palette {
 fn lupine() -> Palette {
     Palette {
         name: "Lupine",
-        provenance: "Lupinus latifolius — spires of blue to blue-violet pea flowers in subalpine meadows and open slopes throughout the Cascades, palmate leaves with silvery sheen from fine hairs.",
+        provenance: "Lupinus latifolius — spires of blue to blue-violet pea flowers in subalpine meadows and open slopes throughout the Cascades, broad palmate leaves on stout stems.",
         foreground: Color::Rgb(38, 42, 55),
         background: Color::Rgb(218, 228, 245),
         dimmed_foreground: Color::Rgb(148, 155, 168),

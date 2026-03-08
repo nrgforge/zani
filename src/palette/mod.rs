@@ -69,13 +69,13 @@ pub struct Color256Overrides {
 /// A named, curated color system defining foreground, background,
 /// dimming endpoints, and accent colors for the Writing Surface.
 /// Designed as a mood instrument — priming a specific affective state
-/// rather than serving as decoration. Named after a Pacific Northwest
-/// species (ADR-015). Belongs to an Affective Category.
+/// rather than serving as decoration. Named after a Cascadia bioregion
+/// species (ADR-015, ADR-016). Belongs to an Affective Category.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub name: &'static str,
     /// Botanically accurate one-line note: scientific name, appearance,
-    /// and PNW ecological context (ADR-015).
+    /// and Cascadia bioregion ecological context (ADR-015, ADR-016).
     pub provenance: &'static str,
     pub foreground: Color,
     pub background: Color,
