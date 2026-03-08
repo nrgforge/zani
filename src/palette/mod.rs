@@ -401,7 +401,7 @@ pub(crate) fn srgb_to_lab(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
     // linear RGB → XYZ (sRGB D65 matrix)
     let x = 0.4124564 * lr + 0.3575761 * lg + 0.1804375 * lb;
     let y = 0.2126729 * lr + 0.7151522 * lg + 0.0721750 * lb;
-    let z = 0.0193339 * lr + 0.2591332 * lg + 0.9503041 * lb;
+    let z = 0.0193339 * lr + 0.1191920 * lg + 0.9503041 * lb;
 
     // D65 reference white
     let xn = 0.95047;
