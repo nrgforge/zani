@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Status:** Current
-**Last amended:** 2026-03-06
+**Last amended:** 2026-03-09
 
 ## Architectural Drivers
 
@@ -23,8 +23,8 @@
 
 ### Module: palette
 **Purpose:** Defines named, curated color systems with affective categorization, validation, and degradation support.
-**Provenance:** Invariant 3; ADR-006; ADR-009; ADR-012; Essay 002 §Constraint Space, §Degradation
-**Owns:** Palette, AffectiveCategory, PerceptualSortOrder, PaletteError, interpolation, validation
+**Provenance:** Invariant 3; ADR-006; ADR-009; ADR-012; ADR-018; Essay 002 §Constraint Space, §Degradation
+**Owns:** Palette, AffectiveCategory, PerceptualSortOrder, ChromaTarget, PaletteError, interpolation, validation, color math (OKLCH, CIELAB, CIEDE2000)
 **Depends on:** (ratatui Color only)
 **Depended on by:** app, config, color_profile, animation, writing_surface, ui, palette_browser
 
@@ -147,6 +147,7 @@
 | **Palette** | **palette** | **ADR-006; ADR-009** |
 | **Affective Category** | **palette** | **ADR-009; Essay 002 §Browsing** |
 | **Perceptual Sort Order** | **palette** | **ADR-009; Essay 002 §Browsing** |
+| **Chroma Target** | **palette** | **Invariant 18; ADR-018; Essay 005** |
 | **Color Profile** | **color_profile** | **Invariant 11; ADR-012** |
 | Chrome | ui | Invariant 1 |
 | **Settings Layer** | **settings** | **Invariant 1; ADR-010** |
@@ -256,6 +257,7 @@ ADR-012 introduces a dependency from color_profile to palette: the Degrade actio
 | Domain modules never import app | Grep for `use crate::app` in non-ui, non-main files | 0 matches | Layering rule |
 | No dependency cycles | Topological sort of dependency graph | Acyclic | Architecture principle |
 | Every Palette satisfies Invariant 3 | `palette.validate()` on all palettes including 256-color alternates | All pass | Invariant 3 |
+| Every Palette background within Chroma Target | `palette.validate_chroma_target()` on all palettes | All pass | Invariant 18; ADR-018 |
 | Config merge preserves unspecified fields | Test: local config with 1 field → all other fields from global | Pass | ADR-011 |
 | Palette Browser is a sub-panel, not a separate overlay | Browser state is entered from Settings Layer, Esc returns to Settings | Pass | ADR-010; Invariant 1 |
 | Color degradation checks hand-tuned before automatic | Test: palette with overrides uses them; palette without uses automatic | Pass | ADR-012 |
@@ -285,6 +287,7 @@ ADR-012 introduces a dependency from color_profile to palette: the Degrade actio
 | 3: WCAG AA, no pure B/W | palette | `all_palettes_satisfy_invariant_3` (existing, extended to cover 256-color alternates) |
 | 5: Column prose-width | viewport, config | `column_width_clamped_on_deserialize` (existing) |
 | 11: Graceful degradation | color_profile, palette | `degrade_uses_hand_tuned_values`, `degrade_falls_back_without_overrides` (new) |
+| 18: Chroma Target conformance | palette | `every_palette_background_within_chroma_target`, `category_mean_delta_e_follows_chromatic_hierarchy` |
 
 ### Test Layers
 
@@ -296,4 +299,4 @@ ADR-012 introduces a dependency from color_profile to palette: the Degrade actio
 
 | # | Date | What Changed | Trigger | Provenance | Status |
 |---|------|-------------|---------|------------|--------|
-| — | — | — | — | — | — |
+| 1 | 2026-03-09 | Added Chroma Target to palette module responsibilities, fitness criteria, and invariant enforcement | ADR-018 accepted | Invariant 18; ADR-018 | Accepted |

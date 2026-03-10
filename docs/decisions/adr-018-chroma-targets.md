@@ -1,6 +1,6 @@
 # ADR-018: Chroma Targets for Affective Categories
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
