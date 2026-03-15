@@ -47,9 +47,9 @@ Entry point. Answers: what is this, who is it for, what must always be true?
 - **[docs/domain-model.md](docs/domain-model.md)** — 18 invariants that must always hold; the authoritative list of open questions
 - **[docs/system-design.md](docs/system-design.md)** — architectural drivers, component map, rendering pipeline
 
-### Tier 3 — Decisions and Plans
+### Tier 3 — Decisions and References
 - **[docs/decisions/](docs/decisions/)** — 18 ADRs recording what was decided and why (supersedes system-design when they conflict)
-- **[docs/plans/](docs/plans/)** — implementation design and plan documents for specific features
+- **[docs/references/field-guide.md](docs/references/field-guide.md)** — domain-to-code mapping for all modules
 - **[docs/essays/reflections/](docs/essays/reflections/)** and **[docs/essays/research-logs/](docs/essays/research-logs/)** — epistemic trail: what was learned, what changed, what remains speculative
 
 ---
