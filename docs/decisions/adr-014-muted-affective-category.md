@@ -1,6 +1,6 @@
 # ADR-014: Muted as Fourth Character Value
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 

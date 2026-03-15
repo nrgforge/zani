@@ -1,6 +1,6 @@
 # ADR-009: Palettes Organized by Affective Category
 
-**Status:** Proposed — amended by ADR-014 (character axis expanded from 3 to 4 values), ADR-018 (Chroma Targets per category)
+**Status:** Accepted — amended by ADR-014 (character axis expanded from 3 to 4 values), ADR-018 (Chroma Targets per category)
 
 ## Context
 

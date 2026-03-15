@@ -1,6 +1,6 @@
 # ADR-015: PNW Flora Naming Register and Collection Structure
 
-**Status:** Proposed — amended by ADR-016 (species validation remediation) and ADR-017 (Flora Reference)
+**Status:** Accepted — amended by ADR-016 (species validation remediation) and ADR-017 (Flora Reference)
 
 ## Context
 
