@@ -15,7 +15,7 @@ Two threads interweave throughout:
 
 **Thread 1 (Specific):** The journey of building Zani's 40-palette collection — from theme-picker frustration through flora naming, provenance bias, essence modes, chromatic inversion, to enforced chroma targets. Concrete, with code, with the matrix bug, with Oregon Sunshine moving categories.
 
-**Thread 2 (General):** The methodology crystallizing — affective essentialism — and its transferability. The lighting agent as both origin and destination. The four-step pattern and its applicability across domains.
+**Thread 2 (General):** The methodology crystallizing — affective essentialism — and its transferability. The lighting agent as origin, Zani as the site of crystallization. The four-step pattern, its distinctive Step 4, and the structural conditions for applicability across domains.
 
 ## Bigger Frame
 
@@ -40,7 +40,8 @@ Tools that help people be more generative rather than generate for them. The cur
 ## The Mood-Instrument Inversion
 
 - Essay 002's key finding: color operates below conscious attention. Pathway is color → affect → cognition, not color → aesthetics → preference
-- Saturation is the primary arousal lever, not hue (Wilms & Oberfeld 2018). The blue-for-creativity claim (Mehta & Zhu 2009) failed replication (Steele 2014)
+- Saturation is the strongest single predictor of physiological arousal, ahead of brightness — though both contribute, along with their interactions (Wilms & Oberfeld 2018). The blue-for-creativity claim (Mehta & Zhu 2009) failed replication (Steele 2014)
+- **Medium transfer note:** The cited color science research studied physical environments. But during focused writing, the screen background fills a comparable proportion of the visual field (~90%) — the perceptual conditions are analogous to sitting in a tinted room
 - The reframe: palettes are instruments, not decorations. The word "palette" itself activates the art-making metaphor — the writer's text is the paint
 - WCAG AA constraints leave mood expression *unconstrained* — lightness relationships are the only restriction; hue and saturation are free parameters
 
@@ -146,15 +147,16 @@ Tools that help people be more generative rather than generate for them. The cur
   2. **Identify measurable properties of the medium** that correlate with that state
   3. **Set target ranges per category** — evidence-based, with perceptual thresholds
   4. **Validate against authentic source material** — domain expertise confirms the measurement, not the other way around
-- The key constraint: measurement confirms but does not replace domain knowledge. A chroma audit tells you Farewell's background is in the wrong perceptual band. Only someone who knows the species can tell you whether the fix honors the plant
+- **What distinguishes this from generic evidence-based design:** In standard design empiricism, hitting your metrics means you're done. In affective essentialism, hitting your metrics means you've passed one gate — you still need domain expertise to confirm the result is authentic. Step 4 is the novel move. A chroma audit tells you Farewell's background is in the wrong perceptual band. Only someone who knows the species can tell you whether the fix honors the plant. A palette can be in the right ΔE2000 band and still not feel like Oregon Sunshine
+- The key constraint: measurement confirms but does not replace domain knowledge. Because affect operates below conscious attention, purely numeric compliance is insufficient — the instrument must also be authentic to the source material that grounds it
 - **Thread 1 closes:** The 40 palettes now pass 448 tests, backgrounds conform to enforced ΔE2000 ranges, every species' essence drives its dominant slot
 
 ---
 
 ## Transferability: The Lighting Agent and Beyond
 
-- The masters project: gesture classification → lighting palette → affective state. Same four-step structure, different medium
-- Sound design has analogous perceptual metrics (loudness, spectral centroid, roughness). Typography has x-height ratios, stroke contrast, spacing. The methodology applies wherever affect is the design goal and the medium is measurable
+- **The lighting agent as origin, not validation.** The masters project — gesture classification → lighting palette → affective state — was the *seed* of this thinking. The methodology didn't exist yet; it crystallized in the Zani work, then mapped back to the lighting agent retroactively. They share the same four-step structure with different media. The retroactive mapping confirms structural alignment; it is not an independent replication
+- **Why the pattern should generalize.** Three structural properties make a domain amenable to affective essentialism: (1) the medium operates below conscious attention, making vibes-based design insufficient; (2) the medium is measurable, making empiricism possible; (3) authentic source material exists that can validate the measurement. These properties are shared by other affective design domains — sound design has perceptual metrics (loudness, spectral centroid, roughness), typography has measurable properties (x-height ratios, stroke contrast, spacing) — though prospective application in these domains remains to be demonstrated
 - **The bigger frame:** Tools that prime human creativity rather than replace it. The lighting agent sets conditions through light. Zani sets conditions through color. Both trust the human to do the creative work — they just tune the environment
 - The current moment: most tool-building energy goes toward generating output *for* people. Affective essentialism is a methodology for the other kind of tool — the kind that makes the human more generative
 
@@ -164,7 +166,7 @@ Tools that help people be more generative rather than generate for them. The cur
 
 - The question that changed: from "what color themes should we have" to "how do you distill the essence of something into an affective state based on its properties"
 - The first question has a flat answer (a list). The second has transferable implications
-- What vibe-coding can't produce: the provenance bias was invisible to automated checking. The chromatic inversion was invisible without empirical measurement. The essence modes came from standing in a Sitka forest, growing Oregon Sunshine, living among manzanita. Every step required either domain expertise or empirical rigor or both
+- What vibe-coding can't produce: the provenance bias was invisible to automated checking. The chromatic inversion was invisible without empirical measurement. The essence modes came from standing in a Sitka forest, growing Oregon Sunshine, living among manzanita. Every step required either domain expertise or empirical rigor or both. These failure modes — plausible-but-backward rationalization, intent-without-measurement drift, composition without authentic knowledge — are structural features of affective design, not peculiarities of color palettes. Any domain where the medium operates below conscious attention will reproduce them
 - The methodology emerged from the process. It was not designed in advance. The RDD cycle — research → model → decide → build, with epistemic gates at every step — created the space for a genuinely novel framework to crystallize from what looked like a mundane design task
 
 ---
@@ -178,4 +180,4 @@ These corrections apply to citations as they appear in the project's research es
 | Xu & Labroo, *J. Environmental Psychology*, 2014 (dim lighting) | The dim-lighting/creativity finding is **Steidle & Werth (2013)**, *J. Environmental Psychology*, 33, 67–80. Xu & Labroo (2014) is about bright light and emotional intensity, published in *J. Consumer Psychology*. |
 | Glaveanu et al., *Frontiers in Psychology*, 2019 (4E cognition) | The 2019 *Frontiers in Psychology* paper on 4E/creativity is sole-authored by **Malinin, L. H.** (2019), not Glaveanu. |
 | El-Nasr "emotional affordances" | The term may not appear verbatim in the CHI 2005 extended abstract (El-Nasr, Zupko, & Miron). Cite cautiously or verify against the full text of El-Nasr's broader research program (2003–2011). |
-| Wilms & Oberfeld — "saturation as sole primary driver" | The paper reports saturation, brightness, and their interactions all drive arousal. Saturation is the strongest single factor but the "sole primary driver" framing overstates the finding. |
+| Wilms & Oberfeld — "saturation as sole primary driver" | The paper reports saturation, brightness, and their interactions all drive arousal. Saturation is the strongest single factor but the "sole primary driver" framing overstates the finding. **Corrected in outline body** to "strongest single predictor." |
