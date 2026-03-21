@@ -3,6 +3,9 @@ name = "zani"
 version = "0.1.0"
 edition = "2024"
 description = "A terminal writing app"
+repository = "https://github.com/nrgforge/zani"
+homepage = "https://github.com/nrgforge/zani"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.29"
@@ -14,3 +17,8 @@ toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
