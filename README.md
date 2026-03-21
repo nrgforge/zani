@@ -23,14 +23,21 @@ Every design decision traces to research on flow states, cognitive load, typogra
 
 ## Install
 
-```
-cargo install --path .
+```bash
+# Homebrew (macOS/Linux)
+brew install nrgforge/tap/zani
+
+# Shell installer (macOS/Linux)
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nrgforge/zani/releases/latest/download/zani-installer.sh | sh
+
+# PowerShell (Windows)
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/nrgforge/zani/releases/latest/download/zani-installer.ps1 | iex"
 ```
 
 Or build from source:
 
-```
-cargo build --release
+```bash
+cargo install --path .
 ```
 
 ## Usage
@@ -100,11 +107,7 @@ Zani detects your terminal's color capability automatically:
 
 ### Palettes
 
-Three built-in palettes, each respecting the no-pure-black/white constraint:
-
-- **Ember** — warm dark. The default.
-- **Inkwell** — cool dark.
-- **Parchment** — warm light.
+40 curated palettes named after Pacific Northwest flora, organized into 8 affective categories (Dark/Light × Warm/Cool/Vivid/Muted). Every palette enforces WCAG AA 4.5:1 contrast, avoids pure black/white, and maintains hue diversity across siblings. Browse and preview live in the Settings Layer.
 
 ## Architecture
 
@@ -127,10 +130,14 @@ Ropey buffer → Writing Surface → ratatui cell buffer → Crossterm → termi
 ## Development
 
 ```
-cargo test       # 380 unit + 3 integration + 1 alloc bench
+cargo test       # 448 unit + 11 integration + 1 alloc bench
 cargo clippy     # Lint
 cargo run        # Run in development
 ```
+
+## Built with RDD
+
+Zani is built using [Research-Driven Development](https://github.com/nrgforge/rdd) — a methodology for building software you understand.
 
 ## License
 
