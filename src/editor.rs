@@ -559,12 +559,83 @@ impl Editor {
                     self.dirty = true;
                 }
             }
+            Action::ParagraphBackward => {
+                let total = self.buffer.len_lines();
+                if total == 0 || self.cursor_line == 0 {
+                    self.cursor_line = 0;
+                    self.cursor_col = 0;
+                    return;
+                }
+                let mut line = self.cursor_line - 1;
+                // Skip the blank line we may be on already.
+                while line > 0 && self.line_is_blank(line) {
+                    line -= 1;
+                }
+                // Walk backward until blank or top.
+                while line > 0 && !self.line_is_blank(line) {
+                    line -= 1;
+                }
+                self.cursor_line = line;
+                self.cursor_col = 0;
+            }
+            Action::ParagraphForward => {
+                let total = self.buffer.len_lines();
+                if total == 0 {
+                    return;
+                }
+                // Ropey creates a trailing empty line after a terminal '\n'; exclude it
+                // so navigation does not land on that synthetic line.
+                let effective_total = if total > 1
+                    && self.buffer.line(total - 1).len_chars() == 0
+                {
+                    total - 1
+                } else {
+                    total
+                };
+                let mut line = self.cursor_line;
+                // Skip the blank line we may be on already.
+                while line + 1 < effective_total && self.line_is_blank(line) {
+                    line += 1;
+                }
+                // Walk forward until blank or end.
+                while line + 1 < effective_total && !self.line_is_blank(line) {
+                    line += 1;
+                }
+                self.cursor_line = line;
+                self.cursor_col = 0;
+            }
+            Action::SentenceForward => {
+                let cur = self.cursor_char_index();
+                let len = self.buffer.len_chars();
+                if cur >= len {
+                    return;
+                }
+                if let Some((_, end)) = crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, cur) {
+                    let target = (end + 1).min(len.saturating_sub(1));
+                    self.set_cursor_from_char_index(target);
+                } else {
+                    self.set_cursor_from_char_index(len.saturating_sub(1));
+                }
+            }
+            Action::SentenceBackward => {
+                let cur = self.cursor_char_index();
+                if cur == 0 {
+                    return;
+                }
+                let target = match crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, cur) {
+                    Some((start, _)) if start < cur => start,
+                    _ => {
+                        // Already at start of current sentence — go back further.
+                        let probe = cur.saturating_sub(1);
+                        crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, probe)
+                            .map(|(s, _)| s)
+                            .unwrap_or(0)
+                    }
+                };
+                self.set_cursor_from_char_index(target);
+            }
             // Wired up in later tasks.
-            Action::ParagraphBackward
-            | Action::ParagraphForward
-            | Action::SentenceBackward
-            | Action::SentenceForward
-            | Action::FindChar { .. }
+            Action::FindChar { .. }
             | Action::RepeatFind
             | Action::RepeatFindReversed
             | Action::NextMatch
@@ -663,6 +734,11 @@ impl Editor {
         } else {
             len
         }
+    }
+
+    /// True if the given line contains only whitespace (or is empty).
+    fn line_is_blank(&self, line: usize) -> bool {
+        self.buffer.line(line).chars().all(|c| c.is_whitespace())
     }
 
     /// Find the visual line index containing (cursor_line, cursor_col).
@@ -1960,5 +2036,60 @@ mod tests {
         assert_eq!(editor.pending_normal_key, Some('g'));
         editor.handle_escape();
         assert_eq!(editor.pending_normal_key, None);
+    }
+
+    // === Paragraph and sentence motions ===
+
+    #[test]
+    fn brace_close_jumps_to_next_paragraph() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first line\nstill first\n\nsecond para\nmore\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char('}');
+        // Lands on the blank-line boundary (line 2) — vim behavior.
+        assert_eq!(editor.cursor_line, 2);
+    }
+
+    #[test]
+    fn brace_open_jumps_to_previous_paragraph() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\n\nsecond\nthird\n");
+        editor.cursor_line = 3;
+        editor.cursor_col = 0;
+        editor.handle_char('{');
+        assert_eq!(editor.cursor_line, 1); // blank line
+    }
+
+    #[test]
+    fn brace_close_at_end_stays_at_last_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("only\n");
+        editor.cursor_line = 0;
+        editor.handle_char('}');
+        // No next blank line: jump to last line.
+        assert_eq!(editor.cursor_line, 0);
+    }
+
+    #[test]
+    fn paren_close_advances_one_sentence() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First sentence. Second sentence. Third.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char(')');
+        // Should land at start of "Second" — char index 16.
+        assert!(editor.cursor_col >= 16, "expected to advance past 'First sentence. ', got col {}", editor.cursor_col);
+    }
+
+    #[test]
+    fn paren_open_returns_to_sentence_start() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First sentence. Second sentence.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 20; // mid-second-sentence
+        editor.handle_char('(');
+        // Should land back at start of "Second" (col 16) or start of "First" (col 0).
+        assert!(editor.cursor_col < 20);
     }
 }

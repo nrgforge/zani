@@ -172,6 +172,10 @@ pub fn handle_normal(ch: char) -> Action {
         'v' => Action::EnterVisual,
         'p' => Action::PasteAfter,
         'P' => Action::PasteBefore,
+        '{' => Action::ParagraphBackward,
+        '}' => Action::ParagraphForward,
+        '(' => Action::SentenceBackward,
+        ')' => Action::SentenceForward,
         _ => Action::None,
     }
 }
@@ -192,6 +196,10 @@ pub fn handle_visual(ch: char) -> Action {
         'G' => Action::GotoLastLine,
         'y' => Action::Yank,
         'd' => Action::DeleteSelection,
+        '{' => Action::ParagraphBackward,
+        '}' => Action::ParagraphForward,
+        '(' => Action::SentenceBackward,
+        ')' => Action::SentenceForward,
         _ => Action::None,
     }
 }
