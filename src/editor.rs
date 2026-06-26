@@ -673,13 +673,74 @@ impl Editor {
             Action::SearchWordUnderCursor => {
                 self.pending_search = Some(SearchRequest::WordUnderCursor);
             }
+            Action::InsertAtLineStart => {
+                let line = self.buffer.line(self.cursor_line);
+                let chars: Vec<char> = line.chars().collect();
+                let content_len = self.line_content_len(self.cursor_line);
+                let mut col = 0;
+                while col < chars.len() && chars[col].is_whitespace() && chars[col] != '\n' {
+                    col += 1;
+                }
+                self.cursor_col = if col >= content_len { 0 } else { col };
+                self.vim_mode = Mode::Insert;
+            }
+            Action::DeleteToLineEnd => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let start_idx = line_start + self.cursor_col;
+                let end_idx = line_start + content_len;
+                if end_idx > start_idx {
+                    let deleted = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(start_idx, &deleted);
+                    self.undo_history.commit_group();
+                    self.buffer.remove(start_idx, end_idx);
+                    self.dirty = true;
+                    self.clamp_cursor_col();
+                }
+            }
+            Action::ChangeToLineEnd => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let start_idx = line_start + self.cursor_col;
+                let end_idx = line_start + content_len;
+                if end_idx > start_idx {
+                    let deleted = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(start_idx, &deleted);
+                    self.buffer.remove(start_idx, end_idx);
+                    self.dirty = true;
+                }
+                self.vim_mode = Mode::Insert;
+            }
+            Action::SubstituteLine => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let end_idx = line_start + content_len;
+                if end_idx > line_start {
+                    let deleted = self.buffer.slice_to_string(line_start, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(line_start, &deleted);
+                    self.buffer.remove(line_start, end_idx);
+                    self.dirty = true;
+                }
+                self.cursor_col = 0;
+                self.vim_mode = Mode::Insert;
+            }
+            Action::SubstituteChar => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
+                    let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(idx, &deleted);
+                    self.buffer.remove(idx, idx + 1);
+                    self.dirty = true;
+                }
+                self.vim_mode = Mode::Insert;
+            }
             // Wired up in later tasks.
-            Action::InsertAtLineStart
-            | Action::DeleteToLineEnd
-            | Action::ChangeToLineEnd
-            | Action::SubstituteLine
-            | Action::SubstituteChar
-            | Action::YankLine
+            Action::YankLine
             | Action::ReplaceChar(_)
             | Action::JoinLine
             | Action::ToggleCase
@@ -2292,5 +2353,70 @@ mod tests {
         editor.buffer = Buffer::from_text("foo bar foo\n");
         editor.handle_char('*');
         assert!(matches!(editor.pending_search, Some(SearchRequest::WordUnderCursor)));
+    }
+
+    // === I D C S s ===
+
+    #[test]
+    fn big_i_jumps_to_first_non_whitespace_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("    hello\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 7;
+        editor.handle_char('I');
+        assert_eq!(editor.cursor_col, 4);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn big_i_on_all_whitespace_lands_at_col_zero() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("    \n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 2;
+        editor.handle_char('I');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn big_d_deletes_to_end_of_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('D');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+        assert_eq!(editor.vim_mode, Mode::Normal);
+    }
+
+    #[test]
+    fn big_c_deletes_to_end_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('C');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn big_s_clears_line_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 4;
+        editor.handle_char('S');
+        assert_eq!(editor.buffer.to_string(), "\n");
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn small_s_deletes_char_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 1;
+        editor.handle_char('s');
+        assert_eq!(editor.buffer.to_string(), "hllo\n");
+        assert_eq!(editor.cursor_col, 1);
+        assert_eq!(editor.vim_mode, Mode::Insert);
     }
 }

@@ -181,6 +181,11 @@ pub fn handle_normal(ch: char) -> Action {
         'n' => Action::NextMatch,
         'N' => Action::PrevMatch,
         '*' => Action::SearchWordUnderCursor,
+        'I' => Action::InsertAtLineStart,
+        'D' => Action::DeleteToLineEnd,
+        'C' => Action::ChangeToLineEnd,
+        'S' => Action::SubstituteLine,
+        's' => Action::SubstituteChar,
         _ => Action::None,
     }
 }
