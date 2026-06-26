@@ -190,6 +190,7 @@ pub fn handle_normal(ch: char) -> Action {
         '~' => Action::ToggleCase,
         'V' => Action::EnterLinewiseVisual,
         'u' => Action::Undo,
+        '.' => Action::Repeat,
         _ => Action::None,
     }
 }

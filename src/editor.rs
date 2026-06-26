@@ -33,7 +33,10 @@ pub struct LastFind {
 pub enum LastChange {
     #[default]
     None,
-    // Variants added by later tasks (replace-char, delete-char, etc.)
+    /// A single-shot mutating action (x, dd, J, ~, r<c>, p, P, yy, etc.).
+    Action(Action),
+    /// An insert sequence: the entry action (i/a/o/...) plus typed text.
+    InsertSequence { entry: Action, text: String },
 }
 
 /// Signal from the editor to App that a search navigation was requested.
@@ -64,6 +67,11 @@ pub struct Editor {
     pub selection_kind: SelectionKind,
     /// Set by n/N/* handlers; read by App::handle_key to route through FindState.
     pub pending_search: Option<SearchRequest>,
+    /// Char index marking where the current Insert session began
+    /// (set when entering Insert via a mutating action; cleared on Escape).
+    pub insert_start_char_idx: Option<usize>,
+    /// The action that entered the current Insert session, recorded for `.`.
+    pub insert_entry_action: Option<Action>,
 }
 
 impl Default for Editor {
@@ -91,6 +99,8 @@ impl Editor {
             last_change: LastChange::default(),
             selection_kind: SelectionKind::default(),
             pending_search: None,
+            insert_start_char_idx: None,
+            insert_entry_action: None,
         }
     }
 
@@ -299,27 +309,47 @@ impl Editor {
             self.selection_kind = SelectionKind::CharWise;
             self.vim_mode = Mode::Normal;
         } else if self.vim_mode == Mode::Insert {
+            if let (Some(start_idx), Some(entry)) =
+                (self.insert_start_char_idx.take(), self.insert_entry_action.take())
+            {
+                let end_idx = self.cursor_char_index();
+                if end_idx > start_idx {
+                    let text = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.last_change = LastChange::InsertSequence { entry, text };
+                }
+            }
             self.vim_mode = Mode::Normal;
         }
     }
 
     pub fn apply_action(&mut self, action: Action) {
+        // Snapshot for `.` repeat — done at top so even no-op'd actions
+        // record their intent (vim records the attempt).
+        self.record_last_change(&action);
         match action {
             Action::SwitchMode(mode) => {
                 // In Standard mode, vim_mode must stay Insert
                 if self.editing_mode != EditingMode::Standard {
+                    if mode == Mode::Insert {
+                        self.insert_start_char_idx = Some(self.cursor_char_index());
+                        self.insert_entry_action = Some(Action::SwitchMode(Mode::Insert));
+                    }
                     self.vim_mode = mode;
                 }
             }
             Action::AppendMode => {
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                if self.cursor_col < line_len {
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
                     self.cursor_col += 1;
                 }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::AppendMode);
                 self.vim_mode = Mode::Insert;
             }
             Action::AppendEndOfLine => {
                 self.cursor_col = self.line_content_len(self.cursor_line);
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::AppendEndOfLine);
                 self.vim_mode = Mode::Insert;
             }
             Action::InsertChar(ch) => {
@@ -411,6 +441,8 @@ impl Editor {
                 self.cursor_col = 0;
                 self.dirty = true;
                 self.undo_history.commit_group();
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::OpenLineBelow);
                 self.vim_mode = Mode::Insert;
             }
             Action::OpenLineAbove => {
@@ -421,6 +453,8 @@ impl Editor {
                 self.cursor_col = 0;
                 self.dirty = true;
                 self.undo_history.commit_group();
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::OpenLineAbove);
                 self.vim_mode = Mode::Insert;
             }
             Action::EnterVisual => {
@@ -721,6 +755,8 @@ impl Editor {
                     col += 1;
                 }
                 self.cursor_col = if col >= content_len { 0 } else { col };
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::InsertAtLineStart);
                 self.vim_mode = Mode::Insert;
             }
             Action::DeleteToLineEnd => {
@@ -751,6 +787,8 @@ impl Editor {
                     self.buffer.remove(start_idx, end_idx);
                     self.dirty = true;
                 }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::ChangeToLineEnd);
                 self.vim_mode = Mode::Insert;
             }
             Action::SubstituteLine => {
@@ -765,6 +803,8 @@ impl Editor {
                     self.dirty = true;
                 }
                 self.cursor_col = 0;
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::SubstituteLine);
                 self.vim_mode = Mode::Insert;
             }
             Action::SubstituteChar => {
@@ -777,6 +817,8 @@ impl Editor {
                     self.buffer.remove(idx, idx + 1);
                     self.dirty = true;
                 }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::SubstituteChar);
                 self.vim_mode = Mode::Insert;
             }
             Action::YankLine => {
@@ -881,11 +923,49 @@ impl Editor {
                 self.selection_kind = SelectionKind::LineWise;
                 self.vim_mode = Mode::Visual;
             }
+            Action::Repeat => {
+                let last = self.last_change.clone();
+                match last {
+                    LastChange::None => {}
+                    LastChange::Action(a) => {
+                        self.apply_action(a);
+                    }
+                    LastChange::InsertSequence { entry, text } => {
+                        self.apply_action(entry);
+                        for c in text.chars() {
+                            if c == '\n' {
+                                self.apply_action(Action::InsertNewline);
+                            } else {
+                                self.insert_char(c);
+                            }
+                        }
+                        self.vim_mode = Mode::Normal;
+                        self.insert_start_char_idx = None;
+                        self.insert_entry_action = None;
+                    }
+                }
+            }
             // Wired up in later tasks.
-            Action::Repeat
-            | Action::Counted { .. } => {}
+            Action::Counted { .. } => {}
             Action::None => {}
         }
+    }
+
+    /// Record an action as the last change, for `.` to replay.
+    fn record_last_change(&mut self, action: &Action) {
+        if Self::is_repeatable_change(action) {
+            self.last_change = LastChange::Action(action.clone());
+        }
+    }
+
+    fn is_repeatable_change(action: &Action) -> bool {
+        matches!(action,
+            Action::DeleteChar | Action::DeleteLine
+                | Action::DeleteToLineEnd | Action::DeleteSelection
+                | Action::JoinLine | Action::ToggleCase
+                | Action::ReplaceChar(_)
+                | Action::PasteAfter | Action::PasteBefore | Action::PasteAtCursor
+        )
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -2673,5 +2753,55 @@ mod tests {
         editor.handle_escape();
         editor.handle_char('u');
         assert_eq!(editor.buffer.to_string(), "hello\n");
+    }
+
+    // === . repeat ===
+
+    #[test]
+    fn dot_repeats_x() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("abcdef\n");
+        editor.cursor_col = 0;
+        editor.handle_char('x');
+        editor.handle_char('.');
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "def\n");
+    }
+
+    #[test]
+    fn dot_repeats_dd() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\n");
+        editor.cursor_line = 0;
+        editor.handle_char('d');
+        editor.handle_char('d');
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "c\nd\n");
+    }
+
+    #[test]
+    fn dot_repeats_insert_sequence() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 5;
+        editor.handle_char('a'); // append mode
+        editor.handle_char('!');
+        editor.handle_char('!');
+        editor.handle_escape();
+        assert_eq!(editor.buffer.to_string(), "hello!!\n");
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "hello!!!!\n");
+    }
+
+    #[test]
+    fn dot_after_motion_only_does_not_replay_motion() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("abc\n");
+        editor.cursor_col = 0;
+        editor.handle_char('l'); // motion — not a change
+        editor.handle_char('.');
+        // No change recorded; cursor advanced once for 'l', '.' is no-op.
+        assert_eq!(editor.buffer.to_string(), "abc\n");
+        assert_eq!(editor.cursor_col, 1);
     }
 }
