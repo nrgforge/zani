@@ -10,6 +10,7 @@ pub mod editing_mode;
 pub mod editor;
 pub mod find;
 pub mod focus_mode;
+pub mod help;
 pub mod markdown_styling;
 pub mod mouse;
 pub mod palette;
