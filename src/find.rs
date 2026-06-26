@@ -12,6 +12,9 @@ pub struct FindState {
     pub current_match: usize,
     /// Cursor position before find was opened (for cancel restore).
     pub saved_cursor: (usize, usize),
+    /// Whether the find bar UI is currently visible.
+    /// True when opened via Ctrl+F; false after Enter or when driven by n/N/*.
+    pub overlay_visible: bool,
     /// Cached match ranges (line, start_col, end_col), populated by search().
     match_ranges_cache: Vec<(usize, usize, usize)>,
 }
@@ -24,6 +27,7 @@ impl FindState {
             matches: Vec::new(),
             current_match: 0,
             saved_cursor: (cursor_line, cursor_col),
+            overlay_visible: true,
             match_ranges_cache: Vec::new(),
         }
     }

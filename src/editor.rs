@@ -36,6 +36,15 @@ pub enum LastChange {
     // Variants added by later tasks (replace-char, delete-char, etc.)
 }
 
+/// Signal from the editor to App that a search navigation was requested.
+/// App reads this after `editor.handle_key` returns and routes through FindState.
+#[derive(Debug, Clone, Copy)]
+pub enum SearchRequest {
+    Next,
+    Prev,
+    WordUnderCursor,
+}
+
 /// Text editor core: buffer, cursor, undo, selection, and vim state.
 pub struct Editor {
     pub buffer: Buffer,
@@ -53,6 +62,8 @@ pub struct Editor {
     pub last_find: Option<LastFind>,
     pub last_change: LastChange,
     pub selection_kind: SelectionKind,
+    /// Set by n/N/* handlers; read by App::handle_key to route through FindState.
+    pub pending_search: Option<SearchRequest>,
 }
 
 impl Default for Editor {
@@ -79,6 +90,7 @@ impl Editor {
             last_find: None,
             last_change: LastChange::default(),
             selection_kind: SelectionKind::default(),
+            pending_search: None,
         }
     }
 
@@ -652,11 +664,17 @@ impl Editor {
                     self.execute_find_char(lf.ch, lf.kind, reversed);
                 }
             }
+            Action::NextMatch => {
+                self.pending_search = Some(SearchRequest::Next);
+            }
+            Action::PrevMatch => {
+                self.pending_search = Some(SearchRequest::Prev);
+            }
+            Action::SearchWordUnderCursor => {
+                self.pending_search = Some(SearchRequest::WordUnderCursor);
+            }
             // Wired up in later tasks.
-            Action::NextMatch
-            | Action::PrevMatch
-            | Action::SearchWordUnderCursor
-            | Action::InsertAtLineStart
+            Action::InsertAtLineStart
             | Action::DeleteToLineEnd
             | Action::ChangeToLineEnd
             | Action::SubstituteLine
@@ -2256,5 +2274,23 @@ mod tests {
         // No 'w' on line 0; should not move.
         assert_eq!(editor.cursor_col, 0);
         assert_eq!(editor.cursor_line, 0);
+    }
+
+    // === vim search integration (n N *) ===
+
+    #[test]
+    fn n_in_normal_sets_pending_search_next() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.handle_char('n');
+        assert!(matches!(editor.pending_search, Some(SearchRequest::Next)));
+    }
+
+    #[test]
+    fn star_sets_pending_search_word() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("foo bar foo\n");
+        editor.handle_char('*');
+        assert!(matches!(editor.pending_search, Some(SearchRequest::WordUnderCursor)));
     }
 }

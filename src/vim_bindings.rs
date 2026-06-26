@@ -178,6 +178,9 @@ pub fn handle_normal(ch: char) -> Action {
         ')' => Action::SentenceForward,
         ';' => Action::RepeatFind,
         ',' => Action::RepeatFindReversed,
+        'n' => Action::NextMatch,
+        'N' => Action::PrevMatch,
+        '*' => Action::SearchWordUnderCursor,
         _ => Action::None,
     }
 }
@@ -204,6 +207,9 @@ pub fn handle_visual(ch: char) -> Action {
         ')' => Action::SentenceForward,
         ';' => Action::RepeatFind,
         ',' => Action::RepeatFindReversed,
+        'n' => Action::NextMatch,
+        'N' => Action::PrevMatch,
+        '*' => Action::SearchWordUnderCursor,
         _ => Action::None,
     }
 }

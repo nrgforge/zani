@@ -284,8 +284,8 @@ impl App {
             return;
         }
 
-        // Find overlay — swallow all keys when active
-        if self.find_state.is_some() {
+        // Find overlay — swallow all keys when the overlay is visible
+        if self.find_state.as_ref().is_some_and(|f| f.overlay_visible) {
             self.handle_find_key(code);
             return;
         }
@@ -311,6 +311,7 @@ impl App {
         if self.editor.handle_key(code, modifiers, self.viewport.effective_column_width) {
             self.should_quit = true;
         }
+        self.process_pending_search();
     }
 
     /// Handle vertical cursor movement using the viewport's cached visual lines.
@@ -380,11 +381,17 @@ impl App {
                 self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
             }
             KeyCode::Char('f') => {
-                if self.find_state.is_none() {
-                    self.find_state = Some(FindState::new(
-                        self.editor.cursor_line,
-                        self.editor.cursor_col,
-                    ));
+                let needs_open = self.find_state.as_ref().is_none_or(|f| !f.overlay_visible);
+                if needs_open {
+                    if self.find_state.is_none() {
+                        self.find_state = Some(FindState::new(
+                            self.editor.cursor_line,
+                            self.editor.cursor_col,
+                        ));
+                    } else if let Some(f) = self.find_state.as_mut() {
+                        f.overlay_visible = true;
+                        f.saved_cursor = (self.editor.cursor_line, self.editor.cursor_col);
+                    }
                     self.animations.start(
                         crate::animation::TransitionKind::FindOverlay,
                         Duration::from_millis(150),
@@ -414,7 +421,9 @@ impl App {
             }
             KeyCode::Enter => {
                 self.jump_to_find_match();
-                self.find_state = None;
+                if let Some(f) = self.find_state.as_mut() {
+                    f.overlay_visible = false;
+                }
             }
             KeyCode::Backspace => {
                 find.backspace();
@@ -436,6 +445,71 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Service the editor's pending_search request, if any.
+    /// Reuses the FindState machinery used by Ctrl+F, but leaves the overlay hidden.
+    fn process_pending_search(&mut self) {
+        use crate::editor::SearchRequest;
+        let Some(req) = self.editor.pending_search.take() else {
+            return;
+        };
+
+        // Compute or carry over the search query.
+        let query: Option<String> = match req {
+            SearchRequest::WordUnderCursor => self.word_under_cursor(),
+            SearchRequest::Next | SearchRequest::Prev => {
+                self.find_state.as_ref().map(|f| f.query.clone())
+            }
+        };
+
+        let Some(q) = query else { return };
+        if q.is_empty() {
+            return;
+        }
+
+        // Build or refresh a transient FindState (no overlay shown).
+        let mut find = self.find_state.take().unwrap_or_else(|| {
+            crate::find::FindState::new(self.editor.cursor_line, self.editor.cursor_col)
+        });
+        if find.query != q {
+            find.query = q;
+            find.cursor = find.query.chars().count();
+            find.search(&self.editor.buffer);
+        }
+
+        match req {
+            SearchRequest::Next | SearchRequest::WordUnderCursor => find.next_match(),
+            SearchRequest::Prev => find.prev_match(),
+        }
+
+        if let Some((line, col)) = find.current_match_pos() {
+            self.editor.cursor_line = line;
+            self.editor.cursor_col = col;
+        }
+
+        // Keep the find query in memory but do NOT show the overlay.
+        find.overlay_visible = false;
+        self.find_state = Some(find);
+    }
+
+    /// Return the word under the cursor, if any (alphanumeric + '_').
+    fn word_under_cursor(&self) -> Option<String> {
+        let line = self.editor.buffer.line(self.editor.cursor_line);
+        let chars: Vec<char> = line.chars().collect();
+        let col = self.editor.cursor_col;
+        if col >= chars.len() || !is_word_char(chars[col]) {
+            return None;
+        }
+        let mut start = col;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
+            end += 1;
+        }
+        Some(chars[start..=end].iter().collect())
     }
 
     /// Move cursor to the current find match position, if any.
@@ -730,6 +804,10 @@ impl App {
             self.palette
         }
     }
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 #[cfg(test)]
@@ -2116,5 +2194,38 @@ mod tests {
         // config_source should switch to Local
         assert_eq!(app.config_source, ConfigSource::Local);
         assert_eq!(app.local_config_path, Some(local_path));
+    }
+
+    // === vim search integration (n N *) ===
+
+    #[test]
+    fn star_jumps_to_next_occurrence_of_word_under_cursor() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 0; // on 'f' of first "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 8, "cursor should jump to 'f' of second 'foo'");
+    }
+
+    #[test]
+    fn n_repeats_existing_find_query() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 0;
+        // Seed a find query via Ctrl+F path.
+        app.handle_key(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        // Overlay open — type 'foo'
+        for c in "foo".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // Close overlay with Enter: hides overlay, keeps find_state
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.find_state.is_some(), "find_state should survive Enter");
+        assert!(!app.find_state.as_ref().unwrap().overlay_visible, "overlay should be hidden");
+        let before = app.editor.cursor_col;
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_ne!(app.editor.cursor_col, before, "n should move to next match");
     }
 }

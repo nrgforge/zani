@@ -72,8 +72,10 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
         draw_palette_browser(frame, ctx, area);
     }
 
-    // Find overlay bar at top of screen
-    if let Some(fs) = ctx.find_state {
+    // Find overlay bar at top of screen (only when overlay is visible)
+    if let Some(fs) = ctx.find_state
+        && fs.overlay_visible
+    {
         let find_opacity = ctx.find_opacity.unwrap_or(1.0);
         draw_find_bar(frame, fs, &ctx.effective_palette, area, find_opacity);
     }
@@ -95,7 +97,9 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     }
 
     // Position cursor
-    if let Some(fs) = ctx.find_state {
+    if let Some(fs) = ctx.find_state
+        && fs.overlay_visible
+    {
         // Place cursor in the find bar
         let find_prefix_len = 6u16; // "Find: "
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
