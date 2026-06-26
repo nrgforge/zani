@@ -696,7 +696,8 @@ impl Editor {
                     self.undo_history.commit_group();
                     self.buffer.remove(start_idx, end_idx);
                     self.dirty = true;
-                    self.clamp_cursor_col();
+                    let new_content_len = self.line_content_len(self.cursor_line);
+                    self.cursor_col = self.cursor_col.min(new_content_len.saturating_sub(1));
                 }
             }
             Action::ChangeToLineEnd => {
@@ -2386,6 +2387,7 @@ mod tests {
         editor.handle_char('D');
         assert_eq!(editor.buffer.to_string(), "hello\n");
         assert_eq!(editor.vim_mode, Mode::Normal);
+        assert_eq!(editor.cursor_col, 4, "cursor should land on last content char (Normal mode)");
     }
 
     #[test]
