@@ -188,6 +188,7 @@ pub fn handle_normal(ch: char) -> Action {
         's' => Action::SubstituteChar,
         'J' => Action::JoinLine,
         '~' => Action::ToggleCase,
+        'V' => Action::EnterLinewiseVisual,
         _ => Action::None,
     }
 }

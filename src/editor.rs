@@ -296,6 +296,7 @@ impl Editor {
             self.selection_anchor = None;
         } else if self.vim_mode == Mode::Visual {
             self.selection_anchor = None;
+            self.selection_kind = SelectionKind::CharWise;
             self.vim_mode = Mode::Normal;
         } else if self.vim_mode == Mode::Insert {
             self.vim_mode = Mode::Normal;
@@ -424,18 +425,55 @@ impl Editor {
             }
             Action::EnterVisual => {
                 self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Visual;
             }
             Action::Yank => {
-                if let Some(text) = self.selected_text() {
+                if self.selection_kind == SelectionKind::LineWise {
+                    if let Some((sl, _, el, _)) = self.selection_range() {
+                        let start_idx = self.buffer.line_to_char(sl);
+                        let end_idx = if el + 1 < self.buffer.len_lines() {
+                            self.buffer.line_to_char(el + 1)
+                        } else {
+                            self.buffer.len_chars()
+                        };
+                        let text = self.buffer.slice_to_string(start_idx, end_idx);
+                        clipboard::write_osc52(&text);
+                        self.yank_register = Some(text);
+                    }
+                } else if let Some(text) = self.selected_text() {
                     clipboard::write_osc52(&text);
                     self.yank_register = Some(text);
                 }
                 self.selection_anchor = None;
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Normal;
             }
             Action::DeleteSelection => {
-                if let Some((sl, sc, el, ec)) = self.selection_range() {
+                if self.selection_kind == SelectionKind::LineWise {
+                    if let Some((sl, _, el, _)) = self.selection_range() {
+                        let start_idx = self.buffer.line_to_char(sl);
+                        let end_idx = if el + 1 < self.buffer.len_lines() {
+                            self.buffer.line_to_char(el + 1)
+                        } else {
+                            self.buffer.len_chars()
+                        };
+                        let text = self.buffer.slice_to_string(start_idx, end_idx);
+                        clipboard::write_osc52(&text);
+                        self.undo_history.commit_group();
+                        self.undo_history.record_delete(start_idx, &text);
+                        self.yank_register = Some(text);
+                        self.undo_history.commit_group();
+                        self.buffer.remove(start_idx, end_idx);
+                        self.dirty = true;
+                        self.cursor_line = sl;
+                        self.cursor_col = 0;
+                        if self.cursor_line >= self.buffer.len_lines() {
+                            self.cursor_line = self.buffer.len_lines().saturating_sub(1);
+                        }
+                        self.clamp_cursor_col();
+                    }
+                } else if let Some((sl, sc, el, ec)) = self.selection_range() {
                     if let Some(text) = self.selected_text() {
                         clipboard::write_osc52(&text);
                         self.yank_register = Some(text);
@@ -453,6 +491,7 @@ impl Editor {
                     self.clamp_cursor_col();
                 }
                 self.selection_anchor = None;
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Normal;
             }
             Action::PasteAfter => {
@@ -837,9 +876,13 @@ impl Editor {
                     self.cursor_col += 1;
                 }
             }
+            Action::EnterLinewiseVisual => {
+                self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.selection_kind = SelectionKind::LineWise;
+                self.vim_mode = Mode::Visual;
+            }
             // Wired up in later tasks.
-            Action::EnterLinewiseVisual
-            | Action::Repeat
+            Action::Repeat
             | Action::Counted { .. } => {}
             Action::None => {}
         }
@@ -1247,10 +1290,16 @@ impl Editor {
     pub fn selection_range(&self) -> Option<(usize, usize, usize, usize)> {
         let (anchor_line, anchor_col) = self.selection_anchor?;
         let (cl, cc) = (self.cursor_line, self.cursor_col);
-        if (anchor_line, anchor_col) <= (cl, cc) {
-            Some((anchor_line, anchor_col, cl, cc))
+        let (sl, sc, el, ec) = if (anchor_line, anchor_col) <= (cl, cc) {
+            (anchor_line, anchor_col, cl, cc)
         } else {
-            Some((cl, cc, anchor_line, anchor_col))
+            (cl, cc, anchor_line, anchor_col)
+        };
+        if self.selection_kind == SelectionKind::LineWise {
+            let end_content_len = self.line_content_len(el);
+            Some((sl, 0, el, end_content_len.saturating_sub(1)))
+        } else {
+            Some((sl, sc, el, ec))
         }
     }
 
@@ -2565,5 +2614,51 @@ mod tests {
         editor.handle_char('~');
         assert_eq!(editor.buffer.to_string(), "Hello\n");
         assert_eq!(editor.cursor_col, 1);
+    }
+
+    // === V (linewise visual) ===
+
+    #[test]
+    fn big_v_enters_visual_with_linewise_kind() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 3;
+        editor.handle_char('V');
+        assert_eq!(editor.vim_mode, Mode::Visual);
+        assert_eq!(editor.selection_kind, SelectionKind::LineWise);
+        assert_eq!(editor.selection_anchor, Some((0, 3)));
+    }
+
+    #[test]
+    fn v_resets_selection_kind_to_charwise() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.handle_char('V');
+        editor.handle_escape();
+        editor.handle_char('v');
+        assert_eq!(editor.selection_kind, SelectionKind::CharWise);
+    }
+
+    #[test]
+    fn linewise_visual_d_deletes_whole_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 2;
+        editor.handle_char('V');
+        editor.handle_char('j'); // extend to line 1
+        editor.handle_char('d');
+        assert_eq!(editor.buffer.to_string(), "third\n");
+    }
+
+    #[test]
+    fn linewise_visual_y_yanks_whole_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        editor.cursor_line = 0;
+        editor.handle_char('V');
+        editor.handle_char('j');
+        editor.handle_char('y');
+        assert_eq!(editor.yank_register, Some("first\nsecond\n".to_string()));
     }
 }
