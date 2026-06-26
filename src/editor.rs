@@ -740,12 +740,105 @@ impl Editor {
                 }
                 self.vim_mode = Mode::Insert;
             }
+            Action::YankLine => {
+                let line_start = self.line_start_char_index();
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                if line_len > 0 {
+                    let text = self.buffer.slice_to_string(line_start, line_start + line_len);
+                    clipboard::write_osc52(&text);
+                    self.yank_register = Some(text);
+                }
+            }
+            Action::ReplaceChar(c) => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
+                    let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(idx, &deleted);
+                    self.buffer.remove(idx, idx + 1);
+                    let s = c.to_string();
+                    self.undo_history.record_insert(idx, &s);
+                    self.buffer.insert(idx, &s);
+                    self.undo_history.commit_group();
+                    self.dirty = true;
+                }
+            }
+            Action::JoinLine => {
+                let total = self.buffer.len_lines();
+                // Exclude the phantom empty line that ropey adds after a terminal '\n'.
+                let effective_total = if total > 1
+                    && self.buffer.line(total - 1).len_chars() == 0
+                {
+                    total - 1
+                } else {
+                    total
+                };
+                if self.cursor_line + 1 >= effective_total {
+                    return;
+                }
+                let line_start = self.line_start_char_index();
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                if line_len == 0 {
+                    return;
+                }
+                // Index of the newline at the end of the current line.
+                let newline_idx = line_start + line_len - 1;
+                if self.buffer.char_at(newline_idx) != '\n' {
+                    return;
+                }
+                // Skip leading whitespace on the next line (but not its own newline).
+                let next_start = line_start + line_len;
+                let next_line = self.buffer.line(self.cursor_line + 1);
+                let mut skip = 0;
+                for ch in next_line.chars() {
+                    if ch.is_whitespace() && ch != '\n' {
+                        skip += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let remove_end = next_start + skip;
+                let deleted = self.buffer.slice_to_string(newline_idx, remove_end);
+                self.undo_history.commit_group();
+                self.undo_history.record_delete(newline_idx, &deleted);
+                self.buffer.remove(newline_idx, remove_end);
+                self.undo_history.record_insert(newline_idx, " ");
+                self.buffer.insert(newline_idx, " ");
+                self.undo_history.commit_group();
+                self.dirty = true;
+                // Land on the space just inserted — valid Normal mode position.
+                self.cursor_col = line_len - 1;
+            }
+            Action::ToggleCase => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col >= content_len {
+                    return;
+                }
+                let original = self.buffer.char_at(idx);
+                let toggled: String = if original.is_lowercase() {
+                    original.to_uppercase().collect()
+                } else if original.is_uppercase() {
+                    original.to_lowercase().collect()
+                } else {
+                    return;
+                };
+                let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                self.undo_history.commit_group();
+                self.undo_history.record_delete(idx, &deleted);
+                self.buffer.remove(idx, idx + 1);
+                self.undo_history.record_insert(idx, &toggled);
+                self.buffer.insert(idx, &toggled);
+                self.undo_history.commit_group();
+                self.dirty = true;
+                // Advance cursor, but don't land on the newline (Normal mode max = content_len - 1).
+                if self.cursor_col + 1 < content_len {
+                    self.cursor_col += 1;
+                }
+            }
             // Wired up in later tasks.
-            Action::YankLine
-            | Action::ReplaceChar(_)
-            | Action::JoinLine
-            | Action::ToggleCase
-            | Action::EnterLinewiseVisual
+            Action::EnterLinewiseVisual
             | Action::Repeat
             | Action::Counted { .. } => {}
             Action::None => {}
@@ -2420,5 +2513,57 @@ mod tests {
         assert_eq!(editor.buffer.to_string(), "hllo\n");
         assert_eq!(editor.cursor_col, 1);
         assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    // === yy r J ~ ===
+
+    #[test]
+    fn yy_yanks_full_line_with_newline() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.handle_char('y');
+        editor.handle_char('y');
+        assert_eq!(editor.yank_register, Some("hello\n".to_string()));
+        assert_eq!(editor.buffer.to_string(), "hello\nworld\n", "yy should not modify buffer");
+    }
+
+    #[test]
+    fn r_replaces_char_under_cursor_no_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 1;
+        editor.handle_char('r');
+        editor.handle_char('X');
+        assert_eq!(editor.buffer.to_string(), "hXllo\n");
+        assert_eq!(editor.vim_mode, Mode::Normal);
+    }
+
+    #[test]
+    fn j_joins_next_line_with_space() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.handle_char('J');
+        assert_eq!(editor.buffer.to_string(), "hello world\n");
+    }
+
+    #[test]
+    fn j_on_last_line_is_noop() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("only\n");
+        editor.cursor_line = 0;
+        editor.handle_char('J');
+        assert_eq!(editor.buffer.to_string(), "only\n");
+    }
+
+    #[test]
+    fn tilde_toggles_case_and_advances() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 0;
+        editor.handle_char('~');
+        assert_eq!(editor.buffer.to_string(), "Hello\n");
+        assert_eq!(editor.cursor_col, 1);
     }
 }

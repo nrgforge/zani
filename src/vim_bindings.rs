@@ -186,6 +186,8 @@ pub fn handle_normal(ch: char) -> Action {
         'C' => Action::ChangeToLineEnd,
         'S' => Action::SubstituteLine,
         's' => Action::SubstituteChar,
+        'J' => Action::JoinLine,
+        '~' => Action::ToggleCase,
         _ => Action::None,
     }
 }
@@ -226,6 +228,8 @@ pub fn handle_normal_with_pending(ch: char, pending: Option<char>) -> (Action, O
         return match (p, ch) {
             ('g', 'g') => (Action::GotoFirstLine, None),
             ('d', 'd') => (Action::DeleteLine, None),
+            ('y', 'y') => (Action::YankLine, None),
+            ('r', c) => (Action::ReplaceChar(c), None),
             ('f', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Forward }, None),
             ('F', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Backward }, None),
             ('t', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Forward }, None),
@@ -233,7 +237,7 @@ pub fn handle_normal_with_pending(ch: char, pending: Option<char>) -> (Action, O
             _ => (Action::None, None),
         };
     }
-    if matches!(ch, 'g' | 'd' | 'f' | 'F' | 't' | 'T' | 'r') {
+    if matches!(ch, 'g' | 'd' | 'f' | 'F' | 't' | 'T' | 'y' | 'r') {
         return (Action::None, Some(ch));
     }
     (handle_normal(ch), None)
