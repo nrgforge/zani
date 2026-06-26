@@ -69,6 +69,7 @@ pub struct App {
     /// Anchor (line, col) of the most recent mouse-down inside the surface.
     /// Cleared on Release.
     drag_anchor: Option<(usize, usize)>,
+    pub(crate) help: crate::help::HelpOverlay,
 }
 
 impl Default for App {
@@ -101,6 +102,7 @@ impl App {
             pending_quit_after_rename: false,
             last_click: None,
             drag_anchor: None,
+            help: crate::help::HelpOverlay::new(true),
         }
     }
 
@@ -129,6 +131,7 @@ impl App {
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
         app.editor.set_editing_mode(config.editing_mode);
+        app.help = crate::help::HelpOverlay::new(config.show_help_on_launch);
         if let Some(ref path) = file_path {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
@@ -424,6 +427,12 @@ impl App {
             return;
         }
 
+        // First-launch help overlay — swallow all keys; Esc/Enter dismiss
+        if self.help.visible {
+            self.handle_help_key(code);
+            return;
+        }
+
         // Settings Layer navigation — swallow all keys when open
         if self.settings.visible {
             self.handle_settings_key(code);
@@ -715,6 +724,14 @@ impl App {
         }
     }
 
+    /// Handle key input while the first-launch help overlay is visible.
+    /// Esc or Enter dismisses; everything else is swallowed.
+    fn handle_help_key(&mut self, code: KeyCode) {
+        if matches!(code, KeyCode::Esc | KeyCode::Enter) {
+            self.help.dismiss();
+        }
+    }
+
     /// Handle key input while the Settings Layer is open.
     fn handle_settings_key(&mut self, code: KeyCode) {
         // Route to palette browser when open
@@ -896,6 +913,7 @@ impl App {
 
     pub fn find_state(&self) -> Option<&FindState> { self.find_state.as_ref() }
     pub fn settings_visible(&self) -> bool { self.settings.visible }
+    pub fn help_visible(&self) -> bool { self.help.visible }
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
@@ -1012,6 +1030,7 @@ mod tests {
     #[test]
     fn escape_dismisses_settings() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
         assert!(!app.settings.visible);
@@ -1142,6 +1161,7 @@ mod tests {
     #[test]
     fn browser_esc_returns_to_settings() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
@@ -1155,6 +1175,7 @@ mod tests {
     #[test]
     fn browser_nav_applies_palette_with_crossfade() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply(); // open browser
@@ -1176,6 +1197,7 @@ mod tests {
     #[test]
     fn browser_enter_closes_and_saves() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
@@ -1189,6 +1211,7 @@ mod tests {
     #[test]
     fn browser_nav_routes_through_app() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply(); // open browser
@@ -2206,6 +2229,7 @@ mod tests {
         app.local_config_path = Some(local_path.clone());
 
         // Change focus mode via settings
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Paragraph));
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
@@ -2244,6 +2268,7 @@ mod tests {
         );
 
         // Change focus mode via settings — should NOT write to disk
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Paragraph));
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
@@ -2314,6 +2339,7 @@ mod tests {
         );
 
         // Navigate to Config row and press Enter
+        app.help.dismiss();
         app.toggle_settings();
         let config_pos = SettingsItem::all()
             .iter()
@@ -2342,6 +2368,7 @@ mod tests {
     #[test]
     fn star_jumps_to_next_occurrence_of_word_under_cursor() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0; // on 'f' of first "foo"
@@ -2352,6 +2379,7 @@ mod tests {
     #[test]
     fn n_repeats_existing_find_query() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 0;
@@ -2373,6 +2401,7 @@ mod tests {
     #[test]
     fn star_from_second_occurrence_advances_to_third() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 8; // second "foo"
@@ -2383,6 +2412,7 @@ mod tests {
     #[test]
     fn star_from_last_occurrence_wraps_to_first() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
         app.editor.cursor_line = 0;
         app.editor.cursor_col = 8; // last "foo"
@@ -2636,5 +2666,57 @@ mod tests {
         assert_eq!(app.editor.selection_anchor, Some((0, 0)));
         // "hello world" is 11 chars; end_col inclusive = 10.
         assert_eq!(app.editor.cursor_col, 10);
+    }
+
+    // === Help overlay ===
+
+    #[test]
+    fn app_new_has_help_visible() {
+        let app = App::new();
+        assert!(app.help.visible);
+    }
+
+    #[test]
+    fn from_config_with_help_disabled_starts_hidden() {
+        let mut config = Config::default();
+        config.show_help_on_launch = false;
+        let app = App::from_config(&config, ColorProfile::TrueColor, None);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn from_config_with_help_enabled_starts_visible() {
+        let mut config = Config::default();
+        config.show_help_on_launch = true;
+        let app = App::from_config(&config, ColorProfile::TrueColor, None);
+        assert!(app.help.visible);
+    }
+
+    #[test]
+    fn esc_dismisses_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn enter_dismisses_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn other_keys_swallowed_while_help_visible() {
+        let mut app = App::new();
+        app.editor.editing_mode = EditingMode::Standard;
+        app.editor.vim_mode = Mode::Insert;
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let before = app.editor.buffer.to_string();
+        app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(app.help.visible, "x should not dismiss help");
+        assert_eq!(app.editor.buffer.to_string(), before, "x should not reach editor");
     }
 }
