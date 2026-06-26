@@ -1404,6 +1404,40 @@ impl Editor {
         self.undo_history = UndoHistory::new();
         self.selection_anchor = None;
     }
+
+    /// Return the (start_col, end_col_inclusive) of the word at the given
+    /// position, using alphanumeric+`_` as word chars. Returns None if the
+    /// position is on whitespace.
+    pub fn word_range_at(&self, line: usize, col: usize) -> Option<(usize, usize)> {
+        if line >= self.buffer.len_lines() {
+            return None;
+        }
+        let line_slice = self.buffer.line(line);
+        let chars: Vec<char> = line_slice.chars().collect();
+        if col >= chars.len() {
+            return None;
+        }
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        if !is_word(chars[col]) {
+            return None;
+        }
+        let mut start = col;
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < chars.len() && is_word(chars[end + 1]) {
+            end += 1;
+        }
+        Some((start, end))
+    }
+
+    /// Return (start_col, end_col_inclusive) covering the entire line content
+    /// (excluding the trailing newline).
+    pub fn line_range_at(&self, line: usize) -> (usize, usize) {
+        let len = self.line_content_len(line);
+        (0, len.saturating_sub(1))
+    }
 }
 
 #[cfg(test)]

@@ -66,6 +66,9 @@ pub struct App {
     /// Quit after the rename completes (set when scratch quit → Rename).
     pending_quit_after_rename: bool,
     last_click: Option<crate::mouse::LastClick>,
+    /// Anchor (line, col) of the most recent mouse-down inside the surface.
+    /// Cleared on Release.
+    drag_anchor: Option<(usize, usize)>,
 }
 
 impl Default for App {
@@ -97,6 +100,7 @@ impl App {
             scratch_quit: ScratchQuitState::new(),
             pending_quit_after_rename: false,
             last_click: None,
+            drag_anchor: None,
         }
     }
 
@@ -278,23 +282,64 @@ impl App {
                 self.apply_scroll_delta(delta);
             }
             crate::mouse::MouseAction::ClickAt { row, col, click_count } => {
-                if click_count == 1 {
-                    if let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) {
-                        self.editor.cursor_line = line;
-                        self.editor.cursor_col = c;
-                        self.editor.selection_anchor = None;
-                        self.editor.selection_kind = crate::editor::SelectionKind::CharWise;
-                        if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
-                            && self.editor.vim_mode == crate::vim_bindings::Mode::Visual
-                        {
-                            self.editor.vim_mode = crate::vim_bindings::Mode::Normal;
-                        }
-                        self.needs_redraw = true;
-                    }
+                let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) else {
+                    self.drag_anchor = None;
+                    return;
+                };
+                self.editor.cursor_line = line;
+                self.editor.cursor_col = c;
+                self.editor.selection_anchor = None;
+                self.editor.selection_kind = crate::editor::SelectionKind::CharWise;
+                if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
+                    && self.editor.vim_mode == crate::vim_bindings::Mode::Visual
+                {
+                    self.editor.vim_mode = crate::vim_bindings::Mode::Normal;
                 }
-                // click_count 2 and 3 handled in Task 14.
+                self.drag_anchor = Some((line, c));
+                self.needs_redraw = true;
+
+                match click_count {
+                    2 => {
+                        if let Some((s, e)) = self.editor.word_range_at(line, c) {
+                            self.editor.selection_anchor = Some((line, s));
+                            self.editor.cursor_col = e;
+                            if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim {
+                                self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                            }
+                        }
+                    }
+                    3 => {
+                        let (s, e) = self.editor.line_range_at(line);
+                        self.editor.selection_anchor = Some((line, s));
+                        self.editor.cursor_col = e;
+                        if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim {
+                            self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                        }
+                    }
+                    _ => {}
+                }
             }
-            _ => {}
+            crate::mouse::MouseAction::DragTo { row, col } => {
+                let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) else {
+                    return;
+                };
+                if let Some(anchor) = self.drag_anchor {
+                    if self.editor.selection_anchor.is_none() {
+                        self.editor.selection_anchor = Some(anchor);
+                    }
+                    self.editor.cursor_line = line;
+                    self.editor.cursor_col = c;
+                    if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
+                        && self.editor.vim_mode != crate::vim_bindings::Mode::Visual
+                    {
+                        self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                    }
+                    self.needs_redraw = true;
+                }
+            }
+            crate::mouse::MouseAction::Release => {
+                self.drag_anchor = None;
+            }
         }
     }
 
@@ -2469,5 +2514,121 @@ mod tests {
         assert_eq!(app.editor.cursor_line, 0);
         // "hi\n" line content len is 2; clamped to 2.
         assert!(app.editor.cursor_col <= 2);
+    }
+
+    // === Drag and multi-click ===
+
+    #[test]
+    fn drag_extends_selection_from_anchor() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+
+        // Down at col 0
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        // Drag to col 5
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 5,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.selection_anchor, Some((0, 0)));
+        assert_eq!(app.editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn release_clears_drag_anchor() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        assert!(app.drag_anchor.is_some());
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        assert!(app.drag_anchor.is_none());
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        let now_col = surface_left + 7; // inside "world"
+
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                now_col,
+            ),
+            80,
+            24,
+        );
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                now_col,
+            ),
+            80,
+            24,
+        );
+        // "world" spans cols 6..=10.
+        assert_eq!(app.editor.selection_anchor, Some((0, 6)));
+        assert_eq!(app.editor.cursor_col, 10);
+    }
+
+    #[test]
+    fn triple_click_selects_line() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        let now_col = surface_left + 3;
+
+        for _ in 0..3 {
+            app.handle_mouse(
+                mouse_event(
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    0,
+                    now_col,
+                ),
+                80,
+                24,
+            );
+        }
+        assert_eq!(app.editor.selection_anchor, Some((0, 0)));
+        // "hello world" is 11 chars; end_col inclusive = 10.
+        assert_eq!(app.editor.cursor_col, 10);
     }
 }
