@@ -62,6 +62,11 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     // Render surface
     frame.render_widget(surface, surface_area);
 
+    // Bottom-left settings affordance (suppressed under any overlay)
+    if let Some(rect) = ctx.affordance_box {
+        draw_settings_affordance(frame, rect, &ctx.effective_palette);
+    }
+
     // Help overlay (first-launch discoverability hint; under fully-modal layers)
     if ctx.help_visible {
         draw_help_overlay(frame, &ctx.effective_palette, area);
@@ -306,6 +311,21 @@ fn draw_rename_overlay(
     frame.render_widget(paragraph, overlay_area);
 }
 
+/// Draw the dim bottom-left settings affordance at the position computed by App.
+fn draw_settings_affordance(
+    frame: &mut ratatui::Frame,
+    rect: crate::app::AffordanceRect,
+    palette: &Palette,
+) {
+    let area = Rect { x: rect.col, y: rect.row, width: rect.width, height: 1 };
+    let style = Style::default()
+        .fg(palette.dimmed_foreground)
+        .bg(palette.background);
+    let line = Line::from(Span::styled(crate::app::AffordanceRect::TEXT, style));
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
 /// Draw the first-launch help dialog: one centered line of text in a
 /// small bordered box.
 fn draw_help_overlay(frame: &mut ratatui::Frame, palette: &Palette, area: Rect) {
@@ -456,6 +476,8 @@ pub struct DrawContext<'a> {
     pub rename_cursor: usize,
     // Help overlay
     pub help_visible: bool,
+    // Bottom-left settings affordance
+    pub affordance_box: Option<crate::app::AffordanceRect>,
     // Scratch quit prompt
     pub scratch_quit_active: bool,
     pub scratch_quit_selected: u8,
@@ -514,6 +536,7 @@ impl<'a> DrawContext<'a> {
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string()),
             help_visible: app.help_visible(),
+            affordance_box: app.affordance_box(),
         }
     }
 }

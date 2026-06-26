@@ -30,6 +30,28 @@ pub struct TickOutput {
     pub sentence_bounds: Option<(usize, usize)>,
 }
 
+/// Bounding box for the bottom-left settings affordance, used for click hit-testing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffordanceRect {
+    pub row: u16,
+    pub col: u16,
+    pub width: u16,
+}
+
+impl AffordanceRect {
+    /// Affordance text — visible glyphs only.
+    pub const TEXT: &'static str = "⚙ Ctrl+P";
+    /// Affordance column width (number of cells the text occupies).
+    pub const WIDTH: u16 = 9;
+    /// One-cell left margin from terminal edge.
+    pub const COL_OFFSET: u16 = 1;
+
+    /// True if the screen position (row, col) is inside this affordance.
+    pub fn contains(&self, row: u16, col: u16) -> bool {
+        row == self.row && col >= self.col && col < self.col + self.width
+    }
+}
+
 /// Thin coordinator that owns subsystems and routes input between them.
 ///
 /// ## Coordinator invariant
@@ -70,6 +92,7 @@ pub struct App {
     /// Cleared on Release.
     drag_anchor: Option<(usize, usize)>,
     pub(crate) help: crate::help::HelpOverlay,
+    pub(crate) affordance_box: Option<AffordanceRect>,
 }
 
 impl Default for App {
@@ -103,6 +126,7 @@ impl App {
             last_click: None,
             drag_anchor: None,
             help: crate::help::HelpOverlay::new(true),
+            affordance_box: None,
         }
     }
 
@@ -819,6 +843,7 @@ impl App {
         // Clamp column width to available terminal width so text wraps
         // instead of clipping when the window is narrower than column_width.
         self.viewport.effective_column_width = self.viewport.column_width.min(surface_width);
+        self.affordance_box = self.compute_affordance_box(surface_width, surface_height);
         let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
         self.viewport.ensure_cursor_visible(
             self.editor.cursor_line,
@@ -915,6 +940,7 @@ impl App {
     pub fn find_state(&self) -> Option<&FindState> { self.find_state.as_ref() }
     pub fn settings_visible(&self) -> bool { self.settings.visible }
     pub fn help_visible(&self) -> bool { self.help.visible }
+    pub fn affordance_box(&self) -> Option<AffordanceRect> { self.affordance_box }
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
@@ -959,6 +985,32 @@ impl App {
         } else {
             self.palette
         }
+    }
+
+    /// Compute the affordance bounding box for the current frame.
+    /// Suppressed when any overlay is active or terminal is too narrow.
+    fn compute_affordance_box(&self, surface_width: u16, surface_height: u16) -> Option<AffordanceRect> {
+        // Suppress under any overlay.
+        if self.help.visible
+            || self.settings.visible
+            || self.palette_browser.open
+            || self.find_state.as_ref().is_some_and(|f| f.overlay_visible)
+            || self.rename.active
+            || self.scratch_quit.active
+            || self.external_change_pending
+        {
+            return None;
+        }
+        // Need at least column_width + width + 2 cols margin.
+        let needed = self.viewport.column_width + AffordanceRect::WIDTH + 2;
+        if surface_width < needed || surface_height == 0 {
+            return None;
+        }
+        Some(AffordanceRect {
+            row: surface_height - 1,
+            col: AffordanceRect::COL_OFFSET,
+            width: AffordanceRect::WIDTH,
+        })
     }
 }
 
@@ -2748,5 +2800,63 @@ mod tests {
         app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE);
         assert!(app.help.visible, "x should not dismiss help");
         assert_eq!(app.editor.buffer.to_string(), before, "x should not reach editor");
+    }
+
+    // === Affordance bounding box ===
+
+    #[test]
+    fn affordance_box_none_when_help_visible() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when help visible");
+    }
+
+    #[test]
+    fn affordance_box_present_after_help_dismissed() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_some(), "affordance should render after help dismissed");
+    }
+
+    #[test]
+    fn affordance_box_at_bottom_left() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        let r = app.affordance_box.unwrap();
+        assert_eq!(r.row, 23, "affordance on last row");
+        assert_eq!(r.col, AffordanceRect::COL_OFFSET);
+        assert_eq!(r.width, AffordanceRect::WIDTH);
+    }
+
+    #[test]
+    fn affordance_box_suppressed_when_settings_open() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.toggle_settings();
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when settings open");
+    }
+
+    #[test]
+    fn affordance_box_suppressed_when_terminal_too_narrow() {
+        let mut app = App::new();
+        app.help.dismiss();
+        // column_width default is 60; need 60 + 9 + 2 = 71. 70 is too narrow.
+        let _ = app.tick(70, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when no margin space");
+    }
+
+    #[test]
+    fn affordance_rect_contains_inside_point() {
+        let r = AffordanceRect { row: 23, col: 1, width: 9 };
+        assert!(r.contains(23, 1));
+        assert!(r.contains(23, 5));
+        assert!(r.contains(23, 9));
+        assert!(!r.contains(23, 10), "exclusive at right edge");
+        assert!(!r.contains(22, 5), "different row not contained");
+        assert!(!r.contains(23, 0), "left of col not contained");
     }
 }
