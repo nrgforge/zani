@@ -65,6 +65,7 @@ pub struct App {
     scratch_quit: ScratchQuitState,
     /// Quit after the rename completes (set when scratch quit → Rename).
     pending_quit_after_rename: bool,
+    last_click: Option<crate::mouse::LastClick>,
 }
 
 impl Default for App {
@@ -95,6 +96,7 @@ impl App {
             external_change_pending: false,
             scratch_quit: ScratchQuitState::new(),
             pending_quit_after_rename: false,
+            last_click: None,
         }
     }
 
@@ -249,6 +251,46 @@ impl App {
             ConfigSource::Global | ConfigSource::Default => {
                 let _ = self.current_config().save();
             }
+        }
+    }
+
+    /// Handle a mouse event. Surface dimensions are passed in the same way
+    /// `tick` receives them — `App` does not cache them.
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent, _surface_width: u16, _surface_height: u16) {
+        // Swallow when any overlay is active.
+        if self.external_change_pending
+            || self.scratch_quit.active
+            || self.find_state.as_ref().is_some_and(|f| f.overlay_visible)
+            || self.rename.active
+            || self.settings.visible
+        {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let (action, new_last) = crate::mouse::translate(event, self.last_click, now);
+        self.last_click = new_last;
+        let Some(action) = action else { return };
+
+        self.needs_redraw = true;
+        match action {
+            crate::mouse::MouseAction::ScrollLines(delta) => {
+                self.apply_scroll_delta(delta);
+            }
+            // Click/Drag/Release implemented in later tasks.
+            _ => {}
+        }
+    }
+
+    /// Move the cursor by `delta` visual lines. ensure_cursor_visible
+    /// (called in tick) handles viewport adjustment.
+    fn apply_scroll_delta(&mut self, delta: i16) {
+        use crate::vim_bindings::Direction;
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+        let dir = if delta < 0 { Direction::Up } else { Direction::Down };
+        let steps = delta.unsigned_abs() as usize;
+        for _ in 0..steps {
+            self.editor.move_cursor_visual(dir, &visual_lines);
         }
     }
 
@@ -2270,5 +2312,59 @@ mod tests {
         assert_eq!(app.editor.buffer.to_string(), "hello\n");
         app.handle_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(app.editor.buffer.to_string(), "hello!\n");
+    }
+
+    // === Mouse scroll ===
+
+    fn mouse_event(kind: crossterm::event::MouseEventKind, row: u16, col: u16) -> crossterm::event::MouseEvent {
+        crossterm::event::MouseEvent {
+            kind,
+            row,
+            column: col,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn scroll_down_moves_cursor_down_three_visual_lines() {
+        let mut app = App::new();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.editor.cursor_line = 0;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollDown, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 3);
+    }
+
+    #[test]
+    fn scroll_up_moves_cursor_up_three_visual_lines() {
+        let mut app = App::new();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.editor.cursor_line = 10;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollUp, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 7);
+    }
+
+    #[test]
+    fn scroll_swallowed_when_settings_open() {
+        let mut app = App::new();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.toggle_settings();
+        app.editor.cursor_line = 5;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollDown, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 5, "scroll should not move cursor when Settings open");
     }
 }
