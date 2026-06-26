@@ -277,6 +277,8 @@ impl Editor {
 
     /// Process Escape key.
     pub fn handle_escape(&mut self) {
+        self.pending_count = None;
+        self.pending_normal_key = None;
         if self.editing_mode == EditingMode::Standard {
             // In Standard mode, Escape just clears selection
             self.selection_anchor = None;
@@ -1935,5 +1937,28 @@ mod tests {
             editor.handle_char('9');
         }
         assert_eq!(editor.pending_count, Some(9999));
+    }
+
+    #[test]
+    fn escape_clears_pending_count() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\n");
+        editor.cursor_line = 0;
+        editor.handle_char('5');
+        assert_eq!(editor.pending_count, Some(5));
+        editor.handle_escape();
+        assert_eq!(editor.pending_count, None);
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 1, "should move 1 line, not 5, after Escape cleared the count");
+    }
+
+    #[test]
+    fn escape_clears_pending_normal_key() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\n");
+        editor.handle_char('g'); // pending gg
+        assert_eq!(editor.pending_normal_key, Some('g'));
+        editor.handle_escape();
+        assert_eq!(editor.pending_normal_key, None);
     }
 }
