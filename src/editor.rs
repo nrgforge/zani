@@ -2661,4 +2661,17 @@ mod tests {
         editor.handle_char('y');
         assert_eq!(editor.yank_register, Some("first\nsecond\n".to_string()));
     }
+
+    #[test]
+    fn u_in_normal_undoes() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.vim_mode = Mode::Insert;
+        editor.cursor_col = 5;
+        editor.handle_char('!');
+        editor.undo_history.commit_group();
+        editor.handle_escape();
+        editor.handle_char('u');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+    }
 }

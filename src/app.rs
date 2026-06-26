@@ -405,6 +405,9 @@ impl App {
             KeyCode::Char('y') => {
                 self.editor.apply_action(Action::Redo);
             }
+            KeyCode::Char('r') => {
+                self.editor.apply_action(Action::Redo);
+            }
             _ => {}
         }
     }
@@ -2253,5 +2256,19 @@ mod tests {
         app.editor.cursor_col = 8; // last "foo"
         app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
         assert_eq!(app.editor.cursor_col, 0, "* from last 'foo' should wrap to first at col 0");
+    }
+
+    #[test]
+    fn ctrl_r_redoes() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        app.editor.vim_mode = Mode::Insert;
+        app.editor.cursor_col = 5;
+        app.editor.handle_char('!');
+        app.editor.undo_history.commit_group();
+        app.editor.apply_action(Action::Undo);
+        assert_eq!(app.editor.buffer.to_string(), "hello\n");
+        app.handle_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(app.editor.buffer.to_string(), "hello!\n");
     }
 }
