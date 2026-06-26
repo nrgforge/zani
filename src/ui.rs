@@ -390,6 +390,7 @@ pub struct SettingsViewModel {
     pub rename_cursor: usize,
     pub config_source: crate::config::ConfigSource,
     pub is_scratch: bool,
+    pub show_help_on_launch: bool,
 }
 
 impl SettingsViewModel {
@@ -420,6 +421,7 @@ impl SettingsViewModel {
             rename_cursor: app.rename.cursor,
             config_source: app.config_source,
             is_scratch: app.persistence.is_scratch,
+            show_help_on_launch: app.show_help_on_launch(),
         }
     }
 }
@@ -583,7 +585,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         }
 
         let text = match item {
-            SettingsItem::ShowHelpOnLaunch => "  Show help on launch".to_string(),
+            SettingsItem::ShowHelpOnLaunch => "  Show help on launch  ".to_string(),
             SettingsItem::EditingMode(mode) => {
                 let label = match mode {
                     EditingMode::Vim => "Vim",
@@ -774,6 +776,35 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
                 spans.push(Span::styled(cursor_ch, rename_cursor_style));
                 spans.push(Span::styled(after, normal_style));
 
+                return Line::from(spans);
+            }
+
+            // ShowHelpOnLaunch row: render [On] [Off] with accent/dim styling.
+            let is_help_toggle_row = row.cursor_index
+                .and_then(SettingsItem::at)
+                .is_some_and(|item| item == SettingsItem::ShowHelpOnLaunch);
+            if is_help_toggle_row {
+                let row_style = if row.cursor_index == Some(vm.settings_cursor) {
+                    cursor_style
+                } else {
+                    normal_style
+                };
+                let on_style = if vm.show_help_on_launch {
+                    Style::default().fg(effective_accent).bg(preview_palette.background)
+                } else {
+                    Style::default().fg(effective_dim).bg(preview_palette.background)
+                };
+                let off_style = if !vm.show_help_on_launch {
+                    Style::default().fg(effective_accent).bg(preview_palette.background)
+                } else {
+                    Style::default().fg(effective_dim).bg(preview_palette.background)
+                };
+                let spans = vec![
+                    Span::styled(row.text.clone(), row_style),
+                    Span::styled("[On]", on_style),
+                    Span::styled(" ", row_style),
+                    Span::styled("[Off]", off_style),
+                ];
                 return Line::from(spans);
             }
 

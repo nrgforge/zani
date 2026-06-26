@@ -93,6 +93,7 @@ pub struct App {
     drag_anchor: Option<(usize, usize)>,
     pub(crate) help: crate::help::HelpOverlay,
     pub(crate) affordance_box: Option<AffordanceRect>,
+    pub(crate) show_help_on_launch: bool,
 }
 
 impl Default for App {
@@ -127,6 +128,7 @@ impl App {
             drag_anchor: None,
             help: crate::help::HelpOverlay::new(true),
             affordance_box: None,
+            show_help_on_launch: true,
         }
     }
 
@@ -155,6 +157,7 @@ impl App {
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
         app.editor.set_editing_mode(config.editing_mode);
+        app.show_help_on_launch = config.show_help_on_launch;
         app.help = crate::help::HelpOverlay::new(config.show_help_on_launch);
         if let Some(ref path) = file_path {
             match std::fs::read_to_string(path) {
@@ -200,7 +203,9 @@ impl App {
             return;
         };
         match item {
-            SettingsItem::ShowHelpOnLaunch => {} // toggled elsewhere; Enter is a no-op here
+            SettingsItem::ShowHelpOnLaunch => {
+                self.show_help_on_launch = !self.show_help_on_launch;
+            }
             SettingsItem::EditingMode(mode) => {
                 self.editor.set_editing_mode(mode);
             }
@@ -255,7 +260,7 @@ impl App {
             column_width: self.viewport.column_width,
             editing_mode: self.editor.editing_mode,
             scroll_mode: self.viewport.scroll_mode,
-            show_help_on_launch: true,
+            show_help_on_launch: self.show_help_on_launch,
         }
     }
 
@@ -783,15 +788,29 @@ impl App {
                 self.save_config();
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.viewport.adjust_column_width(-1);
-                    self.save_config();
+                match SettingsItem::at(self.settings.cursor) {
+                    Some(SettingsItem::ColumnWidth) => {
+                        self.viewport.adjust_column_width(-1);
+                        self.save_config();
+                    }
+                    Some(SettingsItem::ShowHelpOnLaunch) => {
+                        self.show_help_on_launch = false;
+                        self.save_config();
+                    }
+                    _ => {}
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.viewport.adjust_column_width(1);
-                    self.save_config();
+                match SettingsItem::at(self.settings.cursor) {
+                    Some(SettingsItem::ColumnWidth) => {
+                        self.viewport.adjust_column_width(1);
+                        self.save_config();
+                    }
+                    Some(SettingsItem::ShowHelpOnLaunch) => {
+                        self.show_help_on_launch = true;
+                        self.save_config();
+                    }
+                    _ => {}
                 }
             }
             _ => {} // swallow all other keys
@@ -950,6 +969,7 @@ impl App {
     pub fn settings_visible(&self) -> bool { self.settings.visible }
     pub fn help_visible(&self) -> bool { self.help.visible }
     pub fn affordance_box(&self) -> Option<AffordanceRect> { self.affordance_box }
+    pub fn show_help_on_launch(&self) -> bool { self.show_help_on_launch }
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
@@ -2928,5 +2948,57 @@ mod tests {
             24,
         );
         assert_eq!(app.editor.cursor_col, starting_col, "cursor should not move on affordance click");
+    }
+
+    // === show_help_on_launch toggle ===
+
+    #[test]
+    fn settings_apply_show_help_on_launch_toggles() {
+        let mut app = App::new();
+        assert!(app.show_help_on_launch);
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.settings_apply();
+        assert!(!app.show_help_on_launch);
+        app.settings_apply();
+        assert!(app.show_help_on_launch);
+    }
+
+    #[test]
+    fn settings_left_sets_show_help_off() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE);
+        assert!(!app.show_help_on_launch);
+    }
+
+    #[test]
+    fn settings_right_sets_show_help_on() {
+        let mut app = App::new();
+        app.show_help_on_launch = false;
+        app.help.dismiss();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE);
+        assert!(app.show_help_on_launch);
+    }
+
+    #[test]
+    fn current_config_reflects_show_help_on_launch() {
+        let mut app = App::new();
+        app.show_help_on_launch = false;
+        let config = app.current_config();
+        assert!(!config.show_help_on_launch);
+    }
+
+    #[test]
+    fn toggling_off_does_not_dismiss_current_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.settings_apply();
+        assert!(!app.show_help_on_launch);
+        assert!(app.help.visible, "current session help should stay visible after toggle");
     }
 }
