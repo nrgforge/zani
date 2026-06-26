@@ -176,6 +176,8 @@ pub fn handle_normal(ch: char) -> Action {
         '}' => Action::ParagraphForward,
         '(' => Action::SentenceBackward,
         ')' => Action::SentenceForward,
+        ';' => Action::RepeatFind,
+        ',' => Action::RepeatFindReversed,
         _ => Action::None,
     }
 }
@@ -200,6 +202,8 @@ pub fn handle_visual(ch: char) -> Action {
         '}' => Action::ParagraphForward,
         '(' => Action::SentenceBackward,
         ')' => Action::SentenceForward,
+        ';' => Action::RepeatFind,
+        ',' => Action::RepeatFindReversed,
         _ => Action::None,
     }
 }
@@ -208,31 +212,39 @@ pub fn handle_visual(ch: char) -> Action {
 /// Returns the action to perform and the new pending key (if any).
 pub fn handle_normal_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
     if let Some(p) = pending {
-        match (p, ch) {
+        return match (p, ch) {
             ('g', 'g') => (Action::GotoFirstLine, None),
             ('d', 'd') => (Action::DeleteLine, None),
+            ('f', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Forward }, None),
+            ('F', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Backward }, None),
+            ('t', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Forward }, None),
+            ('T', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Backward }, None),
             _ => (Action::None, None),
-        }
-    } else if ch == 'g' || ch == 'd' {
-        (Action::None, Some(ch))
-    } else {
-        (handle_normal(ch), None)
+        };
     }
+    if matches!(ch, 'g' | 'd' | 'f' | 'F' | 't' | 'T' | 'r') {
+        return (Action::None, Some(ch));
+    }
+    (handle_normal(ch), None)
 }
 
 /// Process a Visual mode key with optional pending multi-key state.
 /// Returns the action to perform and the new pending key (if any).
 pub fn handle_visual_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
     if let Some(p) = pending {
-        match (p, ch) {
+        return match (p, ch) {
             ('g', 'g') => (Action::GotoFirstLine, None),
+            ('f', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Forward }, None),
+            ('F', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Backward }, None),
+            ('t', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Forward }, None),
+            ('T', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Backward }, None),
             _ => (Action::None, None),
-        }
-    } else if ch == 'g' {
-        (Action::None, Some(ch))
-    } else {
-        (handle_visual(ch), None)
+        };
     }
+    if matches!(ch, 'g' | 'f' | 'F' | 't' | 'T') {
+        return (Action::None, Some(ch));
+    }
+    (handle_visual(ch), None)
 }
 
 /// Process a key event in Insert mode.

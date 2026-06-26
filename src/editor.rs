@@ -634,11 +634,26 @@ impl Editor {
                 };
                 self.set_cursor_from_char_index(target);
             }
+            Action::FindChar { ch, kind, dir } => {
+                self.execute_find_char(ch, kind, dir);
+                self.last_find = Some(LastFind { ch, kind, dir });
+            }
+            Action::RepeatFind => {
+                if let Some(lf) = self.last_find {
+                    self.execute_find_char(lf.ch, lf.kind, lf.dir);
+                }
+            }
+            Action::RepeatFindReversed => {
+                if let Some(lf) = self.last_find {
+                    let reversed = match lf.dir {
+                        crate::vim_bindings::FindDir::Forward => crate::vim_bindings::FindDir::Backward,
+                        crate::vim_bindings::FindDir::Backward => crate::vim_bindings::FindDir::Forward,
+                    };
+                    self.execute_find_char(lf.ch, lf.kind, reversed);
+                }
+            }
             // Wired up in later tasks.
-            Action::FindChar { .. }
-            | Action::RepeatFind
-            | Action::RepeatFindReversed
-            | Action::NextMatch
+            Action::NextMatch
             | Action::PrevMatch
             | Action::SearchWordUnderCursor
             | Action::InsertAtLineStart
@@ -856,6 +871,62 @@ impl Editor {
         }
 
         self.set_cursor_from_char_index(idx.min(len.saturating_sub(1)));
+    }
+
+    /// Find a character on the current line and place the cursor accordingly.
+    fn execute_find_char(
+        &mut self,
+        ch: char,
+        kind: crate::vim_bindings::FindKind,
+        dir: crate::vim_bindings::FindDir,
+    ) {
+        use crate::vim_bindings::{FindDir, FindKind};
+        let line = self.buffer.line(self.cursor_line);
+        let chars: Vec<char> = line.chars().collect();
+        let content_len = self.line_content_len(self.cursor_line);
+        let start_col = self.cursor_col;
+
+        let target_col: Option<usize> = match dir {
+            FindDir::Forward => {
+                let mut i = start_col + 1;
+                let mut found = None;
+                while i < content_len {
+                    if chars.get(i) == Some(&ch) {
+                        found = Some(i);
+                        break;
+                    }
+                    i += 1;
+                }
+                found
+            }
+            FindDir::Backward => {
+                if start_col == 0 {
+                    None
+                } else {
+                    let mut i = start_col;
+                    let mut found = None;
+                    loop {
+                        i -= 1;
+                        if chars.get(i) == Some(&ch) {
+                            found = Some(i);
+                            break;
+                        }
+                        if i == 0 {
+                            break;
+                        }
+                    }
+                    found
+                }
+            }
+        };
+
+        if let Some(col) = target_col {
+            self.cursor_col = match (kind, dir) {
+                (FindKind::Find, _) => col,
+                (FindKind::Till, FindDir::Forward) => col.saturating_sub(1),
+                (FindKind::Till, FindDir::Backward) => (col + 1).min(content_len),
+            };
+        }
     }
 
     /// Set cursor position from an absolute char index in the buffer.
@@ -2091,5 +2162,99 @@ mod tests {
         editor.handle_char('(');
         // Should land back at start of "Second" (col 16) or start of "First" (col 0).
         assert!(editor.cursor_col < 20);
+    }
+
+    // === Find-char tests ===
+
+    #[test]
+    fn f_finds_char_forward_on_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 6);
+        assert!(editor.last_find.is_some());
+    }
+
+    #[test]
+    fn t_lands_one_before_char() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 0;
+        editor.handle_char('t');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn big_f_finds_backward() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 10;
+        editor.handle_char('F');
+        editor.handle_char('h');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn big_t_lands_one_after_char_backward() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 10;
+        editor.handle_char('T');
+        editor.handle_char('h');
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn f_with_no_match_does_not_move() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('z');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn semicolon_repeats_last_find() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a.b.c.d\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('.');
+        assert_eq!(editor.cursor_col, 1);
+        editor.handle_char(';');
+        assert_eq!(editor.cursor_col, 3);
+        editor.handle_char(';');
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn comma_repeats_last_find_reversed() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a.b.c.d\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('.');
+        editor.handle_char(';');
+        editor.handle_char(';'); // now at col 5
+        assert_eq!(editor.cursor_col, 5);
+        editor.handle_char(',');
+        assert_eq!(editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn find_does_not_cross_line_boundary() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('w');
+        // No 'w' on line 0; should not move.
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.cursor_line, 0);
     }
 }
