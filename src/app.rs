@@ -227,6 +227,7 @@ impl App {
             column_width: self.viewport.column_width,
             editing_mode: self.editor.editing_mode,
             scroll_mode: self.viewport.scroll_mode,
+            show_help_on_launch: true,
         }
     }
 
@@ -1981,6 +1982,7 @@ mod tests {
             column_width: 80,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Edge,
+            show_help_on_launch: true,
         };
         let app = App::from_config(&config, ColorProfile::TrueColor, None);
         assert_eq!(app.palette.name, "Sitka");
@@ -1999,6 +2001,7 @@ mod tests {
             column_width: 72,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Typewriter,
+            show_help_on_launch: true,
         };
         let app = App::from_config(&original, ColorProfile::TrueColor, None);
         let recovered = Config {
@@ -2007,6 +2010,7 @@ mod tests {
             column_width: app.column_width(),
             editing_mode: app.editing_mode(),
             scroll_mode: app.scroll_mode(),
+            show_help_on_launch: true,
         };
         assert_eq!(recovered, original);
     }
