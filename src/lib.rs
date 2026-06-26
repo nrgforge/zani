@@ -11,6 +11,7 @@ pub mod editor;
 pub mod find;
 pub mod focus_mode;
 pub mod markdown_styling;
+pub mod mouse;
 pub mod palette;
 pub mod palette_browser;
 pub mod persistence;
