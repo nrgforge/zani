@@ -476,6 +476,12 @@ impl App {
             find.query = q;
             find.cursor = find.query.chars().count();
             find.search(&self.editor.buffer);
+            // Seed current_match to the match at/before cursor so next_match()
+            // skips past the cursor's current position (vim's * and n semantics).
+            find.current_match = find.matches.iter().rposition(|&(ml, mc)| {
+                ml < self.editor.cursor_line
+                    || (ml == self.editor.cursor_line && mc <= self.editor.cursor_col)
+            }).unwrap_or(find.matches.len().saturating_sub(1));
         }
 
         match req {
@@ -2227,5 +2233,25 @@ mod tests {
         let before = app.editor.cursor_col;
         app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
         assert_ne!(app.editor.cursor_col, before, "n should move to next match");
+    }
+
+    #[test]
+    fn star_from_second_occurrence_advances_to_third() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 8; // second "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 16, "* from second 'foo' should jump to third 'foo' at col 16");
+    }
+
+    #[test]
+    fn star_from_last_occurrence_wraps_to_first() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 8; // last "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 0, "* from last 'foo' should wrap to first at col 0");
     }
 }
