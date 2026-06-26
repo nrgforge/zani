@@ -200,7 +200,6 @@ impl Editor {
             if ch.is_control() {
                 return false;
             }
-            // Selection replaces on type
             if self.selection_anchor.is_some() {
                 self.delete_selection_silent();
                 self.selection_anchor = None;
@@ -209,9 +208,23 @@ impl Editor {
             return false;
         }
 
+        // Count parsing (Normal/Visual only, not Insert).
+        // '1'-'9' starts a count; '0' appends only when a count is already in progress
+        // (else it's LineStart). Counts cap at 9999.
+        if matches!(self.vim_mode, Mode::Normal | Mode::Visual)
+            && self.pending_normal_key.is_none()
+        {
+            if ch.is_ascii_digit() && (ch != '0' || self.pending_count.is_some()) {
+                let digit = (ch as u32) - ('0' as u32);
+                let next = self.pending_count.unwrap_or(0).saturating_mul(10).saturating_add(digit);
+                self.pending_count = Some(next.min(9999));
+                return false;
+            }
+        }
+
         let action = match self.vim_mode {
             Mode::Normal => {
-                if ch == 'q' {
+                if ch == 'q' && self.pending_count.is_none() {
                     return true;
                 }
                 let pending = self.pending_normal_key.take();
@@ -228,8 +241,38 @@ impl Editor {
             Mode::Insert => vim_bindings::handle_insert(ch),
         };
 
-        self.apply_action(action);
+        // If a pending key was just set (e.g. the first 'd' of 'dd'), the
+        // sequence is incomplete. Hold the count for the completing keystroke.
+        if self.pending_normal_key.is_some() {
+            return false;
+        }
+
+        // Apply count if one was accumulated and the action is countable.
+        let count = self.pending_count.take().unwrap_or(1);
+        if count > 1 && Self::is_countable(&action) {
+            for _ in 0..count {
+                self.apply_action(action.clone());
+            }
+        } else {
+            self.apply_action(action);
+        }
+
         false
+    }
+
+    /// Whether an action is safe to repeat under a count multiplier.
+    /// Pure motions and `dd`/`x` are countable; mode switches and pending-key
+    /// holders (Action::None) are not.
+    fn is_countable(action: &Action) -> bool {
+        matches!(action,
+            Action::MoveCursor(_)
+                | Action::WordForward | Action::WordBackward | Action::WordEnd
+                | Action::ParagraphForward | Action::ParagraphBackward
+                | Action::SentenceForward | Action::SentenceBackward
+                | Action::DeleteChar | Action::DeleteLine
+                | Action::RepeatFind | Action::RepeatFindReversed
+                | Action::NextMatch | Action::PrevMatch
+        )
     }
 
     /// Process Escape key.
@@ -1827,5 +1870,70 @@ mod tests {
         editor.set_editing_mode(EditingMode::Vim);
         assert_eq!(editor.editing_mode, EditingMode::Vim);
         assert_eq!(editor.vim_mode, Mode::Normal);
+    }
+
+    // === Count tests ===
+
+    #[test]
+    fn count_5j_moves_down_5_visual_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\nf\n");
+        editor.cursor_line = 0;
+        editor.handle_char('5');
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 5);
+        assert_eq!(editor.pending_count, None, "count should clear after dispatch");
+    }
+
+    #[test]
+    fn count_3w_advances_three_words() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("one two three four five\n");
+        editor.cursor_col = 0;
+        editor.handle_char('3');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 14); // "four"
+    }
+
+    #[test]
+    fn count_3dd_deletes_three_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\n");
+        editor.cursor_line = 0;
+        editor.handle_char('3');
+        editor.handle_char('d');
+        editor.handle_char('d');
+        assert_eq!(editor.buffer.to_string(), "d\ne\n");
+    }
+
+    #[test]
+    fn count_with_leading_zero_appends() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text((0..15).map(|_| "x\n").collect::<String>().as_str());
+        editor.cursor_line = 0;
+        editor.handle_char('1');
+        editor.handle_char('0');
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 10);
+    }
+
+    #[test]
+    fn zero_alone_still_goes_to_line_start() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('0');
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.pending_count, None);
+    }
+
+    #[test]
+    fn count_clamps_at_9999() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\n");
+        for _ in 0..6 {
+            editor.handle_char('9');
+        }
+        assert_eq!(editor.pending_count, Some(9999));
     }
 }

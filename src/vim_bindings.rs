@@ -384,4 +384,20 @@ mod tests {
         assert_eq!(action, Action::GotoFirstLine, "visual gg should produce GotoFirstLine");
         assert_eq!(pending, None, "pending should be cleared after visual gg");
     }
+
+    // === Count tests ===
+
+    #[test]
+    fn count_accumulates_digits() {
+        // Counts live in Editor, not in pure key→action mapping.
+        // This test is a placeholder marker; real tests live in editor.rs.
+        let _ = handle_normal_with_pending('5', None);
+    }
+
+    #[test]
+    fn zero_alone_is_line_start() {
+        let (action, pending) = handle_normal_with_pending('0', None);
+        assert_eq!(action, Action::LineStart);
+        assert_eq!(pending, None);
+    }
 }
