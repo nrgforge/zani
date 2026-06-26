@@ -62,6 +62,11 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     // Render surface
     frame.render_widget(surface, surface_area);
 
+    // Help overlay (first-launch discoverability hint; under fully-modal layers)
+    if ctx.help_visible {
+        draw_help_overlay(frame, &ctx.effective_palette, area);
+    }
+
     // Settings Layer overlay (Invariant 1: only visible when summoned)
     if let Some(ref vm) = ctx.settings_vm {
         draw_settings_layer(frame, vm, ctx.base_palette, area);
@@ -301,6 +306,51 @@ fn draw_rename_overlay(
     frame.render_widget(paragraph, overlay_area);
 }
 
+/// Draw the first-launch help dialog: one centered line of text in a
+/// small bordered box.
+fn draw_help_overlay(frame: &mut ratatui::Frame, palette: &Palette, area: Rect) {
+    use ratatui::style::Modifier;
+    use ratatui::widgets::Borders;
+
+    let text = "Press Ctrl+P for settings \u{00b7} Esc to start writing";
+    let dialog_width = (text.chars().count() as u16 + 4).min(area.width);
+    let dialog_height = 3u16;
+    if area.width < dialog_width || area.height < dialog_height {
+        return;
+    }
+    let x = area.x + (area.width - dialog_width) / 2;
+    let y = area.y + (area.height / 3).max(1);
+    let dialog = Rect { x, y, width: dialog_width, height: dialog_height };
+
+    frame.render_widget(Clear, dialog);
+
+    let normal_style = Style::default().fg(palette.foreground).bg(palette.background);
+    let accent_style = Style::default()
+        .fg(palette.accent_link)
+        .bg(palette.background)
+        .add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(palette.dimmed_foreground).bg(palette.background);
+
+    let spans = Line::from(vec![
+        Span::styled("Press ", normal_style),
+        Span::styled("Ctrl+P", accent_style),
+        Span::styled(" for settings \u{00b7} ", normal_style),
+        Span::styled("Esc", accent_style),
+        Span::styled(" to start writing", normal_style),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(dim_style)
+        .style(Style::default().bg(palette.background));
+
+    let paragraph = Paragraph::new(spans)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    frame.render_widget(paragraph, dialog);
+}
+
 /// All data needed to render the settings overlay, decoupled from App.
 pub struct SettingsViewModel {
     pub overlay_opacity: f64,
@@ -404,6 +454,8 @@ pub struct DrawContext<'a> {
     pub rename_active: bool,
     pub rename_buf: String,
     pub rename_cursor: usize,
+    // Help overlay
+    pub help_visible: bool,
     // Scratch quit prompt
     pub scratch_quit_active: bool,
     pub scratch_quit_selected: u8,
@@ -461,6 +513,7 @@ impl<'a> DrawContext<'a> {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string()),
+            help_visible: app.help_visible(),
         }
     }
 }
@@ -962,6 +1015,35 @@ mod tests {
         assert!(
             !text.contains("[scratch]"),
             "Filename should not be visible in default state"
+        );
+    }
+
+    // === Acceptance test: Help overlay renders on first launch ===
+
+    #[test]
+    fn help_overlay_visible_on_new_app() {
+        let mut app = App::new();
+        let buf = render_app(&mut app, 80, 24);
+        let text = extract_all_text(&buf);
+        assert!(
+            text.contains("Ctrl+P"),
+            "Help overlay should show 'Ctrl+P' on first launch"
+        );
+        assert!(
+            text.contains("settings"),
+            "Help overlay should mention 'settings'"
+        );
+    }
+
+    #[test]
+    fn help_overlay_hidden_after_dismiss() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let buf = render_app(&mut app, 80, 24);
+        let text = extract_all_text(&buf);
+        assert!(
+            !text.contains("Ctrl+P"),
+            "Help overlay should not be visible after dismiss"
         );
     }
 
