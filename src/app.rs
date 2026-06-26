@@ -519,6 +519,9 @@ impl App {
 
     /// Handle Ctrl+key combinations.
     fn handle_ctrl_key(&mut self, code: KeyCode) {
+        // Any Ctrl chord dismisses the first-launch help — the user is
+        // engaging with the app, so the dialog has served its purpose.
+        self.help.dismiss();
         match code {
             KeyCode::Char('c') => {
                 self.editor.apply_action(Action::Yank);
@@ -3000,5 +3003,25 @@ mod tests {
         app.settings_apply();
         assert!(!app.show_help_on_launch);
         assert!(app.help.visible, "current session help should stay visible after toggle");
+    }
+
+    #[test]
+    fn ctrl_p_dismisses_help_and_opens_settings() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        assert!(!app.settings.visible);
+        app.handle_key(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(!app.help.visible, "Ctrl+P should dismiss help");
+        assert!(app.settings.visible, "Ctrl+P should open settings");
+    }
+
+    #[test]
+    fn dismiss_does_not_flip_persistent_toggle() {
+        let mut app = App::new();
+        assert!(app.show_help_on_launch, "default persistent flag is true");
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.help.visible, "Esc dismissed the dialog");
+        assert!(app.show_help_on_launch, "persistent toggle should be unchanged by dismiss");
     }
 }
