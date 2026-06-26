@@ -312,6 +312,15 @@ impl App {
                 self.apply_scroll_delta(delta);
             }
             crate::mouse::MouseAction::ClickAt { row, col, click_count } => {
+                // Hit-test the bottom-left settings affordance first.
+                if let Some(rect) = self.affordance_box {
+                    if rect.contains(row, col) {
+                        self.toggle_settings();
+                        self.drag_anchor = None;
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
                 let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) else {
                     self.drag_anchor = None;
                     return;
@@ -2858,5 +2867,66 @@ mod tests {
         assert!(!r.contains(23, 10), "exclusive at right edge");
         assert!(!r.contains(22, 5), "different row not contained");
         assert!(!r.contains(23, 0), "left of col not contained");
+    }
+
+    // === Affordance click handling ===
+
+    #[test]
+    fn click_on_affordance_opens_settings() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        let rect = app.affordance_box.expect("affordance should be visible");
+        assert!(!app.settings.visible);
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                rect.row,
+                rect.col + 2, // inside the affordance
+            ),
+            80,
+            24,
+        );
+        assert!(app.settings.visible, "click on affordance should open settings");
+    }
+
+    #[test]
+    fn click_outside_affordance_routes_to_editor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 3,
+            ),
+            80,
+            24,
+        );
+        assert!(!app.settings.visible, "click outside affordance should not open settings");
+        assert_eq!(app.editor.cursor_col, 3, "cursor should move to clicked column");
+    }
+
+    #[test]
+    fn click_on_affordance_does_not_position_cursor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let starting_col = app.editor.cursor_col;
+        let _ = app.tick(80, 24);
+        let rect = app.affordance_box.expect("affordance should be visible");
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                rect.row,
+                rect.col,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_col, starting_col, "cursor should not move on affordance click");
     }
 }
