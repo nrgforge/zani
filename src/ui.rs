@@ -486,6 +486,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
 
     for (cursor_idx, item) in items.iter().enumerate() {
         let group = match item {
+            SettingsItem::ShowHelpOnLaunch => "General",
             SettingsItem::EditingMode(_) => "Editing",
             SettingsItem::Palette => "Palette",
             SettingsItem::FocusMode(_) => "Focus",
@@ -506,6 +507,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         }
 
         let text = match item {
+            SettingsItem::ShowHelpOnLaunch => "  Show help on launch".to_string(),
             SettingsItem::EditingMode(mode) => {
                 let label = match mode {
                     EditingMode::Vim => "Vim",
@@ -1051,7 +1053,7 @@ mod tests {
         let mut app = App::new();
         app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1069,7 +1071,7 @@ mod tests {
         let mut app = App::new();
         app.editor.dirty = true;
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1083,7 +1085,7 @@ mod tests {
         let mut app = App::new();
         app.persistence.save_error = Some("Permission denied".to_string());
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1098,7 +1100,7 @@ mod tests {
         app.editor.editing_mode = crate::editing_mode::EditingMode::Standard;
         app.editor.vim_mode = crate::vim_bindings::Mode::Insert;
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1271,14 +1273,14 @@ mod tests {
 
         // Open settings — overlay should be visible
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
         assert!(text.contains("NORMAL"), "Settings Layer should show vim mode");
         assert!(text.contains("Settings"), "Settings Layer title should be visible");
 
         // Dismiss via Escape — overlay should disappear
         app.settings.dismiss();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
         assert!(
             !text.contains("NORMAL"),

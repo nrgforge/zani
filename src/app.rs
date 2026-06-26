@@ -173,6 +173,7 @@ impl App {
             return;
         };
         match item {
+            SettingsItem::ShowHelpOnLaunch => {} // toggled elsewhere; Enter is a no-op here
             SettingsItem::EditingMode(mode) => {
                 self.editor.set_editing_mode(mode);
             }
@@ -975,8 +976,9 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 2 editing modes + 1 palette + 3 focus modes + 2 scroll modes + 1 column width + 1 file + 1 config = 11
-        assert_eq!(SettingsItem::all().len(), 11);
+        // 1 show-help-on-launch + 2 editing modes + 1 palette + 3 focus modes
+        // + 2 scroll modes + 1 column width + 1 file + 1 config = 12
+        assert_eq!(SettingsItem::all().len(), 12);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
@@ -1101,13 +1103,13 @@ mod tests {
         let mut app = App::new();
         app.settings.cursor = SettingsItem::all().len() - 1;
         app.settings.nav_down();
-        assert_eq!(app.settings.cursor, item_pos(SettingsItem::EditingMode(EditingMode::Vim)), "nav down from last item should wrap to first");
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::ShowHelpOnLaunch), "nav down from last item should wrap to first");
     }
 
     #[test]
     fn settings_nav_up_wraps() {
         let mut app = App::new();
-        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Vim));
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
         app.settings.nav_up();
         assert_eq!(app.settings.cursor, SettingsItem::all().len() - 1, "nav up from 0 should wrap to last item");
     }
