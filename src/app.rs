@@ -272,6 +272,7 @@ impl App {
             || self.find_state.as_ref().is_some_and(|f| f.overlay_visible)
             || self.rename.active
             || self.settings.visible
+            || self.help.visible
         {
             return;
         }
@@ -2448,6 +2449,7 @@ mod tests {
     #[test]
     fn scroll_down_moves_cursor_down_three_visual_lines() {
         let mut app = App::new();
+        app.help.dismiss();
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.editor.buffer = Buffer::from_text(&text);
         app.editor.cursor_line = 0;
@@ -2462,6 +2464,7 @@ mod tests {
     #[test]
     fn scroll_up_moves_cursor_up_three_visual_lines() {
         let mut app = App::new();
+        app.help.dismiss();
         let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
         app.editor.buffer = Buffer::from_text(&text);
         app.editor.cursor_line = 10;
@@ -2491,6 +2494,7 @@ mod tests {
     #[test]
     fn click_moves_cursor_to_buffer_position() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello\nworld\n");
         app.viewport.effective_column_width = 60;
         app.viewport.scroll_offset = 0;
@@ -2515,6 +2519,7 @@ mod tests {
     #[test]
     fn click_clears_existing_selection() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello world\n");
         app.editor.selection_anchor = Some((0, 0));
         app.editor.cursor_col = 5;
@@ -2535,6 +2540,7 @@ mod tests {
     #[test]
     fn click_past_line_end_clamps_to_line_end() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hi\n");
         let _ = app.tick(80, 24);
         let surface_left = (80 - app.viewport.effective_column_width) / 2;
@@ -2557,6 +2563,7 @@ mod tests {
     #[test]
     fn drag_extends_selection_from_anchor() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello world\n");
         let _ = app.tick(80, 24);
         let surface_left = (80 - app.viewport.effective_column_width) / 2;
@@ -2588,6 +2595,7 @@ mod tests {
     #[test]
     fn release_clears_drag_anchor() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello\n");
         let _ = app.tick(80, 24);
         let surface_left = (80 - app.viewport.effective_column_width) / 2;
@@ -2616,6 +2624,7 @@ mod tests {
     #[test]
     fn double_click_selects_word() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello world\n");
         let _ = app.tick(80, 24);
         let surface_left = (80 - app.viewport.effective_column_width) / 2;
@@ -2647,6 +2656,7 @@ mod tests {
     #[test]
     fn triple_click_selects_line() {
         let mut app = App::new();
+        app.help.dismiss();
         app.editor.buffer = Buffer::from_text("hello world\n");
         let _ = app.tick(80, 24);
         let surface_left = (80 - app.viewport.effective_column_width) / 2;
@@ -2674,6 +2684,26 @@ mod tests {
     fn app_new_has_help_visible() {
         let app = App::new();
         assert!(app.help.visible);
+    }
+
+    #[test]
+    fn mouse_swallowed_while_help_visible() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.editor.buffer = Buffer::from_text("hello\n");
+        app.editor.cursor_col = 0;
+        let _ = app.tick(80, 24);
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                20,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_col, 0, "click should not move cursor while help is visible");
+        assert!(app.help.visible, "click should not dismiss help");
     }
 
     #[test]
