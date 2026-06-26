@@ -15,6 +15,27 @@ struct ParagraphBoundsCache {
     bounds: Option<(usize, usize)>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionKind {
+    #[default]
+    CharWise,
+    LineWise,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LastFind {
+    pub ch: char,
+    pub kind: crate::vim_bindings::FindKind,
+    pub dir: crate::vim_bindings::FindDir,
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum LastChange {
+    #[default]
+    None,
+    // Variants added by later tasks (replace-char, delete-char, etc.)
+}
+
 /// Text editor core: buffer, cursor, undo, selection, and vim state.
 pub struct Editor {
     pub buffer: Buffer,
@@ -28,6 +49,10 @@ pub struct Editor {
     pub undo_history: UndoHistory,
     pub dirty: bool,
     paragraph_cache: Option<ParagraphBoundsCache>,
+    pub pending_count: Option<u32>,
+    pub last_find: Option<LastFind>,
+    pub last_change: LastChange,
+    pub selection_kind: SelectionKind,
 }
 
 impl Default for Editor {
@@ -50,6 +75,10 @@ impl Editor {
             undo_history: UndoHistory::new(),
             dirty: false,
             paragraph_cache: None,
+            pending_count: None,
+            last_find: None,
+            last_change: LastChange::default(),
+            selection_kind: SelectionKind::default(),
         }
     }
 
@@ -485,6 +514,29 @@ impl Editor {
                     self.dirty = true;
                 }
             }
+            // Wired up in later tasks.
+            Action::ParagraphBackward
+            | Action::ParagraphForward
+            | Action::SentenceBackward
+            | Action::SentenceForward
+            | Action::FindChar { .. }
+            | Action::RepeatFind
+            | Action::RepeatFindReversed
+            | Action::NextMatch
+            | Action::PrevMatch
+            | Action::SearchWordUnderCursor
+            | Action::InsertAtLineStart
+            | Action::DeleteToLineEnd
+            | Action::ChangeToLineEnd
+            | Action::SubstituteLine
+            | Action::SubstituteChar
+            | Action::YankLine
+            | Action::ReplaceChar(_)
+            | Action::JoinLine
+            | Action::ToggleCase
+            | Action::EnterLinewiseVisual
+            | Action::Repeat
+            | Action::Counted { .. } => {}
             Action::None => {}
         }
     }

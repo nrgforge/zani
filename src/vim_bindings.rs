@@ -1,3 +1,15 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindKind {
+    Find, // f/F — land on the char
+    Till, // t/T — land one before the char
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindDir {
+    Forward,
+    Backward,
+}
+
 /// Vim editing mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -82,6 +94,50 @@ pub enum Action {
     Redo,
     /// Select all text in the buffer.
     SelectAll,
+    /// Move to previous paragraph (blank-line) boundary.
+    ParagraphBackward,
+    /// Move to next paragraph (blank-line) boundary.
+    ParagraphForward,
+    /// Move to previous sentence start.
+    SentenceBackward,
+    /// Move to next sentence start.
+    SentenceForward,
+    /// Find a character on the current line.
+    FindChar { ch: char, kind: FindKind, dir: FindDir },
+    /// Repeat the last FindChar in the same direction.
+    RepeatFind,
+    /// Repeat the last FindChar in the reverse direction.
+    RepeatFindReversed,
+    /// Jump to the next search match (uses current find query).
+    NextMatch,
+    /// Jump to the previous search match.
+    PrevMatch,
+    /// Populate the find query with the word under the cursor and jump.
+    SearchWordUnderCursor,
+    /// Insert at first non-whitespace of line.
+    InsertAtLineStart,
+    /// Delete from cursor to end of line.
+    DeleteToLineEnd,
+    /// Delete from cursor to end of line, then enter Insert.
+    ChangeToLineEnd,
+    /// Delete line contents, enter Insert at col 0.
+    SubstituteLine,
+    /// Delete char under cursor, enter Insert.
+    SubstituteChar,
+    /// Yank the entire current line (linewise).
+    YankLine,
+    /// Replace the char under the cursor with the given char.
+    ReplaceChar(char),
+    /// Join the next line onto the current one with a single space.
+    JoinLine,
+    /// Toggle case of the char under the cursor and advance one column.
+    ToggleCase,
+    /// Enter Visual mode with line-wise selection.
+    EnterLinewiseVisual,
+    /// Repeat the last buffer-mutating change.
+    Repeat,
+    /// Apply an inner action `count` times.
+    Counted { count: u32, inner: Box<Action> },
     /// No action (key not handled).
     None,
 }
