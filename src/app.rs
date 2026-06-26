@@ -256,7 +256,7 @@ impl App {
 
     /// Handle a mouse event. Surface dimensions are passed in the same way
     /// `tick` receives them — `App` does not cache them.
-    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent, _surface_width: u16, _surface_height: u16) {
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent, surface_width: u16, surface_height: u16) {
         // Swallow when any overlay is active.
         if self.external_change_pending
             || self.scratch_quit.active
@@ -277,9 +277,48 @@ impl App {
                 self.needs_redraw = true;
                 self.apply_scroll_delta(delta);
             }
-            // Click/Drag/Release implemented in later tasks.
+            crate::mouse::MouseAction::ClickAt { row, col, click_count } => {
+                if click_count == 1 {
+                    if let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) {
+                        self.editor.cursor_line = line;
+                        self.editor.cursor_col = c;
+                        self.editor.selection_anchor = None;
+                        self.editor.selection_kind = crate::editor::SelectionKind::CharWise;
+                        if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
+                            && self.editor.vim_mode == crate::vim_bindings::Mode::Visual
+                        {
+                            self.editor.vim_mode = crate::vim_bindings::Mode::Normal;
+                        }
+                        self.needs_redraw = true;
+                    }
+                }
+                // click_count 2 and 3 handled in Task 14.
+            }
             _ => {}
         }
+    }
+
+    /// Translate a screen (row, col) to a buffer (line, col), if the click
+    /// lands inside the writing surface. Returns None for chrome regions.
+    fn screen_to_buffer(&mut self, row: u16, col: u16, term_width: u16, _term_height: u16) -> Option<(usize, usize)> {
+        let surface_left = term_width.saturating_sub(self.viewport.effective_column_width) / 2;
+        let surface_top = self.viewport.typewriter_vertical_offset;
+        if row < surface_top {
+            return None;
+        }
+        if col < surface_left {
+            return None;
+        }
+        let local_col = (col - surface_left) as usize;
+        let visual_row = (row - surface_top) as usize + self.viewport.scroll_offset;
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+        if visual_row >= visual_lines.len() {
+            return None;
+        }
+        let vl = &visual_lines[visual_row];
+        let max_col_in_line = vl.char_end.saturating_sub(vl.char_start);
+        let target_col = vl.char_start + local_col.min(max_col_in_line);
+        Some((vl.logical_line, target_col))
     }
 
     /// Move the cursor by `delta` visual lines. ensure_cursor_visible
@@ -2366,5 +2405,69 @@ mod tests {
             24,
         );
         assert_eq!(app.editor.cursor_line, 5, "scroll should not move cursor when Settings open");
+    }
+
+    #[test]
+    fn click_moves_cursor_to_buffer_position() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello\nworld\n");
+        app.viewport.effective_column_width = 60;
+        app.viewport.scroll_offset = 0;
+        // Run a tick to set effective_column_width via the visual line cache.
+        let _ = app.tick(80, 24);
+        let term_width = 80u16;
+        let surface_left = (term_width - app.viewport.effective_column_width) / 2;
+
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                1,
+                surface_left + 3,
+            ),
+            term_width,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 1);
+        assert_eq!(app.editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn click_clears_existing_selection() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        app.editor.selection_anchor = Some((0, 0));
+        app.editor.cursor_col = 5;
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 2,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.selection_anchor, None);
+    }
+
+    #[test]
+    fn click_past_line_end_clamps_to_line_end() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hi\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 50,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 0);
+        // "hi\n" line content len is 2; clamped to 2.
+        assert!(app.editor.cursor_col <= 2);
     }
 }
