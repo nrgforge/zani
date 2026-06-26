@@ -28,6 +28,7 @@ pub struct LocalConfig {
     pub column_width: Option<u16>,
     pub editing_mode: Option<String>,
     pub scroll_mode: Option<String>,
+    pub show_help_on_launch: Option<bool>,
 }
 
 /// Persisted user preferences, loaded from and saved to config.toml.
@@ -48,6 +49,10 @@ pub struct Config {
     /// Scroll mode (edge or typewriter).
     #[serde(default, with = "scroll_mode_serde")]
     pub scroll_mode: ScrollMode,
+    /// Whether to show the first-launch help dialog when Zani starts.
+    /// Persistent toggle — dismissing the dialog does NOT flip this.
+    #[serde(default = "default_show_help_on_launch")]
+    pub show_help_on_launch: bool,
 }
 
 fn default_palette_name() -> String {
@@ -58,6 +63,10 @@ fn default_column_width() -> u16 {
     60
 }
 
+fn default_show_help_on_launch() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -66,6 +75,7 @@ impl Default for Config {
             column_width: default_column_width(),
             editing_mode: EditingMode::default(),
             scroll_mode: ScrollMode::Edge,
+            show_help_on_launch: true,
         }
     }
 }
@@ -157,6 +167,9 @@ impl Config {
                 _ => ScrollMode::Edge,
             };
         }
+        if let Some(sh) = local.show_help_on_launch {
+            self.show_help_on_launch = sh;
+        }
     }
 
     /// Write a `.zani.toml` file binding a palette to a project directory (ADR-011).
@@ -191,6 +204,7 @@ impl Config {
             column_width: Some(self.column_width),
             editing_mode: Some(editing_mode_str(self.editing_mode).to_string()),
             scroll_mode: Some(scroll_mode_str(self.scroll_mode).to_string()),
+            show_help_on_launch: Some(self.show_help_on_launch),
         }
     }
 
@@ -307,6 +321,7 @@ mod tests {
             column_width: 72,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Typewriter,
+            show_help_on_launch: true,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&toml_str).unwrap();
@@ -503,6 +518,7 @@ mod tests {
             column_width: 72,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Typewriter,
+            show_help_on_launch: false,
         };
         config.save_local(&path).unwrap();
 
@@ -513,6 +529,7 @@ mod tests {
         assert_eq!(local.column_width, Some(72));
         assert_eq!(local.editing_mode, Some("standard".to_string()));
         assert_eq!(local.scroll_mode, Some("typewriter".to_string()));
+        assert_eq!(local.show_help_on_launch, Some(false));
     }
 
     #[test]
@@ -524,6 +541,7 @@ mod tests {
             column_width: 72,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Typewriter,
+            show_help_on_launch: false,
         };
         config.save_local(&dir.path().join(".zani.toml")).unwrap();
 
@@ -532,5 +550,43 @@ mod tests {
         let (loaded, source, _) = Config::load_for_path(&file);
         assert_eq!(loaded, config);
         assert_eq!(source, ConfigSource::Local);
+    }
+
+    #[test]
+    fn show_help_on_launch_defaults_to_true() {
+        let c = Config::default();
+        assert!(c.show_help_on_launch);
+    }
+
+    #[test]
+    fn show_help_on_launch_missing_from_toml_defaults_to_true() {
+        // Old config files have no field — should deserialize to true.
+        let toml = r#"
+palette = "Sitka"
+column_width = 60
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert!(c.show_help_on_launch, "missing field should default to true");
+    }
+
+    #[test]
+    fn show_help_on_launch_round_trips() {
+        let mut c = Config::default();
+        c.show_help_on_launch = false;
+        let serialized = toml::to_string(&c).unwrap();
+        let deserialized: Config = toml::from_str(&serialized).unwrap();
+        assert!(!deserialized.show_help_on_launch);
+    }
+
+    #[test]
+    fn local_config_show_help_on_launch_overrides_global() {
+        let mut global = Config::default();
+        assert!(global.show_help_on_launch);
+        let local = LocalConfig {
+            show_help_on_launch: Some(false),
+            ..LocalConfig::default()
+        };
+        global.merge_local(&local);
+        assert!(!global.show_help_on_launch, "local override should apply");
     }
 }

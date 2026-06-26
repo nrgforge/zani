@@ -46,12 +46,26 @@ pub fn read_clipboard() -> Option<String> {
 
 /// Write text to the system clipboard via OSC 52 escape sequence.
 /// This works in terminals that support OSC 52 (most modern terminals).
-/// Silently fails on write error (graceful degradation).
+/// When running inside tmux, wraps the sequence in tmux's passthrough format
+/// so the outer terminal still sees it. Silently fails on write error.
 pub fn write_osc52(text: &str) {
     let encoded = base64_encode(text.as_bytes());
-    let sequence = format!("\x1b]52;c;{}\x07", encoded);
+    let sequence = build_osc52_sequence(&encoded, std::env::var("TMUX").is_ok());
     let _ = std::io::stdout().write_all(sequence.as_bytes());
     let _ = std::io::stdout().flush();
+}
+
+/// Build an OSC 52 sequence, optionally wrapped for tmux passthrough.
+/// tmux's DCS passthrough takes the form `\ePtmux;<content>\e\\`
+/// where every ESC byte inside `<content>` is doubled.
+fn build_osc52_sequence(encoded: &str, in_tmux: bool) -> String {
+    let inner = format!("\x1b]52;c;{}\x07", encoded);
+    if in_tmux {
+        let escaped = inner.replace('\x1b', "\x1b\x1b");
+        format!("\x1bPtmux;{}\x1b\\", escaped)
+    } else {
+        inner
+    }
 }
 
 /// Minimal base64 encoder — no external dependency needed.
@@ -125,13 +139,26 @@ mod tests {
 
     #[test]
     fn osc52_sequence_has_correct_format() {
-        // We can't easily capture stdout in a unit test, but we can verify
-        // the base64 encoding that feeds into it.
-        let encoded = base64_encode(b"test");
-        let sequence = format!("\x1b]52;c;{}\x07", encoded);
+        let sequence = build_osc52_sequence(&base64_encode(b"test"), false);
         assert!(sequence.starts_with("\x1b]52;c;"));
         assert!(sequence.ends_with("\x07"));
         assert!(sequence.contains("dGVzdA=="));
+    }
+
+    #[test]
+    fn osc52_in_tmux_is_wrapped_with_passthrough() {
+        let sequence = build_osc52_sequence(&base64_encode(b"test"), true);
+        assert!(sequence.starts_with("\x1bPtmux;"));
+        assert!(sequence.ends_with("\x1b\\"));
+        // Inner ESC must be doubled inside the passthrough envelope.
+        assert!(sequence.contains("\x1b\x1b]52;c;dGVzdA==\x07"));
+    }
+
+    #[test]
+    fn osc52_outside_tmux_is_unwrapped() {
+        let sequence = build_osc52_sequence(&base64_encode(b"x"), false);
+        assert!(!sequence.starts_with("\x1bPtmux;"));
+        assert_eq!(sequence, "\x1b]52;c;eA==\x07");
     }
 
     // === Clipboard read command detection ===

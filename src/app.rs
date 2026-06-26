@@ -30,6 +30,28 @@ pub struct TickOutput {
     pub sentence_bounds: Option<(usize, usize)>,
 }
 
+/// Bounding box for the bottom-left settings affordance, used for click hit-testing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AffordanceRect {
+    pub row: u16,
+    pub col: u16,
+    pub width: u16,
+}
+
+impl AffordanceRect {
+    /// Affordance text — visible glyphs only.
+    pub const TEXT: &'static str = "⚙ Ctrl+P";
+    /// Affordance column width (number of cells the text occupies).
+    pub const WIDTH: u16 = 9;
+    /// One-cell left margin from terminal edge.
+    pub const COL_OFFSET: u16 = 1;
+
+    /// True if the screen position (row, col) is inside this affordance.
+    pub fn contains(&self, row: u16, col: u16) -> bool {
+        row == self.row && col >= self.col && col < self.col + self.width
+    }
+}
+
 /// Thin coordinator that owns subsystems and routes input between them.
 ///
 /// ## Coordinator invariant
@@ -65,6 +87,13 @@ pub struct App {
     scratch_quit: ScratchQuitState,
     /// Quit after the rename completes (set when scratch quit → Rename).
     pending_quit_after_rename: bool,
+    last_click: Option<crate::mouse::LastClick>,
+    /// Anchor (line, col) of the most recent mouse-down inside the surface.
+    /// Cleared on Release.
+    drag_anchor: Option<(usize, usize)>,
+    pub(crate) help: crate::help::HelpOverlay,
+    pub(crate) affordance_box: Option<AffordanceRect>,
+    pub(crate) show_help_on_launch: bool,
 }
 
 impl Default for App {
@@ -95,6 +124,11 @@ impl App {
             external_change_pending: false,
             scratch_quit: ScratchQuitState::new(),
             pending_quit_after_rename: false,
+            last_click: None,
+            drag_anchor: None,
+            help: crate::help::HelpOverlay::new(true),
+            affordance_box: None,
+            show_help_on_launch: true,
         }
     }
 
@@ -123,6 +157,8 @@ impl App {
         app.viewport.scroll_mode = config.scroll_mode;
         app.viewport.column_width = config.column_width;
         app.editor.set_editing_mode(config.editing_mode);
+        app.show_help_on_launch = config.show_help_on_launch;
+        app.help = crate::help::HelpOverlay::new(config.show_help_on_launch);
         if let Some(ref path) = file_path {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
@@ -167,6 +203,9 @@ impl App {
             return;
         };
         match item {
+            SettingsItem::ShowHelpOnLaunch => {
+                self.show_help_on_launch = !self.show_help_on_launch;
+            }
             SettingsItem::EditingMode(mode) => {
                 self.editor.set_editing_mode(mode);
             }
@@ -221,6 +260,7 @@ impl App {
             column_width: self.viewport.column_width,
             editing_mode: self.editor.editing_mode,
             scroll_mode: self.viewport.scroll_mode,
+            show_help_on_launch: self.show_help_on_launch,
         }
     }
 
@@ -249,6 +289,136 @@ impl App {
             ConfigSource::Global | ConfigSource::Default => {
                 let _ = self.current_config().save();
             }
+        }
+    }
+
+    /// Handle a mouse event. Surface dimensions are passed in the same way
+    /// `tick` receives them — `App` does not cache them.
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent, surface_width: u16, surface_height: u16) {
+        // Swallow when any overlay is active.
+        if self.external_change_pending
+            || self.scratch_quit.active
+            || self.find_state.as_ref().is_some_and(|f| f.overlay_visible)
+            || self.rename.active
+            || self.settings.visible
+            || self.help.visible
+        {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let (action, new_last) = crate::mouse::translate(event, self.last_click, now);
+        self.last_click = new_last;
+        let Some(action) = action else { return };
+
+        match action {
+            crate::mouse::MouseAction::ScrollLines(delta) => {
+                self.needs_redraw = true;
+                self.apply_scroll_delta(delta);
+            }
+            crate::mouse::MouseAction::ClickAt { row, col, click_count } => {
+                // Hit-test the bottom-left settings affordance first.
+                if let Some(rect) = self.affordance_box {
+                    if rect.contains(row, col) {
+                        self.toggle_settings();
+                        self.drag_anchor = None;
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
+                let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) else {
+                    self.drag_anchor = None;
+                    return;
+                };
+                self.editor.cursor_line = line;
+                self.editor.cursor_col = c;
+                self.editor.selection_anchor = None;
+                self.editor.selection_kind = crate::editor::SelectionKind::CharWise;
+                if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
+                    && self.editor.vim_mode == crate::vim_bindings::Mode::Visual
+                {
+                    self.editor.vim_mode = crate::vim_bindings::Mode::Normal;
+                }
+                self.drag_anchor = Some((line, c));
+                self.needs_redraw = true;
+
+                match click_count {
+                    2 => {
+                        if let Some((s, e)) = self.editor.word_range_at(line, c) {
+                            self.editor.selection_anchor = Some((line, s));
+                            self.editor.cursor_col = e;
+                            if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim {
+                                self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                            }
+                        }
+                    }
+                    3 => {
+                        let (s, e) = self.editor.line_range_at(line);
+                        self.editor.selection_anchor = Some((line, s));
+                        self.editor.cursor_col = e;
+                        if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim {
+                            self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            crate::mouse::MouseAction::DragTo { row, col } => {
+                let Some((line, c)) = self.screen_to_buffer(row, col, surface_width, surface_height) else {
+                    return;
+                };
+                if let Some(anchor) = self.drag_anchor {
+                    if self.editor.selection_anchor.is_none() {
+                        self.editor.selection_anchor = Some(anchor);
+                    }
+                    self.editor.cursor_line = line;
+                    self.editor.cursor_col = c;
+                    if self.editor.editing_mode == crate::editing_mode::EditingMode::Vim
+                        && self.editor.vim_mode != crate::vim_bindings::Mode::Visual
+                    {
+                        self.editor.vim_mode = crate::vim_bindings::Mode::Visual;
+                    }
+                    self.needs_redraw = true;
+                }
+            }
+            crate::mouse::MouseAction::Release => {
+                self.drag_anchor = None;
+            }
+        }
+    }
+
+    /// Translate a screen (row, col) to a buffer (line, col), if the click
+    /// lands inside the writing surface. Returns None for chrome regions.
+    fn screen_to_buffer(&mut self, row: u16, col: u16, term_width: u16, _term_height: u16) -> Option<(usize, usize)> {
+        let surface_left = term_width.saturating_sub(self.viewport.effective_column_width) / 2;
+        let surface_top = self.viewport.typewriter_vertical_offset;
+        if row < surface_top {
+            return None;
+        }
+        if col < surface_left {
+            return None;
+        }
+        let local_col = (col - surface_left) as usize;
+        let visual_row = (row - surface_top) as usize + self.viewport.scroll_offset;
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+        if visual_row >= visual_lines.len() {
+            return None;
+        }
+        let vl = &visual_lines[visual_row];
+        let max_col_in_line = vl.char_end.saturating_sub(vl.char_start);
+        let target_col = vl.char_start + local_col.min(max_col_in_line);
+        Some((vl.logical_line, target_col))
+    }
+
+    /// Move the cursor by `delta` visual lines. ensure_cursor_visible
+    /// (called in tick) handles viewport adjustment.
+    fn apply_scroll_delta(&mut self, delta: i16) {
+        use crate::vim_bindings::Direction;
+        let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
+        let dir = if delta < 0 { Direction::Up } else { Direction::Down };
+        let steps = delta.unsigned_abs() as usize;
+        for _ in 0..steps {
+            self.editor.move_cursor_visual(dir, &visual_lines);
         }
     }
 
@@ -284,8 +454,8 @@ impl App {
             return;
         }
 
-        // Find overlay — swallow all keys when active
-        if self.find_state.is_some() {
+        // Find overlay — swallow all keys when the overlay is visible
+        if self.find_state.as_ref().is_some_and(|f| f.overlay_visible) {
             self.handle_find_key(code);
             return;
         }
@@ -293,6 +463,12 @@ impl App {
         // Inline rename — swallow all keys when active
         if self.rename.active {
             self.handle_rename_key(code);
+            return;
+        }
+
+        // First-launch help overlay — swallow all keys; Esc/Enter dismiss
+        if self.help.visible {
+            self.handle_help_key(code);
             return;
         }
 
@@ -311,6 +487,7 @@ impl App {
         if self.editor.handle_key(code, modifiers, self.viewport.effective_column_width) {
             self.should_quit = true;
         }
+        self.process_pending_search();
     }
 
     /// Handle vertical cursor movement using the viewport's cached visual lines.
@@ -342,6 +519,9 @@ impl App {
 
     /// Handle Ctrl+key combinations.
     fn handle_ctrl_key(&mut self, code: KeyCode) {
+        // Any Ctrl chord dismisses the first-launch help — the user is
+        // engaging with the app, so the dialog has served its purpose.
+        self.help.dismiss();
         match code {
             KeyCode::Char('c') => {
                 self.editor.apply_action(Action::Yank);
@@ -380,11 +560,17 @@ impl App {
                 self.persistence.autosave(&self.editor.buffer, &mut self.editor.dirty);
             }
             KeyCode::Char('f') => {
-                if self.find_state.is_none() {
-                    self.find_state = Some(FindState::new(
-                        self.editor.cursor_line,
-                        self.editor.cursor_col,
-                    ));
+                let needs_open = self.find_state.as_ref().is_none_or(|f| !f.overlay_visible);
+                if needs_open {
+                    if self.find_state.is_none() {
+                        self.find_state = Some(FindState::new(
+                            self.editor.cursor_line,
+                            self.editor.cursor_col,
+                        ));
+                    } else if let Some(f) = self.find_state.as_mut() {
+                        f.overlay_visible = true;
+                        f.saved_cursor = (self.editor.cursor_line, self.editor.cursor_col);
+                    }
                     self.animations.start(
                         crate::animation::TransitionKind::FindOverlay,
                         Duration::from_millis(150),
@@ -396,6 +582,9 @@ impl App {
                 self.editor.apply_action(Action::Undo);
             }
             KeyCode::Char('y') => {
+                self.editor.apply_action(Action::Redo);
+            }
+            KeyCode::Char('r') => {
                 self.editor.apply_action(Action::Redo);
             }
             _ => {}
@@ -414,7 +603,9 @@ impl App {
             }
             KeyCode::Enter => {
                 self.jump_to_find_match();
-                self.find_state = None;
+                if let Some(f) = self.find_state.as_mut() {
+                    f.overlay_visible = false;
+                }
             }
             KeyCode::Backspace => {
                 find.backspace();
@@ -436,6 +627,77 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Service the editor's pending_search request, if any.
+    /// Reuses the FindState machinery used by Ctrl+F, but leaves the overlay hidden.
+    fn process_pending_search(&mut self) {
+        use crate::editor::SearchRequest;
+        let Some(req) = self.editor.pending_search.take() else {
+            return;
+        };
+
+        // Compute or carry over the search query.
+        let query: Option<String> = match req {
+            SearchRequest::WordUnderCursor => self.word_under_cursor(),
+            SearchRequest::Next | SearchRequest::Prev => {
+                self.find_state.as_ref().map(|f| f.query.clone())
+            }
+        };
+
+        let Some(q) = query else { return };
+        if q.is_empty() {
+            return;
+        }
+
+        // Build or refresh a transient FindState (no overlay shown).
+        let mut find = self.find_state.take().unwrap_or_else(|| {
+            crate::find::FindState::new(self.editor.cursor_line, self.editor.cursor_col)
+        });
+        if find.query != q {
+            find.query = q;
+            find.cursor = find.query.chars().count();
+            find.search(&self.editor.buffer);
+            // Seed current_match to the match at/before cursor so next_match()
+            // skips past the cursor's current position (vim's * and n semantics).
+            find.current_match = find.matches.iter().rposition(|&(ml, mc)| {
+                ml < self.editor.cursor_line
+                    || (ml == self.editor.cursor_line && mc <= self.editor.cursor_col)
+            }).unwrap_or(find.matches.len().saturating_sub(1));
+        }
+
+        match req {
+            SearchRequest::Next | SearchRequest::WordUnderCursor => find.next_match(),
+            SearchRequest::Prev => find.prev_match(),
+        }
+
+        if let Some((line, col)) = find.current_match_pos() {
+            self.editor.cursor_line = line;
+            self.editor.cursor_col = col;
+        }
+
+        // Keep the find query in memory but do NOT show the overlay.
+        find.overlay_visible = false;
+        self.find_state = Some(find);
+    }
+
+    /// Return the word under the cursor, if any (alphanumeric + '_').
+    fn word_under_cursor(&self) -> Option<String> {
+        let line = self.editor.buffer.line(self.editor.cursor_line);
+        let chars: Vec<char> = line.chars().collect();
+        let col = self.editor.cursor_col;
+        if col >= chars.len() || !is_word_char(chars[col]) {
+            return None;
+        }
+        let mut start = col;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
+            end += 1;
+        }
+        Some(chars[start..=end].iter().collect())
     }
 
     /// Move cursor to the current find match position, if any.
@@ -504,6 +766,14 @@ impl App {
         }
     }
 
+    /// Handle key input while the first-launch help overlay is visible.
+    /// Esc or Enter dismisses; everything else is swallowed.
+    fn handle_help_key(&mut self, code: KeyCode) {
+        if matches!(code, KeyCode::Esc | KeyCode::Enter) {
+            self.help.dismiss();
+        }
+    }
+
     /// Handle key input while the Settings Layer is open.
     fn handle_settings_key(&mut self, code: KeyCode) {
         // Route to palette browser when open
@@ -521,15 +791,29 @@ impl App {
                 self.save_config();
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.viewport.adjust_column_width(-1);
-                    self.save_config();
+                match SettingsItem::at(self.settings.cursor) {
+                    Some(SettingsItem::ColumnWidth) => {
+                        self.viewport.adjust_column_width(-1);
+                        self.save_config();
+                    }
+                    Some(SettingsItem::ShowHelpOnLaunch) => {
+                        self.show_help_on_launch = false;
+                        self.save_config();
+                    }
+                    _ => {}
                 }
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if SettingsItem::at(self.settings.cursor) == Some(SettingsItem::ColumnWidth) {
-                    self.viewport.adjust_column_width(1);
-                    self.save_config();
+                match SettingsItem::at(self.settings.cursor) {
+                    Some(SettingsItem::ColumnWidth) => {
+                        self.viewport.adjust_column_width(1);
+                        self.save_config();
+                    }
+                    Some(SettingsItem::ShowHelpOnLaunch) => {
+                        self.show_help_on_launch = true;
+                        self.save_config();
+                    }
+                    _ => {}
                 }
             }
             _ => {} // swallow all other keys
@@ -590,6 +874,7 @@ impl App {
         // Clamp column width to available terminal width so text wraps
         // instead of clipping when the window is narrower than column_width.
         self.viewport.effective_column_width = self.viewport.column_width.min(surface_width);
+        self.affordance_box = self.compute_affordance_box(surface_width, surface_height);
         let visual_lines = self.viewport.visual_lines(&self.editor.buffer);
         self.viewport.ensure_cursor_visible(
             self.editor.cursor_line,
@@ -685,6 +970,9 @@ impl App {
 
     pub fn find_state(&self) -> Option<&FindState> { self.find_state.as_ref() }
     pub fn settings_visible(&self) -> bool { self.settings.visible }
+    pub fn help_visible(&self) -> bool { self.help.visible }
+    pub fn affordance_box(&self) -> Option<AffordanceRect> { self.affordance_box }
+    pub fn show_help_on_launch(&self) -> bool { self.show_help_on_launch }
     pub fn settings_cursor(&self) -> usize { self.settings.cursor }
     pub fn settings_overlay_progress(&self) -> Option<f64> { self.animations.settings_overlay_progress() }
     pub fn find_overlay_progress(&self) -> Option<f64> { self.animations.find_overlay_progress() }
@@ -730,6 +1018,36 @@ impl App {
             self.palette
         }
     }
+
+    /// Compute the affordance bounding box for the current frame.
+    /// Suppressed when any overlay is active or terminal is too narrow.
+    fn compute_affordance_box(&self, surface_width: u16, surface_height: u16) -> Option<AffordanceRect> {
+        // Suppress under any overlay.
+        if self.help.visible
+            || self.settings.visible
+            || self.palette_browser.open
+            || self.find_state.as_ref().is_some_and(|f| f.overlay_visible)
+            || self.rename.active
+            || self.scratch_quit.active
+            || self.external_change_pending
+        {
+            return None;
+        }
+        // Need at least column_width + width + 2 cols margin.
+        let needed = self.viewport.column_width + AffordanceRect::WIDTH + 2;
+        if surface_width < needed || surface_height == 0 {
+            return None;
+        }
+        Some(AffordanceRect {
+            row: surface_height - 1,
+            col: AffordanceRect::COL_OFFSET,
+            width: AffordanceRect::WIDTH,
+        })
+    }
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 #[cfg(test)]
@@ -761,8 +1079,9 @@ mod tests {
 
     #[test]
     fn settings_item_count_matches_expected() {
-        // 2 editing modes + 1 palette + 3 focus modes + 2 scroll modes + 1 column width + 1 file + 1 config = 11
-        assert_eq!(SettingsItem::all().len(), 11);
+        // 1 show-help-on-launch + 2 editing modes + 1 palette + 3 focus modes
+        // + 2 scroll modes + 1 column width + 1 file + 1 config = 12
+        assert_eq!(SettingsItem::all().len(), 12);
     }
 
     // === Acceptance test: Default state has no visible Chrome ===
@@ -796,6 +1115,7 @@ mod tests {
     #[test]
     fn escape_dismisses_settings() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
         assert!(!app.settings.visible);
@@ -887,13 +1207,13 @@ mod tests {
         let mut app = App::new();
         app.settings.cursor = SettingsItem::all().len() - 1;
         app.settings.nav_down();
-        assert_eq!(app.settings.cursor, item_pos(SettingsItem::EditingMode(EditingMode::Vim)), "nav down from last item should wrap to first");
+        assert_eq!(app.settings.cursor, item_pos(SettingsItem::ShowHelpOnLaunch), "nav down from last item should wrap to first");
     }
 
     #[test]
     fn settings_nav_up_wraps() {
         let mut app = App::new();
-        app.settings.cursor = item_pos(SettingsItem::EditingMode(EditingMode::Vim));
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
         app.settings.nav_up();
         assert_eq!(app.settings.cursor, SettingsItem::all().len() - 1, "nav up from 0 should wrap to last item");
     }
@@ -926,6 +1246,7 @@ mod tests {
     #[test]
     fn browser_esc_returns_to_settings() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
@@ -939,6 +1260,7 @@ mod tests {
     #[test]
     fn browser_nav_applies_palette_with_crossfade() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply(); // open browser
@@ -960,6 +1282,7 @@ mod tests {
     #[test]
     fn browser_enter_closes_and_saves() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply();
@@ -973,6 +1296,7 @@ mod tests {
     #[test]
     fn browser_nav_routes_through_app() {
         let mut app = App::new();
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::Palette);
         app.settings_apply(); // open browser
@@ -1768,6 +2092,7 @@ mod tests {
             column_width: 80,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Edge,
+            show_help_on_launch: true,
         };
         let app = App::from_config(&config, ColorProfile::TrueColor, None);
         assert_eq!(app.palette.name, "Sitka");
@@ -1786,6 +2111,7 @@ mod tests {
             column_width: 72,
             editing_mode: EditingMode::Standard,
             scroll_mode: ScrollMode::Typewriter,
+            show_help_on_launch: true,
         };
         let app = App::from_config(&original, ColorProfile::TrueColor, None);
         let recovered = Config {
@@ -1794,6 +2120,7 @@ mod tests {
             column_width: app.column_width(),
             editing_mode: app.editing_mode(),
             scroll_mode: app.scroll_mode(),
+            show_help_on_launch: true,
         };
         assert_eq!(recovered, original);
     }
@@ -1987,6 +2314,7 @@ mod tests {
         app.local_config_path = Some(local_path.clone());
 
         // Change focus mode via settings
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Paragraph));
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
@@ -2025,6 +2353,7 @@ mod tests {
         );
 
         // Change focus mode via settings — should NOT write to disk
+        app.help.dismiss();
         app.toggle_settings();
         app.settings.cursor = item_pos(SettingsItem::FocusMode(FocusMode::Paragraph));
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
@@ -2095,6 +2424,7 @@ mod tests {
         );
 
         // Navigate to Config row and press Enter
+        app.help.dismiss();
         app.toggle_settings();
         let config_pos = SettingsItem::all()
             .iter()
@@ -2116,5 +2446,582 @@ mod tests {
         // config_source should switch to Local
         assert_eq!(app.config_source, ConfigSource::Local);
         assert_eq!(app.local_config_path, Some(local_path));
+    }
+
+    // === vim search integration (n N *) ===
+
+    #[test]
+    fn star_jumps_to_next_occurrence_of_word_under_cursor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 0; // on 'f' of first "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 8, "cursor should jump to 'f' of second 'foo'");
+    }
+
+    #[test]
+    fn n_repeats_existing_find_query() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 0;
+        // Seed a find query via Ctrl+F path.
+        app.handle_key(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        // Overlay open — type 'foo'
+        for c in "foo".chars() {
+            app.handle_key(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // Close overlay with Enter: hides overlay, keeps find_state
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.find_state.is_some(), "find_state should survive Enter");
+        assert!(!app.find_state.as_ref().unwrap().overlay_visible, "overlay should be hidden");
+        let before = app.editor.cursor_col;
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_ne!(app.editor.cursor_col, before, "n should move to next match");
+    }
+
+    #[test]
+    fn star_from_second_occurrence_advances_to_third() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz foo\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 8; // second "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 16, "* from second 'foo' should jump to third 'foo' at col 16");
+    }
+
+    #[test]
+    fn star_from_last_occurrence_wraps_to_first() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("foo bar foo baz\n");
+        app.editor.cursor_line = 0;
+        app.editor.cursor_col = 8; // last "foo"
+        app.handle_key(KeyCode::Char('*'), KeyModifiers::NONE);
+        assert_eq!(app.editor.cursor_col, 0, "* from last 'foo' should wrap to first at col 0");
+    }
+
+    #[test]
+    fn ctrl_r_redoes() {
+        let mut app = App::new();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        app.editor.vim_mode = Mode::Insert;
+        app.editor.cursor_col = 5;
+        app.editor.handle_char('!');
+        app.editor.undo_history.commit_group();
+        app.editor.apply_action(Action::Undo);
+        assert_eq!(app.editor.buffer.to_string(), "hello\n");
+        app.handle_key(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(app.editor.buffer.to_string(), "hello!\n");
+    }
+
+    // === Mouse scroll ===
+
+    fn mouse_event(kind: crossterm::event::MouseEventKind, row: u16, col: u16) -> crossterm::event::MouseEvent {
+        crossterm::event::MouseEvent {
+            kind,
+            row,
+            column: col,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn scroll_down_moves_cursor_down_three_visual_lines() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.editor.cursor_line = 0;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollDown, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 3);
+    }
+
+    #[test]
+    fn scroll_up_moves_cursor_up_three_visual_lines() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.editor.cursor_line = 10;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollUp, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 7);
+    }
+
+    #[test]
+    fn scroll_swallowed_when_settings_open() {
+        let mut app = App::new();
+        let text = (0..20).map(|i| format!("Line {}\n", i)).collect::<String>();
+        app.editor.buffer = Buffer::from_text(&text);
+        app.toggle_settings();
+        app.editor.cursor_line = 5;
+        app.handle_mouse(
+            mouse_event(crossterm::event::MouseEventKind::ScrollDown, 0, 0),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 5, "scroll should not move cursor when Settings open");
+    }
+
+    #[test]
+    fn click_moves_cursor_to_buffer_position() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\nworld\n");
+        app.viewport.effective_column_width = 60;
+        app.viewport.scroll_offset = 0;
+        // Run a tick to set effective_column_width via the visual line cache.
+        let _ = app.tick(80, 24);
+        let term_width = 80u16;
+        let surface_left = (term_width - app.viewport.effective_column_width) / 2;
+
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                1,
+                surface_left + 3,
+            ),
+            term_width,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 1);
+        assert_eq!(app.editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn click_clears_existing_selection() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        app.editor.selection_anchor = Some((0, 0));
+        app.editor.cursor_col = 5;
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 2,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.selection_anchor, None);
+    }
+
+    #[test]
+    fn click_past_line_end_clamps_to_line_end() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hi\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 50,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_line, 0);
+        // "hi\n" line content len is 2; clamped to 2.
+        assert!(app.editor.cursor_col <= 2);
+    }
+
+    // === Drag and multi-click ===
+
+    #[test]
+    fn drag_extends_selection_from_anchor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+
+        // Down at col 0
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        // Drag to col 5
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 5,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.selection_anchor, Some((0, 0)));
+        assert_eq!(app.editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn release_clears_drag_anchor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        assert!(app.drag_anchor.is_some());
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                0,
+                surface_left,
+            ),
+            80,
+            24,
+        );
+        assert!(app.drag_anchor.is_none());
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        let now_col = surface_left + 7; // inside "world"
+
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                now_col,
+            ),
+            80,
+            24,
+        );
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                now_col,
+            ),
+            80,
+            24,
+        );
+        // "world" spans cols 6..=10.
+        assert_eq!(app.editor.selection_anchor, Some((0, 6)));
+        assert_eq!(app.editor.cursor_col, 10);
+    }
+
+    #[test]
+    fn triple_click_selects_line() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello world\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        let now_col = surface_left + 3;
+
+        for _ in 0..3 {
+            app.handle_mouse(
+                mouse_event(
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    0,
+                    now_col,
+                ),
+                80,
+                24,
+            );
+        }
+        assert_eq!(app.editor.selection_anchor, Some((0, 0)));
+        // "hello world" is 11 chars; end_col inclusive = 10.
+        assert_eq!(app.editor.cursor_col, 10);
+    }
+
+    // === Help overlay ===
+
+    #[test]
+    fn app_new_has_help_visible() {
+        let app = App::new();
+        assert!(app.help.visible);
+    }
+
+    #[test]
+    fn mouse_swallowed_while_help_visible() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.editor.buffer = Buffer::from_text("hello\n");
+        app.editor.cursor_col = 0;
+        let _ = app.tick(80, 24);
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                20,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_col, 0, "click should not move cursor while help is visible");
+        assert!(app.help.visible, "click should not dismiss help");
+    }
+
+    #[test]
+    fn from_config_with_help_disabled_starts_hidden() {
+        let mut config = Config::default();
+        config.show_help_on_launch = false;
+        let app = App::from_config(&config, ColorProfile::TrueColor, None);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn from_config_with_help_enabled_starts_visible() {
+        let mut config = Config::default();
+        config.show_help_on_launch = true;
+        let app = App::from_config(&config, ColorProfile::TrueColor, None);
+        assert!(app.help.visible);
+    }
+
+    #[test]
+    fn esc_dismisses_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn enter_dismisses_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!app.help.visible);
+    }
+
+    #[test]
+    fn other_keys_swallowed_while_help_visible() {
+        let mut app = App::new();
+        app.editor.editing_mode = EditingMode::Standard;
+        app.editor.vim_mode = Mode::Insert;
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let before = app.editor.buffer.to_string();
+        app.handle_key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(app.help.visible, "x should not dismiss help");
+        assert_eq!(app.editor.buffer.to_string(), before, "x should not reach editor");
+    }
+
+    // === Affordance bounding box ===
+
+    #[test]
+    fn affordance_box_none_when_help_visible() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when help visible");
+    }
+
+    #[test]
+    fn affordance_box_present_after_help_dismissed() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_some(), "affordance should render after help dismissed");
+    }
+
+    #[test]
+    fn affordance_box_at_bottom_left() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        let r = app.affordance_box.unwrap();
+        assert_eq!(r.row, 23, "affordance on last row");
+        assert_eq!(r.col, AffordanceRect::COL_OFFSET);
+        assert_eq!(r.width, AffordanceRect::WIDTH);
+    }
+
+    #[test]
+    fn affordance_box_suppressed_when_settings_open() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.toggle_settings();
+        let _ = app.tick(80, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when settings open");
+    }
+
+    #[test]
+    fn affordance_box_suppressed_when_terminal_too_narrow() {
+        let mut app = App::new();
+        app.help.dismiss();
+        // column_width default is 60; need 60 + 9 + 2 = 71. 70 is too narrow.
+        let _ = app.tick(70, 24);
+        assert!(app.affordance_box.is_none(), "affordance suppressed when no margin space");
+    }
+
+    #[test]
+    fn affordance_rect_contains_inside_point() {
+        let r = AffordanceRect { row: 23, col: 1, width: 9 };
+        assert!(r.contains(23, 1));
+        assert!(r.contains(23, 5));
+        assert!(r.contains(23, 9));
+        assert!(!r.contains(23, 10), "exclusive at right edge");
+        assert!(!r.contains(22, 5), "different row not contained");
+        assert!(!r.contains(23, 0), "left of col not contained");
+    }
+
+    // === Affordance click handling ===
+
+    #[test]
+    fn click_on_affordance_opens_settings() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let _ = app.tick(80, 24);
+        let rect = app.affordance_box.expect("affordance should be visible");
+        assert!(!app.settings.visible);
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                rect.row,
+                rect.col + 2, // inside the affordance
+            ),
+            80,
+            24,
+        );
+        assert!(app.settings.visible, "click on affordance should open settings");
+    }
+
+    #[test]
+    fn click_outside_affordance_routes_to_editor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let _ = app.tick(80, 24);
+        let surface_left = (80 - app.viewport.effective_column_width) / 2;
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                surface_left + 3,
+            ),
+            80,
+            24,
+        );
+        assert!(!app.settings.visible, "click outside affordance should not open settings");
+        assert_eq!(app.editor.cursor_col, 3, "cursor should move to clicked column");
+    }
+
+    #[test]
+    fn click_on_affordance_does_not_position_cursor() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.editor.buffer = Buffer::from_text("hello\n");
+        let starting_col = app.editor.cursor_col;
+        let _ = app.tick(80, 24);
+        let rect = app.affordance_box.expect("affordance should be visible");
+        app.handle_mouse(
+            mouse_event(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                rect.row,
+                rect.col,
+            ),
+            80,
+            24,
+        );
+        assert_eq!(app.editor.cursor_col, starting_col, "cursor should not move on affordance click");
+    }
+
+    // === show_help_on_launch toggle ===
+
+    #[test]
+    fn settings_apply_show_help_on_launch_toggles() {
+        let mut app = App::new();
+        assert!(app.show_help_on_launch);
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.settings_apply();
+        assert!(!app.show_help_on_launch);
+        app.settings_apply();
+        assert!(app.show_help_on_launch);
+    }
+
+    #[test]
+    fn settings_left_sets_show_help_off() {
+        let mut app = App::new();
+        app.help.dismiss();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.handle_key(KeyCode::Left, KeyModifiers::NONE);
+        assert!(!app.show_help_on_launch);
+    }
+
+    #[test]
+    fn settings_right_sets_show_help_on() {
+        let mut app = App::new();
+        app.show_help_on_launch = false;
+        app.help.dismiss();
+        app.toggle_settings();
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.handle_key(KeyCode::Right, KeyModifiers::NONE);
+        assert!(app.show_help_on_launch);
+    }
+
+    #[test]
+    fn current_config_reflects_show_help_on_launch() {
+        let mut app = App::new();
+        app.show_help_on_launch = false;
+        let config = app.current_config();
+        assert!(!config.show_help_on_launch);
+    }
+
+    #[test]
+    fn toggling_off_does_not_dismiss_current_help() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        app.settings.cursor = item_pos(SettingsItem::ShowHelpOnLaunch);
+        app.settings_apply();
+        assert!(!app.show_help_on_launch);
+        assert!(app.help.visible, "current session help should stay visible after toggle");
+    }
+
+    #[test]
+    fn ctrl_p_dismisses_help_and_opens_settings() {
+        let mut app = App::new();
+        assert!(app.help.visible);
+        assert!(!app.settings.visible);
+        app.handle_key(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(!app.help.visible, "Ctrl+P should dismiss help");
+        assert!(app.settings.visible, "Ctrl+P should open settings");
+    }
+
+    #[test]
+    fn dismiss_does_not_flip_persistent_toggle() {
+        let mut app = App::new();
+        assert!(app.show_help_on_launch, "default persistent flag is true");
+        assert!(app.help.visible);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.help.visible, "Esc dismissed the dialog");
+        assert!(app.show_help_on_launch, "persistent toggle should be unchanged by dismiss");
     }
 }

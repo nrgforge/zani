@@ -15,6 +15,39 @@ struct ParagraphBoundsCache {
     bounds: Option<(usize, usize)>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionKind {
+    #[default]
+    CharWise,
+    LineWise,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LastFind {
+    pub ch: char,
+    pub kind: crate::vim_bindings::FindKind,
+    pub dir: crate::vim_bindings::FindDir,
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum LastChange {
+    #[default]
+    None,
+    /// A single-shot mutating action (x, dd, J, ~, r<c>, p, P, yy, etc.).
+    Action(Action),
+    /// An insert sequence: the entry action (i/a/o/...) plus typed text.
+    InsertSequence { entry: Action, text: String },
+}
+
+/// Signal from the editor to App that a search navigation was requested.
+/// App reads this after `editor.handle_key` returns and routes through FindState.
+#[derive(Debug, Clone, Copy)]
+pub enum SearchRequest {
+    Next,
+    Prev,
+    WordUnderCursor,
+}
+
 /// Text editor core: buffer, cursor, undo, selection, and vim state.
 pub struct Editor {
     pub buffer: Buffer,
@@ -28,6 +61,17 @@ pub struct Editor {
     pub undo_history: UndoHistory,
     pub dirty: bool,
     paragraph_cache: Option<ParagraphBoundsCache>,
+    pub pending_count: Option<u32>,
+    pub last_find: Option<LastFind>,
+    pub last_change: LastChange,
+    pub selection_kind: SelectionKind,
+    /// Set by n/N/* handlers; read by App::handle_key to route through FindState.
+    pub pending_search: Option<SearchRequest>,
+    /// Char index marking where the current Insert session began
+    /// (set when entering Insert via a mutating action; cleared on Escape).
+    pub insert_start_char_idx: Option<usize>,
+    /// The action that entered the current Insert session, recorded for `.`.
+    pub insert_entry_action: Option<Action>,
 }
 
 impl Default for Editor {
@@ -50,6 +94,13 @@ impl Editor {
             undo_history: UndoHistory::new(),
             dirty: false,
             paragraph_cache: None,
+            pending_count: None,
+            last_find: None,
+            last_change: LastChange::default(),
+            selection_kind: SelectionKind::default(),
+            pending_search: None,
+            insert_start_char_idx: None,
+            insert_entry_action: None,
         }
     }
 
@@ -171,7 +222,6 @@ impl Editor {
             if ch.is_control() {
                 return false;
             }
-            // Selection replaces on type
             if self.selection_anchor.is_some() {
                 self.delete_selection_silent();
                 self.selection_anchor = None;
@@ -180,9 +230,23 @@ impl Editor {
             return false;
         }
 
+        // Count parsing (Normal/Visual only, not Insert).
+        // '1'-'9' starts a count; '0' appends only when a count is already in progress
+        // (else it's LineStart). Counts cap at 9999.
+        if matches!(self.vim_mode, Mode::Normal | Mode::Visual)
+            && self.pending_normal_key.is_none()
+        {
+            if ch.is_ascii_digit() && (ch != '0' || self.pending_count.is_some()) {
+                let digit = (ch as u32) - ('0' as u32);
+                let next = self.pending_count.unwrap_or(0).saturating_mul(10).saturating_add(digit);
+                self.pending_count = Some(next.min(9999));
+                return false;
+            }
+        }
+
         let action = match self.vim_mode {
             Mode::Normal => {
-                if ch == 'q' {
+                if ch == 'q' && self.pending_count.is_none() {
                     return true;
                 }
                 let pending = self.pending_normal_key.take();
@@ -199,40 +263,93 @@ impl Editor {
             Mode::Insert => vim_bindings::handle_insert(ch),
         };
 
-        self.apply_action(action);
+        // If a pending key was just set (e.g. the first 'd' of 'dd'), the
+        // sequence is incomplete. Hold the count for the completing keystroke.
+        if self.pending_normal_key.is_some() {
+            return false;
+        }
+
+        // Apply count if one was accumulated and the action is countable.
+        let count = self.pending_count.take().unwrap_or(1);
+        if count > 1 && Self::is_countable(&action) {
+            for _ in 0..count {
+                self.apply_action(action.clone());
+            }
+        } else {
+            self.apply_action(action);
+        }
+
         false
+    }
+
+    /// Whether an action is safe to repeat under a count multiplier.
+    /// Pure motions and `dd`/`x` are countable; mode switches and pending-key
+    /// holders (Action::None) are not.
+    fn is_countable(action: &Action) -> bool {
+        matches!(action,
+            Action::MoveCursor(_)
+                | Action::WordForward | Action::WordBackward | Action::WordEnd
+                | Action::ParagraphForward | Action::ParagraphBackward
+                | Action::SentenceForward | Action::SentenceBackward
+                | Action::DeleteChar | Action::DeleteLine
+                | Action::RepeatFind | Action::RepeatFindReversed
+                | Action::NextMatch | Action::PrevMatch
+        )
     }
 
     /// Process Escape key.
     pub fn handle_escape(&mut self) {
+        self.pending_count = None;
+        self.pending_normal_key = None;
         if self.editing_mode == EditingMode::Standard {
             // In Standard mode, Escape just clears selection
             self.selection_anchor = None;
         } else if self.vim_mode == Mode::Visual {
             self.selection_anchor = None;
+            self.selection_kind = SelectionKind::CharWise;
             self.vim_mode = Mode::Normal;
         } else if self.vim_mode == Mode::Insert {
+            if let (Some(start_idx), Some(entry)) =
+                (self.insert_start_char_idx.take(), self.insert_entry_action.take())
+            {
+                let end_idx = self.cursor_char_index();
+                if end_idx > start_idx {
+                    let text = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.last_change = LastChange::InsertSequence { entry, text };
+                }
+            }
             self.vim_mode = Mode::Normal;
         }
     }
 
     pub fn apply_action(&mut self, action: Action) {
+        // Snapshot for `.` repeat — done at top so even no-op'd actions
+        // record their intent (vim records the attempt).
+        self.record_last_change(&action);
         match action {
             Action::SwitchMode(mode) => {
                 // In Standard mode, vim_mode must stay Insert
                 if self.editing_mode != EditingMode::Standard {
+                    if mode == Mode::Insert {
+                        self.insert_start_char_idx = Some(self.cursor_char_index());
+                        self.insert_entry_action = Some(Action::SwitchMode(Mode::Insert));
+                    }
                     self.vim_mode = mode;
                 }
             }
             Action::AppendMode => {
-                let line_len = self.buffer.line(self.cursor_line).len_chars();
-                if self.cursor_col < line_len {
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
                     self.cursor_col += 1;
                 }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::AppendMode);
                 self.vim_mode = Mode::Insert;
             }
             Action::AppendEndOfLine => {
                 self.cursor_col = self.line_content_len(self.cursor_line);
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::AppendEndOfLine);
                 self.vim_mode = Mode::Insert;
             }
             Action::InsertChar(ch) => {
@@ -324,6 +441,8 @@ impl Editor {
                 self.cursor_col = 0;
                 self.dirty = true;
                 self.undo_history.commit_group();
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::OpenLineBelow);
                 self.vim_mode = Mode::Insert;
             }
             Action::OpenLineAbove => {
@@ -334,22 +453,61 @@ impl Editor {
                 self.cursor_col = 0;
                 self.dirty = true;
                 self.undo_history.commit_group();
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::OpenLineAbove);
                 self.vim_mode = Mode::Insert;
             }
             Action::EnterVisual => {
                 self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Visual;
             }
             Action::Yank => {
-                if let Some(text) = self.selected_text() {
+                if self.selection_kind == SelectionKind::LineWise {
+                    if let Some((sl, _, el, _)) = self.selection_range() {
+                        let start_idx = self.buffer.line_to_char(sl);
+                        let end_idx = if el + 1 < self.buffer.len_lines() {
+                            self.buffer.line_to_char(el + 1)
+                        } else {
+                            self.buffer.len_chars()
+                        };
+                        let text = self.buffer.slice_to_string(start_idx, end_idx);
+                        clipboard::write_osc52(&text);
+                        self.yank_register = Some(text);
+                    }
+                } else if let Some(text) = self.selected_text() {
                     clipboard::write_osc52(&text);
                     self.yank_register = Some(text);
                 }
                 self.selection_anchor = None;
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Normal;
             }
             Action::DeleteSelection => {
-                if let Some((sl, sc, el, ec)) = self.selection_range() {
+                if self.selection_kind == SelectionKind::LineWise {
+                    if let Some((sl, _, el, _)) = self.selection_range() {
+                        let start_idx = self.buffer.line_to_char(sl);
+                        let end_idx = if el + 1 < self.buffer.len_lines() {
+                            self.buffer.line_to_char(el + 1)
+                        } else {
+                            self.buffer.len_chars()
+                        };
+                        let text = self.buffer.slice_to_string(start_idx, end_idx);
+                        clipboard::write_osc52(&text);
+                        self.undo_history.commit_group();
+                        self.undo_history.record_delete(start_idx, &text);
+                        self.yank_register = Some(text);
+                        self.undo_history.commit_group();
+                        self.buffer.remove(start_idx, end_idx);
+                        self.dirty = true;
+                        self.cursor_line = sl;
+                        self.cursor_col = 0;
+                        if self.cursor_line >= self.buffer.len_lines() {
+                            self.cursor_line = self.buffer.len_lines().saturating_sub(1);
+                        }
+                        self.clamp_cursor_col();
+                    }
+                } else if let Some((sl, sc, el, ec)) = self.selection_range() {
                     if let Some(text) = self.selected_text() {
                         clipboard::write_osc52(&text);
                         self.yank_register = Some(text);
@@ -367,6 +525,7 @@ impl Editor {
                     self.clamp_cursor_col();
                 }
                 self.selection_anchor = None;
+                self.selection_kind = SelectionKind::CharWise;
                 self.vim_mode = Mode::Normal;
             }
             Action::PasteAfter => {
@@ -485,8 +644,326 @@ impl Editor {
                     self.dirty = true;
                 }
             }
+            Action::ParagraphBackward => {
+                let total = self.buffer.len_lines();
+                if total == 0 || self.cursor_line == 0 {
+                    self.cursor_line = 0;
+                    self.cursor_col = 0;
+                    return;
+                }
+                let mut line = self.cursor_line - 1;
+                // Skip the blank line we may be on already.
+                while line > 0 && self.line_is_blank(line) {
+                    line -= 1;
+                }
+                // Walk backward until blank or top.
+                while line > 0 && !self.line_is_blank(line) {
+                    line -= 1;
+                }
+                self.cursor_line = line;
+                self.cursor_col = 0;
+            }
+            Action::ParagraphForward => {
+                let total = self.buffer.len_lines();
+                if total == 0 {
+                    return;
+                }
+                // Ropey creates a trailing empty line after a terminal '\n'; exclude it
+                // so navigation does not land on that synthetic line.
+                let effective_total = if total > 1
+                    && self.buffer.line(total - 1).len_chars() == 0
+                {
+                    total - 1
+                } else {
+                    total
+                };
+                let mut line = self.cursor_line;
+                // Skip the blank line we may be on already.
+                while line + 1 < effective_total && self.line_is_blank(line) {
+                    line += 1;
+                }
+                // Walk forward until blank or end.
+                while line + 1 < effective_total && !self.line_is_blank(line) {
+                    line += 1;
+                }
+                self.cursor_line = line;
+                self.cursor_col = 0;
+            }
+            Action::SentenceForward => {
+                let cur = self.cursor_char_index();
+                let len = self.buffer.len_chars();
+                if cur >= len {
+                    return;
+                }
+                if let Some((_, end)) = crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, cur) {
+                    let target = (end + 1).min(len.saturating_sub(1));
+                    self.set_cursor_from_char_index(target);
+                } else {
+                    self.set_cursor_from_char_index(len.saturating_sub(1));
+                }
+            }
+            Action::SentenceBackward => {
+                let cur = self.cursor_char_index();
+                if cur == 0 {
+                    return;
+                }
+                let target = match crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, cur) {
+                    Some((start, _)) if start < cur => start,
+                    _ => {
+                        // Already at start of current sentence — go back further.
+                        let probe = cur.saturating_sub(1);
+                        crate::focus_mode::sentence_bounds_in_buffer(&self.buffer, probe)
+                            .map(|(s, _)| s)
+                            .unwrap_or(0)
+                    }
+                };
+                self.set_cursor_from_char_index(target);
+            }
+            Action::FindChar { ch, kind, dir } => {
+                self.execute_find_char(ch, kind, dir);
+                self.last_find = Some(LastFind { ch, kind, dir });
+            }
+            Action::RepeatFind => {
+                if let Some(lf) = self.last_find {
+                    self.execute_find_char(lf.ch, lf.kind, lf.dir);
+                }
+            }
+            Action::RepeatFindReversed => {
+                if let Some(lf) = self.last_find {
+                    let reversed = match lf.dir {
+                        crate::vim_bindings::FindDir::Forward => crate::vim_bindings::FindDir::Backward,
+                        crate::vim_bindings::FindDir::Backward => crate::vim_bindings::FindDir::Forward,
+                    };
+                    self.execute_find_char(lf.ch, lf.kind, reversed);
+                }
+            }
+            Action::NextMatch => {
+                self.pending_search = Some(SearchRequest::Next);
+            }
+            Action::PrevMatch => {
+                self.pending_search = Some(SearchRequest::Prev);
+            }
+            Action::SearchWordUnderCursor => {
+                self.pending_search = Some(SearchRequest::WordUnderCursor);
+            }
+            Action::InsertAtLineStart => {
+                let line = self.buffer.line(self.cursor_line);
+                let chars: Vec<char> = line.chars().collect();
+                let content_len = self.line_content_len(self.cursor_line);
+                let mut col = 0;
+                while col < chars.len() && chars[col].is_whitespace() && chars[col] != '\n' {
+                    col += 1;
+                }
+                self.cursor_col = if col >= content_len { 0 } else { col };
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::InsertAtLineStart);
+                self.vim_mode = Mode::Insert;
+            }
+            Action::DeleteToLineEnd => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let start_idx = line_start + self.cursor_col;
+                let end_idx = line_start + content_len;
+                if end_idx > start_idx {
+                    let deleted = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(start_idx, &deleted);
+                    self.undo_history.commit_group();
+                    self.buffer.remove(start_idx, end_idx);
+                    self.dirty = true;
+                    let new_content_len = self.line_content_len(self.cursor_line);
+                    self.cursor_col = self.cursor_col.min(new_content_len.saturating_sub(1));
+                }
+            }
+            Action::ChangeToLineEnd => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let start_idx = line_start + self.cursor_col;
+                let end_idx = line_start + content_len;
+                if end_idx > start_idx {
+                    let deleted = self.buffer.slice_to_string(start_idx, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(start_idx, &deleted);
+                    self.buffer.remove(start_idx, end_idx);
+                    self.dirty = true;
+                }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::ChangeToLineEnd);
+                self.vim_mode = Mode::Insert;
+            }
+            Action::SubstituteLine => {
+                let line_start = self.line_start_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                let end_idx = line_start + content_len;
+                if end_idx > line_start {
+                    let deleted = self.buffer.slice_to_string(line_start, end_idx);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(line_start, &deleted);
+                    self.buffer.remove(line_start, end_idx);
+                    self.dirty = true;
+                }
+                self.cursor_col = 0;
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::SubstituteLine);
+                self.vim_mode = Mode::Insert;
+            }
+            Action::SubstituteChar => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
+                    let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(idx, &deleted);
+                    self.buffer.remove(idx, idx + 1);
+                    self.dirty = true;
+                }
+                self.insert_start_char_idx = Some(self.cursor_char_index());
+                self.insert_entry_action = Some(Action::SubstituteChar);
+                self.vim_mode = Mode::Insert;
+            }
+            Action::YankLine => {
+                let line_start = self.line_start_char_index();
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                if line_len > 0 {
+                    let text = self.buffer.slice_to_string(line_start, line_start + line_len);
+                    clipboard::write_osc52(&text);
+                    self.yank_register = Some(text);
+                }
+            }
+            Action::ReplaceChar(c) => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col < content_len {
+                    let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                    self.undo_history.commit_group();
+                    self.undo_history.record_delete(idx, &deleted);
+                    self.buffer.remove(idx, idx + 1);
+                    let s = c.to_string();
+                    self.undo_history.record_insert(idx, &s);
+                    self.buffer.insert(idx, &s);
+                    self.undo_history.commit_group();
+                    self.dirty = true;
+                }
+            }
+            Action::JoinLine => {
+                let total = self.buffer.len_lines();
+                // Exclude the phantom empty line that ropey adds after a terminal '\n'.
+                let effective_total = if total > 1
+                    && self.buffer.line(total - 1).len_chars() == 0
+                {
+                    total - 1
+                } else {
+                    total
+                };
+                if self.cursor_line + 1 >= effective_total {
+                    return;
+                }
+                let line_start = self.line_start_char_index();
+                let line_len = self.buffer.line(self.cursor_line).len_chars();
+                if line_len == 0 {
+                    return;
+                }
+                // Index of the newline at the end of the current line.
+                let newline_idx = line_start + line_len - 1;
+                if self.buffer.char_at(newline_idx) != '\n' {
+                    return;
+                }
+                // Skip leading whitespace on the next line (but not its own newline).
+                let next_start = line_start + line_len;
+                let next_line = self.buffer.line(self.cursor_line + 1);
+                let mut skip = 0;
+                for ch in next_line.chars() {
+                    if ch.is_whitespace() && ch != '\n' {
+                        skip += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let remove_end = next_start + skip;
+                let deleted = self.buffer.slice_to_string(newline_idx, remove_end);
+                self.undo_history.commit_group();
+                self.undo_history.record_delete(newline_idx, &deleted);
+                self.buffer.remove(newline_idx, remove_end);
+                self.undo_history.record_insert(newline_idx, " ");
+                self.buffer.insert(newline_idx, " ");
+                self.undo_history.commit_group();
+                self.dirty = true;
+                // Land on the space just inserted — valid Normal mode position.
+                self.cursor_col = line_len - 1;
+            }
+            Action::ToggleCase => {
+                let idx = self.cursor_char_index();
+                let content_len = self.line_content_len(self.cursor_line);
+                if self.cursor_col >= content_len {
+                    return;
+                }
+                let original = self.buffer.char_at(idx);
+                let toggled: String = if original.is_lowercase() {
+                    original.to_uppercase().collect()
+                } else if original.is_uppercase() {
+                    original.to_lowercase().collect()
+                } else {
+                    return;
+                };
+                let deleted = self.buffer.slice_to_string(idx, idx + 1);
+                self.undo_history.commit_group();
+                self.undo_history.record_delete(idx, &deleted);
+                self.buffer.remove(idx, idx + 1);
+                self.undo_history.record_insert(idx, &toggled);
+                self.buffer.insert(idx, &toggled);
+                self.undo_history.commit_group();
+                self.dirty = true;
+                // Advance cursor, but don't land on the newline (Normal mode max = content_len - 1).
+                if self.cursor_col + 1 < content_len {
+                    self.cursor_col += 1;
+                }
+            }
+            Action::EnterLinewiseVisual => {
+                self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.selection_kind = SelectionKind::LineWise;
+                self.vim_mode = Mode::Visual;
+            }
+            Action::Repeat => {
+                let last = self.last_change.clone();
+                match last {
+                    LastChange::None => {}
+                    LastChange::Action(a) => {
+                        self.apply_action(a);
+                    }
+                    LastChange::InsertSequence { entry, text } => {
+                        self.apply_action(entry);
+                        for c in text.chars() {
+                            if c == '\n' {
+                                self.apply_action(Action::InsertNewline);
+                            } else {
+                                self.insert_char(c);
+                            }
+                        }
+                        self.vim_mode = Mode::Normal;
+                        self.insert_start_char_idx = None;
+                        self.insert_entry_action = None;
+                    }
+                }
+            }
             Action::None => {}
         }
+    }
+
+    /// Record an action as the last change, for `.` to replay.
+    fn record_last_change(&mut self, action: &Action) {
+        if Self::is_repeatable_change(action) {
+            self.last_change = LastChange::Action(action.clone());
+        }
+    }
+
+    fn is_repeatable_change(action: &Action) -> bool {
+        matches!(action,
+            Action::DeleteChar | Action::DeleteLine
+                | Action::DeleteToLineEnd | Action::DeleteSelection
+                | Action::JoinLine | Action::ToggleCase
+                | Action::ReplaceChar(_)
+                | Action::PasteAfter | Action::PasteBefore | Action::PasteAtCursor
+        )
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -566,6 +1043,11 @@ impl Editor {
         } else {
             len
         }
+    }
+
+    /// True if the given line contains only whitespace (or is empty).
+    fn line_is_blank(&self, line: usize) -> bool {
+        self.buffer.line(line).chars().all(|c| c.is_whitespace())
     }
 
     /// Find the visual line index containing (cursor_line, cursor_col).
@@ -683,6 +1165,62 @@ impl Editor {
         }
 
         self.set_cursor_from_char_index(idx.min(len.saturating_sub(1)));
+    }
+
+    /// Find a character on the current line and place the cursor accordingly.
+    fn execute_find_char(
+        &mut self,
+        ch: char,
+        kind: crate::vim_bindings::FindKind,
+        dir: crate::vim_bindings::FindDir,
+    ) {
+        use crate::vim_bindings::{FindDir, FindKind};
+        let line = self.buffer.line(self.cursor_line);
+        let chars: Vec<char> = line.chars().collect();
+        let content_len = self.line_content_len(self.cursor_line);
+        let start_col = self.cursor_col;
+
+        let target_col: Option<usize> = match dir {
+            FindDir::Forward => {
+                let mut i = start_col + 1;
+                let mut found = None;
+                while i < content_len {
+                    if chars.get(i) == Some(&ch) {
+                        found = Some(i);
+                        break;
+                    }
+                    i += 1;
+                }
+                found
+            }
+            FindDir::Backward => {
+                if start_col == 0 {
+                    None
+                } else {
+                    let mut i = start_col;
+                    let mut found = None;
+                    loop {
+                        i -= 1;
+                        if chars.get(i) == Some(&ch) {
+                            found = Some(i);
+                            break;
+                        }
+                        if i == 0 {
+                            break;
+                        }
+                    }
+                    found
+                }
+            }
+        };
+
+        if let Some(col) = target_col {
+            self.cursor_col = match (kind, dir) {
+                (FindKind::Find, _) => col,
+                (FindKind::Till, FindDir::Forward) => col.saturating_sub(1),
+                (FindKind::Till, FindDir::Backward) => (col + 1).min(content_len),
+            };
+        }
     }
 
     /// Set cursor position from an absolute char index in the buffer.
@@ -830,10 +1368,16 @@ impl Editor {
     pub fn selection_range(&self) -> Option<(usize, usize, usize, usize)> {
         let (anchor_line, anchor_col) = self.selection_anchor?;
         let (cl, cc) = (self.cursor_line, self.cursor_col);
-        if (anchor_line, anchor_col) <= (cl, cc) {
-            Some((anchor_line, anchor_col, cl, cc))
+        let (sl, sc, el, ec) = if (anchor_line, anchor_col) <= (cl, cc) {
+            (anchor_line, anchor_col, cl, cc)
         } else {
-            Some((cl, cc, anchor_line, anchor_col))
+            (cl, cc, anchor_line, anchor_col)
+        };
+        if self.selection_kind == SelectionKind::LineWise {
+            let end_content_len = self.line_content_len(el);
+            Some((sl, 0, el, end_content_len.saturating_sub(1)))
+        } else {
+            Some((sl, sc, el, ec))
         }
     }
 
@@ -857,6 +1401,49 @@ impl Editor {
         self.cursor_col = 0;
         self.undo_history = UndoHistory::new();
         self.selection_anchor = None;
+        self.pending_count = None;
+        self.pending_normal_key = None;
+        self.last_find = None;
+        self.last_change = LastChange::None;
+        self.selection_kind = SelectionKind::CharWise;
+        self.pending_search = None;
+        self.insert_start_char_idx = None;
+        self.insert_entry_action = None;
+        self.vim_mode = Mode::Normal;
+    }
+
+    /// Return the (start_col, end_col_inclusive) of the word at the given
+    /// position, using alphanumeric+`_` as word chars. Returns None if the
+    /// position is on whitespace.
+    pub fn word_range_at(&self, line: usize, col: usize) -> Option<(usize, usize)> {
+        if line >= self.buffer.len_lines() {
+            return None;
+        }
+        let line_slice = self.buffer.line(line);
+        let chars: Vec<char> = line_slice.chars().collect();
+        if col >= chars.len() {
+            return None;
+        }
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        if !is_word(chars[col]) {
+            return None;
+        }
+        let mut start = col;
+        while start > 0 && is_word(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < chars.len() && is_word(chars[end + 1]) {
+            end += 1;
+        }
+        Some((start, end))
+    }
+
+    /// Return (start_col, end_col_inclusive) covering the entire line content
+    /// (excluding the trailing newline).
+    pub fn line_range_at(&self, line: usize) -> (usize, usize) {
+        let len = self.line_content_len(line);
+        (0, len.saturating_sub(1))
     }
 }
 
@@ -1722,6 +2309,21 @@ mod tests {
         editor.dirty = true;
         editor.selection_anchor = Some((0, 2));
 
+        // Populate all new state fields introduced in vim expansion
+        editor.pending_count = Some(5);
+        editor.pending_normal_key = Some('d');
+        editor.last_find = Some(LastFind {
+            ch: 'e',
+            kind: crate::vim_bindings::FindKind::Find,
+            dir: crate::vim_bindings::FindDir::Forward,
+        });
+        editor.last_change = LastChange::Action(Action::DeleteChar);
+        editor.selection_kind = SelectionKind::LineWise;
+        editor.pending_search = Some(SearchRequest::Next);
+        editor.insert_start_char_idx = Some(3);
+        editor.insert_entry_action = Some(Action::AppendMode);
+        editor.vim_mode = Mode::Visual;
+
         editor.reset_to_content("new content\n");
 
         assert_eq!(editor.buffer.to_string(), "new content\n");
@@ -1729,6 +2331,15 @@ mod tests {
         assert_eq!(editor.cursor_line, 0);
         assert_eq!(editor.cursor_col, 0);
         assert_eq!(editor.selection_anchor, None);
+        assert_eq!(editor.pending_count, None);
+        assert_eq!(editor.pending_normal_key, None);
+        assert!(editor.last_find.is_none());
+        assert!(matches!(editor.last_change, LastChange::None));
+        assert_eq!(editor.selection_kind, SelectionKind::CharWise);
+        assert!(editor.pending_search.is_none());
+        assert_eq!(editor.insert_start_char_idx, None);
+        assert_eq!(editor.insert_entry_action, None);
+        assert_eq!(editor.vim_mode, Mode::Normal);
     }
 
     // === can_vim_navigate ===
@@ -1775,5 +2386,487 @@ mod tests {
         editor.set_editing_mode(EditingMode::Vim);
         assert_eq!(editor.editing_mode, EditingMode::Vim);
         assert_eq!(editor.vim_mode, Mode::Normal);
+    }
+
+    // === Count tests ===
+
+    #[test]
+    fn count_5j_moves_down_5_visual_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\nf\n");
+        editor.cursor_line = 0;
+        editor.handle_char('5');
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 5);
+        assert_eq!(editor.pending_count, None, "count should clear after dispatch");
+    }
+
+    #[test]
+    fn count_3w_advances_three_words() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("one two three four five\n");
+        editor.cursor_col = 0;
+        editor.handle_char('3');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 14); // "four"
+    }
+
+    #[test]
+    fn count_3dd_deletes_three_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\n");
+        editor.cursor_line = 0;
+        editor.handle_char('3');
+        editor.handle_char('d');
+        editor.handle_char('d');
+        assert_eq!(editor.buffer.to_string(), "d\ne\n");
+    }
+
+    #[test]
+    fn count_with_leading_zero_appends() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text((0..15).map(|_| "x\n").collect::<String>().as_str());
+        editor.cursor_line = 0;
+        editor.handle_char('1');
+        editor.handle_char('0');
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 10);
+    }
+
+    #[test]
+    fn zero_alone_still_goes_to_line_start() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('0');
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.pending_count, None);
+    }
+
+    #[test]
+    fn count_clamps_at_9999() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\n");
+        for _ in 0..6 {
+            editor.handle_char('9');
+        }
+        assert_eq!(editor.pending_count, Some(9999));
+    }
+
+    #[test]
+    fn escape_clears_pending_count() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\ne\n");
+        editor.cursor_line = 0;
+        editor.handle_char('5');
+        assert_eq!(editor.pending_count, Some(5));
+        editor.handle_escape();
+        assert_eq!(editor.pending_count, None);
+        editor.handle_char('j');
+        assert_eq!(editor.cursor_line, 1, "should move 1 line, not 5, after Escape cleared the count");
+    }
+
+    #[test]
+    fn escape_clears_pending_normal_key() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\n");
+        editor.handle_char('g'); // pending gg
+        assert_eq!(editor.pending_normal_key, Some('g'));
+        editor.handle_escape();
+        assert_eq!(editor.pending_normal_key, None);
+    }
+
+    // === Paragraph and sentence motions ===
+
+    #[test]
+    fn brace_close_jumps_to_next_paragraph() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first line\nstill first\n\nsecond para\nmore\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char('}');
+        // Lands on the blank-line boundary (line 2) — vim behavior.
+        assert_eq!(editor.cursor_line, 2);
+    }
+
+    #[test]
+    fn brace_open_jumps_to_previous_paragraph() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\n\nsecond\nthird\n");
+        editor.cursor_line = 3;
+        editor.cursor_col = 0;
+        editor.handle_char('{');
+        assert_eq!(editor.cursor_line, 1); // blank line
+    }
+
+    #[test]
+    fn brace_close_at_end_stays_at_last_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("only\n");
+        editor.cursor_line = 0;
+        editor.handle_char('}');
+        // No next blank line: jump to last line.
+        assert_eq!(editor.cursor_line, 0);
+    }
+
+    #[test]
+    fn paren_close_advances_one_sentence() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First sentence. Second sentence. Third.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char(')');
+        // Should land at start of "Second" — char index 16.
+        assert!(editor.cursor_col >= 16, "expected to advance past 'First sentence. ', got col {}", editor.cursor_col);
+    }
+
+    #[test]
+    fn paren_open_returns_to_sentence_start() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("First sentence. Second sentence.\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 20; // mid-second-sentence
+        editor.handle_char('(');
+        // Should land back at start of "Second" (col 16) or start of "First" (col 0).
+        assert!(editor.cursor_col < 20);
+    }
+
+    // === Find-char tests ===
+
+    #[test]
+    fn f_finds_char_forward_on_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 6);
+        assert!(editor.last_find.is_some());
+    }
+
+    #[test]
+    fn t_lands_one_before_char() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 0;
+        editor.handle_char('t');
+        editor.handle_char('w');
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn big_f_finds_backward() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 10;
+        editor.handle_char('F');
+        editor.handle_char('h');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn big_t_lands_one_after_char_backward() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 10;
+        editor.handle_char('T');
+        editor.handle_char('h');
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn f_with_no_match_does_not_move() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('z');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn semicolon_repeats_last_find() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a.b.c.d\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('.');
+        assert_eq!(editor.cursor_col, 1);
+        editor.handle_char(';');
+        assert_eq!(editor.cursor_col, 3);
+        editor.handle_char(';');
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn comma_repeats_last_find_reversed() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a.b.c.d\n");
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('.');
+        editor.handle_char(';');
+        editor.handle_char(';'); // now at col 5
+        assert_eq!(editor.cursor_col, 5);
+        editor.handle_char(',');
+        assert_eq!(editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn find_does_not_cross_line_boundary() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 0;
+        editor.handle_char('f');
+        editor.handle_char('w');
+        // No 'w' on line 0; should not move.
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.cursor_line, 0);
+    }
+
+    // === vim search integration (n N *) ===
+
+    #[test]
+    fn n_in_normal_sets_pending_search_next() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.handle_char('n');
+        assert!(matches!(editor.pending_search, Some(SearchRequest::Next)));
+    }
+
+    #[test]
+    fn star_sets_pending_search_word() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("foo bar foo\n");
+        editor.handle_char('*');
+        assert!(matches!(editor.pending_search, Some(SearchRequest::WordUnderCursor)));
+    }
+
+    // === I D C S s ===
+
+    #[test]
+    fn big_i_jumps_to_first_non_whitespace_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("    hello\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 7;
+        editor.handle_char('I');
+        assert_eq!(editor.cursor_col, 4);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn big_i_on_all_whitespace_lands_at_col_zero() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("    \n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 2;
+        editor.handle_char('I');
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn big_d_deletes_to_end_of_line() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('D');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+        assert_eq!(editor.vim_mode, Mode::Normal);
+        assert_eq!(editor.cursor_col, 4, "cursor should land on last content char (Normal mode)");
+    }
+
+    #[test]
+    fn big_c_deletes_to_end_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 5;
+        editor.handle_char('C');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn big_s_clears_line_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello world\n");
+        editor.cursor_col = 4;
+        editor.handle_char('S');
+        assert_eq!(editor.buffer.to_string(), "\n");
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    #[test]
+    fn small_s_deletes_char_and_enters_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 1;
+        editor.handle_char('s');
+        assert_eq!(editor.buffer.to_string(), "hllo\n");
+        assert_eq!(editor.cursor_col, 1);
+        assert_eq!(editor.vim_mode, Mode::Insert);
+    }
+
+    // === yy r J ~ ===
+
+    #[test]
+    fn yy_yanks_full_line_with_newline() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.handle_char('y');
+        editor.handle_char('y');
+        assert_eq!(editor.yank_register, Some("hello\n".to_string()));
+        assert_eq!(editor.buffer.to_string(), "hello\nworld\n", "yy should not modify buffer");
+    }
+
+    #[test]
+    fn r_replaces_char_under_cursor_no_insert() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 1;
+        editor.handle_char('r');
+        editor.handle_char('X');
+        assert_eq!(editor.buffer.to_string(), "hXllo\n");
+        assert_eq!(editor.vim_mode, Mode::Normal);
+    }
+
+    #[test]
+    fn j_joins_next_line_with_space() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\nworld\n");
+        editor.cursor_line = 0;
+        editor.handle_char('J');
+        assert_eq!(editor.buffer.to_string(), "hello world\n");
+    }
+
+    #[test]
+    fn j_on_last_line_is_noop() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("only\n");
+        editor.cursor_line = 0;
+        editor.handle_char('J');
+        assert_eq!(editor.buffer.to_string(), "only\n");
+    }
+
+    #[test]
+    fn tilde_toggles_case_and_advances() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 0;
+        editor.handle_char('~');
+        assert_eq!(editor.buffer.to_string(), "Hello\n");
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    // === V (linewise visual) ===
+
+    #[test]
+    fn big_v_enters_visual_with_linewise_kind() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 3;
+        editor.handle_char('V');
+        assert_eq!(editor.vim_mode, Mode::Visual);
+        assert_eq!(editor.selection_kind, SelectionKind::LineWise);
+        assert_eq!(editor.selection_anchor, Some((0, 3)));
+    }
+
+    #[test]
+    fn v_resets_selection_kind_to_charwise() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.handle_char('V');
+        editor.handle_escape();
+        editor.handle_char('v');
+        assert_eq!(editor.selection_kind, SelectionKind::CharWise);
+    }
+
+    #[test]
+    fn linewise_visual_d_deletes_whole_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        editor.cursor_line = 0;
+        editor.cursor_col = 2;
+        editor.handle_char('V');
+        editor.handle_char('j'); // extend to line 1
+        editor.handle_char('d');
+        assert_eq!(editor.buffer.to_string(), "third\n");
+    }
+
+    #[test]
+    fn linewise_visual_y_yanks_whole_lines() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("first\nsecond\nthird\n");
+        editor.cursor_line = 0;
+        editor.handle_char('V');
+        editor.handle_char('j');
+        editor.handle_char('y');
+        assert_eq!(editor.yank_register, Some("first\nsecond\n".to_string()));
+    }
+
+    #[test]
+    fn u_in_normal_undoes() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.vim_mode = Mode::Insert;
+        editor.cursor_col = 5;
+        editor.handle_char('!');
+        editor.undo_history.commit_group();
+        editor.handle_escape();
+        editor.handle_char('u');
+        assert_eq!(editor.buffer.to_string(), "hello\n");
+    }
+
+    // === . repeat ===
+
+    #[test]
+    fn dot_repeats_x() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("abcdef\n");
+        editor.cursor_col = 0;
+        editor.handle_char('x');
+        editor.handle_char('.');
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "def\n");
+    }
+
+    #[test]
+    fn dot_repeats_dd() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("a\nb\nc\nd\n");
+        editor.cursor_line = 0;
+        editor.handle_char('d');
+        editor.handle_char('d');
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "c\nd\n");
+    }
+
+    #[test]
+    fn dot_repeats_insert_sequence() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("hello\n");
+        editor.cursor_col = 5;
+        editor.handle_char('a'); // append mode
+        editor.handle_char('!');
+        editor.handle_char('!');
+        editor.handle_escape();
+        assert_eq!(editor.buffer.to_string(), "hello!!\n");
+        editor.handle_char('.');
+        assert_eq!(editor.buffer.to_string(), "hello!!!!\n");
+    }
+
+    #[test]
+    fn dot_after_motion_only_does_not_replay_motion() {
+        let mut editor = Editor::new();
+        editor.buffer = Buffer::from_text("abc\n");
+        editor.cursor_col = 0;
+        editor.handle_char('l'); // motion — not a change
+        editor.handle_char('.');
+        // No change recorded; cursor advanced once for 'l', '.' is no-op.
+        assert_eq!(editor.buffer.to_string(), "abc\n");
+        assert_eq!(editor.cursor_col, 1);
     }
 }

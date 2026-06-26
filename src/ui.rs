@@ -62,6 +62,16 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     // Render surface
     frame.render_widget(surface, surface_area);
 
+    // Bottom-left settings affordance (suppressed under any overlay)
+    if let Some(rect) = ctx.affordance_box {
+        draw_settings_affordance(frame, rect, &ctx.effective_palette);
+    }
+
+    // Help overlay (first-launch discoverability hint; under fully-modal layers)
+    if ctx.help_visible {
+        draw_help_overlay(frame, &ctx.effective_palette, area);
+    }
+
     // Settings Layer overlay (Invariant 1: only visible when summoned)
     if let Some(ref vm) = ctx.settings_vm {
         draw_settings_layer(frame, vm, ctx.base_palette, area);
@@ -72,8 +82,10 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
         draw_palette_browser(frame, ctx, area);
     }
 
-    // Find overlay bar at top of screen
-    if let Some(fs) = ctx.find_state {
+    // Find overlay bar at top of screen (only when overlay is visible)
+    if let Some(fs) = ctx.find_state
+        && fs.overlay_visible
+    {
         let find_opacity = ctx.find_opacity.unwrap_or(1.0);
         draw_find_bar(frame, fs, &ctx.effective_palette, area, find_opacity);
     }
@@ -95,7 +107,9 @@ pub fn draw(frame: &mut ratatui::Frame, ctx: &DrawContext) {
     }
 
     // Position cursor
-    if let Some(fs) = ctx.find_state {
+    if let Some(fs) = ctx.find_state
+        && fs.overlay_visible
+    {
         // Place cursor in the find bar
         let find_prefix_len = 6u16; // "Find: "
         let cursor_x = area.x + find_prefix_len + fs.cursor as u16;
@@ -297,6 +311,66 @@ fn draw_rename_overlay(
     frame.render_widget(paragraph, overlay_area);
 }
 
+/// Draw the dim bottom-left settings affordance at the position computed by App.
+fn draw_settings_affordance(
+    frame: &mut ratatui::Frame,
+    rect: crate::app::AffordanceRect,
+    palette: &Palette,
+) {
+    let area = Rect { x: rect.col, y: rect.row, width: rect.width, height: 1 };
+    let style = Style::default()
+        .fg(palette.dimmed_foreground)
+        .bg(palette.background);
+    let line = Line::from(Span::styled(crate::app::AffordanceRect::TEXT, style));
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+/// Draw the first-launch help dialog: one centered line of text in a
+/// small bordered box.
+fn draw_help_overlay(frame: &mut ratatui::Frame, palette: &Palette, area: Rect) {
+    use ratatui::style::Modifier;
+    use ratatui::widgets::Borders;
+
+    let text = "Press Ctrl+P for settings \u{00b7} Esc to start writing";
+    let dialog_width = (text.chars().count() as u16 + 4).min(area.width);
+    let dialog_height = 3u16;
+    if area.width < dialog_width || area.height < dialog_height {
+        return;
+    }
+    let x = area.x + (area.width - dialog_width) / 2;
+    let y = area.y + (area.height / 3).max(1);
+    let dialog = Rect { x, y, width: dialog_width, height: dialog_height };
+
+    frame.render_widget(Clear, dialog);
+
+    let normal_style = Style::default().fg(palette.foreground).bg(palette.background);
+    let accent_style = Style::default()
+        .fg(palette.accent_link)
+        .bg(palette.background)
+        .add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(palette.dimmed_foreground).bg(palette.background);
+
+    let spans = Line::from(vec![
+        Span::styled("Press ", normal_style),
+        Span::styled("Ctrl+P", accent_style),
+        Span::styled(" for settings \u{00b7} ", normal_style),
+        Span::styled("Esc", accent_style),
+        Span::styled(" to start writing", normal_style),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(dim_style)
+        .style(Style::default().bg(palette.background));
+
+    let paragraph = Paragraph::new(spans)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    frame.render_widget(paragraph, dialog);
+}
+
 /// All data needed to render the settings overlay, decoupled from App.
 pub struct SettingsViewModel {
     pub overlay_opacity: f64,
@@ -316,6 +390,7 @@ pub struct SettingsViewModel {
     pub rename_cursor: usize,
     pub config_source: crate::config::ConfigSource,
     pub is_scratch: bool,
+    pub show_help_on_launch: bool,
 }
 
 impl SettingsViewModel {
@@ -346,6 +421,7 @@ impl SettingsViewModel {
             rename_cursor: app.rename.cursor,
             config_source: app.config_source,
             is_scratch: app.persistence.is_scratch,
+            show_help_on_launch: app.show_help_on_launch(),
         }
     }
 }
@@ -400,6 +476,10 @@ pub struct DrawContext<'a> {
     pub rename_active: bool,
     pub rename_buf: String,
     pub rename_cursor: usize,
+    // Help overlay
+    pub help_visible: bool,
+    // Bottom-left settings affordance
+    pub affordance_box: Option<crate::app::AffordanceRect>,
     // Scratch quit prompt
     pub scratch_quit_active: bool,
     pub scratch_quit_selected: u8,
@@ -457,6 +537,8 @@ impl<'a> DrawContext<'a> {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string()),
+            help_visible: app.help_visible(),
+            affordance_box: app.affordance_box(),
         }
     }
 }
@@ -482,6 +564,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
 
     for (cursor_idx, item) in items.iter().enumerate() {
         let group = match item {
+            SettingsItem::ShowHelpOnLaunch => "General",
             SettingsItem::EditingMode(_) => "Editing",
             SettingsItem::Palette => "Palette",
             SettingsItem::FocusMode(_) => "Focus",
@@ -502,6 +585,7 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
         }
 
         let text = match item {
+            SettingsItem::ShowHelpOnLaunch => "  Show help on launch  ".to_string(),
             SettingsItem::EditingMode(mode) => {
                 let label = match mode {
                     EditingMode::Vim => "Vim",
@@ -692,6 +776,35 @@ fn draw_settings_layer(frame: &mut ratatui::Frame, vm: &SettingsViewModel, palet
                 spans.push(Span::styled(cursor_ch, rename_cursor_style));
                 spans.push(Span::styled(after, normal_style));
 
+                return Line::from(spans);
+            }
+
+            // ShowHelpOnLaunch row: render [On] [Off] with accent/dim styling.
+            let is_help_toggle_row = row.cursor_index
+                .and_then(SettingsItem::at)
+                .is_some_and(|item| item == SettingsItem::ShowHelpOnLaunch);
+            if is_help_toggle_row {
+                let row_style = if row.cursor_index == Some(vm.settings_cursor) {
+                    cursor_style
+                } else {
+                    normal_style
+                };
+                let on_style = if vm.show_help_on_launch {
+                    Style::default().fg(effective_accent).bg(preview_palette.background)
+                } else {
+                    Style::default().fg(effective_dim).bg(preview_palette.background)
+                };
+                let off_style = if !vm.show_help_on_launch {
+                    Style::default().fg(effective_accent).bg(preview_palette.background)
+                } else {
+                    Style::default().fg(effective_dim).bg(preview_palette.background)
+                };
+                let spans = vec![
+                    Span::styled(row.text.clone(), row_style),
+                    Span::styled("[On]", on_style),
+                    Span::styled(" ", row_style),
+                    Span::styled("[Off]", off_style),
+                ];
                 return Line::from(spans);
             }
 
@@ -959,6 +1072,35 @@ mod tests {
         );
     }
 
+    // === Acceptance test: Help overlay renders on first launch ===
+
+    #[test]
+    fn help_overlay_visible_on_new_app() {
+        let mut app = App::new();
+        let buf = render_app(&mut app, 80, 24);
+        let text = extract_all_text(&buf);
+        assert!(
+            text.contains("Ctrl+P"),
+            "Help overlay should show 'Ctrl+P' on first launch"
+        );
+        assert!(
+            text.contains("settings"),
+            "Help overlay should mention 'settings'"
+        );
+    }
+
+    #[test]
+    fn help_overlay_hidden_after_dismiss() {
+        let mut app = App::new();
+        app.help.dismiss();
+        let buf = render_app(&mut app, 80, 24);
+        let text = extract_all_text(&buf);
+        assert!(
+            !text.contains("Ctrl+P"),
+            "Help overlay should not be visible after dismiss"
+        );
+    }
+
     // === Acceptance test: Settings Layer is summoned by hotkey ===
 
     #[test]
@@ -1047,7 +1189,7 @@ mod tests {
         let mut app = App::new();
         app.persistence.file_path = Some(std::path::PathBuf::from("/tmp/draft.md"));
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1065,7 +1207,7 @@ mod tests {
         let mut app = App::new();
         app.editor.dirty = true;
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1079,7 +1221,7 @@ mod tests {
         let mut app = App::new();
         app.persistence.save_error = Some("Permission denied".to_string());
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1094,7 +1236,7 @@ mod tests {
         app.editor.editing_mode = crate::editing_mode::EditingMode::Standard;
         app.editor.vim_mode = crate::vim_bindings::Mode::Insert;
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
 
         assert!(
@@ -1267,14 +1409,14 @@ mod tests {
 
         // Open settings — overlay should be visible
         app.toggle_settings();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
         assert!(text.contains("NORMAL"), "Settings Layer should show vim mode");
         assert!(text.contains("Settings"), "Settings Layer title should be visible");
 
         // Dismiss via Escape — overlay should disappear
         app.settings.dismiss();
-        let buf = render_app(&mut app, 80, 24);
+        let buf = render_app(&mut app, 80, 30);
         let text = extract_all_text(&buf);
         assert!(
             !text.contains("NORMAL"),

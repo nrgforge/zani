@@ -140,6 +140,10 @@ fn run(
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.handle_key(key.code, key.modifiers);
                 }
+                Event::Mouse(m) => {
+                    let size = terminal.size()?;
+                    app.handle_mouse(m, size.width, size.height);
+                }
                 Event::Resize(_, _) => {
                     app.mark_needs_redraw();
                 }

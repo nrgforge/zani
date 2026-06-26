@@ -1,3 +1,15 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindKind {
+    Find, // f/F — land on the char
+    Till, // t/T — land one before the char
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindDir {
+    Forward,
+    Backward,
+}
+
 /// Vim editing mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -82,6 +94,48 @@ pub enum Action {
     Redo,
     /// Select all text in the buffer.
     SelectAll,
+    /// Move to previous paragraph (blank-line) boundary.
+    ParagraphBackward,
+    /// Move to next paragraph (blank-line) boundary.
+    ParagraphForward,
+    /// Move to previous sentence start.
+    SentenceBackward,
+    /// Move to next sentence start.
+    SentenceForward,
+    /// Find a character on the current line.
+    FindChar { ch: char, kind: FindKind, dir: FindDir },
+    /// Repeat the last FindChar in the same direction.
+    RepeatFind,
+    /// Repeat the last FindChar in the reverse direction.
+    RepeatFindReversed,
+    /// Jump to the next search match (uses current find query).
+    NextMatch,
+    /// Jump to the previous search match.
+    PrevMatch,
+    /// Populate the find query with the word under the cursor and jump.
+    SearchWordUnderCursor,
+    /// Insert at first non-whitespace of line.
+    InsertAtLineStart,
+    /// Delete from cursor to end of line.
+    DeleteToLineEnd,
+    /// Delete from cursor to end of line, then enter Insert.
+    ChangeToLineEnd,
+    /// Delete line contents, enter Insert at col 0.
+    SubstituteLine,
+    /// Delete char under cursor, enter Insert.
+    SubstituteChar,
+    /// Yank the entire current line (linewise).
+    YankLine,
+    /// Replace the char under the cursor with the given char.
+    ReplaceChar(char),
+    /// Join the next line onto the current one with a single space.
+    JoinLine,
+    /// Toggle case of the char under the cursor and advance one column.
+    ToggleCase,
+    /// Enter Visual mode with line-wise selection.
+    EnterLinewiseVisual,
+    /// Repeat the last buffer-mutating change.
+    Repeat,
     /// No action (key not handled).
     None,
 }
@@ -116,6 +170,25 @@ pub fn handle_normal(ch: char) -> Action {
         'v' => Action::EnterVisual,
         'p' => Action::PasteAfter,
         'P' => Action::PasteBefore,
+        '{' => Action::ParagraphBackward,
+        '}' => Action::ParagraphForward,
+        '(' => Action::SentenceBackward,
+        ')' => Action::SentenceForward,
+        ';' => Action::RepeatFind,
+        ',' => Action::RepeatFindReversed,
+        'n' => Action::NextMatch,
+        'N' => Action::PrevMatch,
+        '*' => Action::SearchWordUnderCursor,
+        'I' => Action::InsertAtLineStart,
+        'D' => Action::DeleteToLineEnd,
+        'C' => Action::ChangeToLineEnd,
+        'S' => Action::SubstituteLine,
+        's' => Action::SubstituteChar,
+        'J' => Action::JoinLine,
+        '~' => Action::ToggleCase,
+        'V' => Action::EnterLinewiseVisual,
+        'u' => Action::Undo,
+        '.' => Action::Repeat,
         _ => Action::None,
     }
 }
@@ -136,6 +209,15 @@ pub fn handle_visual(ch: char) -> Action {
         'G' => Action::GotoLastLine,
         'y' => Action::Yank,
         'd' => Action::DeleteSelection,
+        '{' => Action::ParagraphBackward,
+        '}' => Action::ParagraphForward,
+        '(' => Action::SentenceBackward,
+        ')' => Action::SentenceForward,
+        ';' => Action::RepeatFind,
+        ',' => Action::RepeatFindReversed,
+        'n' => Action::NextMatch,
+        'N' => Action::PrevMatch,
+        '*' => Action::SearchWordUnderCursor,
         _ => Action::None,
     }
 }
@@ -144,31 +226,41 @@ pub fn handle_visual(ch: char) -> Action {
 /// Returns the action to perform and the new pending key (if any).
 pub fn handle_normal_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
     if let Some(p) = pending {
-        match (p, ch) {
+        return match (p, ch) {
             ('g', 'g') => (Action::GotoFirstLine, None),
             ('d', 'd') => (Action::DeleteLine, None),
+            ('y', 'y') => (Action::YankLine, None),
+            ('r', c) => (Action::ReplaceChar(c), None),
+            ('f', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Forward }, None),
+            ('F', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Backward }, None),
+            ('t', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Forward }, None),
+            ('T', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Backward }, None),
             _ => (Action::None, None),
-        }
-    } else if ch == 'g' || ch == 'd' {
-        (Action::None, Some(ch))
-    } else {
-        (handle_normal(ch), None)
+        };
     }
+    if matches!(ch, 'g' | 'd' | 'f' | 'F' | 't' | 'T' | 'y' | 'r') {
+        return (Action::None, Some(ch));
+    }
+    (handle_normal(ch), None)
 }
 
 /// Process a Visual mode key with optional pending multi-key state.
 /// Returns the action to perform and the new pending key (if any).
 pub fn handle_visual_with_pending(ch: char, pending: Option<char>) -> (Action, Option<char>) {
     if let Some(p) = pending {
-        match (p, ch) {
+        return match (p, ch) {
             ('g', 'g') => (Action::GotoFirstLine, None),
+            ('f', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Forward }, None),
+            ('F', c) => (Action::FindChar { ch: c, kind: FindKind::Find, dir: FindDir::Backward }, None),
+            ('t', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Forward }, None),
+            ('T', c) => (Action::FindChar { ch: c, kind: FindKind::Till, dir: FindDir::Backward }, None),
             _ => (Action::None, None),
-        }
-    } else if ch == 'g' {
-        (Action::None, Some(ch))
-    } else {
-        (handle_visual(ch), None)
+        };
     }
+    if matches!(ch, 'g' | 'f' | 'F' | 't' | 'T') {
+        return (Action::None, Some(ch));
+    }
+    (handle_visual(ch), None)
 }
 
 /// Process a key event in Insert mode.
@@ -327,5 +419,21 @@ mod tests {
         let (action, pending) = handle_visual_with_pending('g', Some('g'));
         assert_eq!(action, Action::GotoFirstLine, "visual gg should produce GotoFirstLine");
         assert_eq!(pending, None, "pending should be cleared after visual gg");
+    }
+
+    // === Count tests ===
+
+    #[test]
+    fn count_accumulates_digits() {
+        // Counts live in Editor, not in pure key→action mapping.
+        // This test is a placeholder marker; real tests live in editor.rs.
+        let _ = handle_normal_with_pending('5', None);
+    }
+
+    #[test]
+    fn zero_alone_is_line_start() {
+        let (action, pending) = handle_normal_with_pending('0', None);
+        assert_eq!(action, Action::LineStart);
+        assert_eq!(pending, None);
     }
 }

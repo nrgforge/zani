@@ -8,6 +8,8 @@ use crate::scroll_mode::ScrollMode;
 /// Defines the logical meaning of each row, replacing magic indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsItem {
+    /// Whether the first-launch help dialog appears on next start.
+    ShowHelpOnLaunch,
     /// An editing mode choice (Vim or Standard).
     EditingMode(EditingMode),
     /// The palette row (opens Palette Browser on Enter).
@@ -24,7 +26,8 @@ pub enum SettingsItem {
     Config,
 }
 
-const ALL_ITEMS: [SettingsItem; 11] = [
+const ALL_ITEMS: [SettingsItem; 12] = [
+    SettingsItem::ShowHelpOnLaunch,
     SettingsItem::EditingMode(EditingMode::Vim),
     SettingsItem::EditingMode(EditingMode::Standard),
     SettingsItem::Palette,
@@ -271,6 +274,18 @@ fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // === SettingsItem ===
+
+    #[test]
+    fn show_help_on_launch_is_first_item() {
+        assert_eq!(SettingsItem::all()[0], SettingsItem::ShowHelpOnLaunch);
+    }
+
+    #[test]
+    fn all_returns_twelve_items() {
+        assert_eq!(SettingsItem::all().len(), 12);
+    }
 
     // === ScratchQuitState ===
 

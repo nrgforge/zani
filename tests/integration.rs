@@ -204,6 +204,7 @@ fn config_resolution_feeds_palette_browser() {
     // Simulate: local config binds "Sitka" to project
     let config = Config {
         palette: "Sitka".to_string(),
+        show_help_on_launch: false,
         ..Config::default()
     };
 
@@ -323,7 +324,8 @@ fn save_to_project_round_trips_all_settings() {
     fs::write(&file, "test content").unwrap();
 
     // Start with Global config (no .zani.toml exists)
-    let config = Config::default();
+    let mut config = Config::default();
+    config.show_help_on_launch = false;
     let mut app = App::from_config_with_source(
         &config,
         ColorProfile::TrueColor,
