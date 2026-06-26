@@ -136,8 +136,6 @@ pub enum Action {
     EnterLinewiseVisual,
     /// Repeat the last buffer-mutating change.
     Repeat,
-    /// Apply an inner action `count` times.
-    Counted { count: u32, inner: Box<Action> },
     /// No action (key not handled).
     None,
 }
