@@ -945,8 +945,6 @@ impl Editor {
                     }
                 }
             }
-            // Wired up in later tasks.
-            Action::Counted { .. } => {}
             Action::None => {}
         }
     }
@@ -1403,6 +1401,15 @@ impl Editor {
         self.cursor_col = 0;
         self.undo_history = UndoHistory::new();
         self.selection_anchor = None;
+        self.pending_count = None;
+        self.pending_normal_key = None;
+        self.last_find = None;
+        self.last_change = LastChange::None;
+        self.selection_kind = SelectionKind::CharWise;
+        self.pending_search = None;
+        self.insert_start_char_idx = None;
+        self.insert_entry_action = None;
+        self.vim_mode = Mode::Normal;
     }
 
     /// Return the (start_col, end_col_inclusive) of the word at the given
@@ -2302,6 +2309,21 @@ mod tests {
         editor.dirty = true;
         editor.selection_anchor = Some((0, 2));
 
+        // Populate all new state fields introduced in vim expansion
+        editor.pending_count = Some(5);
+        editor.pending_normal_key = Some('d');
+        editor.last_find = Some(LastFind {
+            ch: 'e',
+            kind: crate::vim_bindings::FindKind::Find,
+            dir: crate::vim_bindings::FindDir::Forward,
+        });
+        editor.last_change = LastChange::Action(Action::DeleteChar);
+        editor.selection_kind = SelectionKind::LineWise;
+        editor.pending_search = Some(SearchRequest::Next);
+        editor.insert_start_char_idx = Some(3);
+        editor.insert_entry_action = Some(Action::AppendMode);
+        editor.vim_mode = Mode::Visual;
+
         editor.reset_to_content("new content\n");
 
         assert_eq!(editor.buffer.to_string(), "new content\n");
@@ -2309,6 +2331,15 @@ mod tests {
         assert_eq!(editor.cursor_line, 0);
         assert_eq!(editor.cursor_col, 0);
         assert_eq!(editor.selection_anchor, None);
+        assert_eq!(editor.pending_count, None);
+        assert_eq!(editor.pending_normal_key, None);
+        assert!(editor.last_find.is_none());
+        assert!(matches!(editor.last_change, LastChange::None));
+        assert_eq!(editor.selection_kind, SelectionKind::CharWise);
+        assert!(editor.pending_search.is_none());
+        assert_eq!(editor.insert_start_char_idx, None);
+        assert_eq!(editor.insert_entry_action, None);
+        assert_eq!(editor.vim_mode, Mode::Normal);
     }
 
     // === can_vim_navigate ===
