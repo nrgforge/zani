@@ -272,9 +272,9 @@ impl App {
         self.last_click = new_last;
         let Some(action) = action else { return };
 
-        self.needs_redraw = true;
         match action {
             crate::mouse::MouseAction::ScrollLines(delta) => {
+                self.needs_redraw = true;
                 self.apply_scroll_delta(delta);
             }
             // Click/Drag/Release implemented in later tasks.
